@@ -164,6 +164,7 @@ export default function CustomerDetailPage() {
               partyName={customer.partyName}
               contactNumber={customer.contactNumber}
               balance={customer.outstandingBalance}
+              dueDate={customer.nextFollowupDate}
             />
           </div>
           {customer.notes && (

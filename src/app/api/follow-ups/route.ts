@@ -2,17 +2,25 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { requireShopId } from "@/lib/tenant";
+import { logActivity } from "@/lib/activity";
 
 const schema = z.object({
   customerId: z.string(),
-  status: z.enum(["CONTACTED", "PAYMENT_PROMISED", "PAID", "NOT_REACHABLE", "PENDING"]),
+  status: z.enum(["CONTACTED", "PAYMENT_PROMISED", "PAID", "NOT_REACHABLE", "PENDING", "COMPLETED", "MISSED", "RESCHEDULED"]),
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
   notes: z.string().optional(),
+  reminderNotes: z.string().optional(),
+  customerResponse: z.string().optional(),
+  scheduledAt: z.string().datetime().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
 });
 
 function customerStatusFromFollowUp(status: z.infer<typeof schema>["status"], balance: number) {
   if (status === "PAID" || balance === 0) return "CLEARED";
+  if (status === "COMPLETED") return balance === 0 ? "CLEARED" : "ACTIVE";
+  if (status === "MISSED") return "HIGH_RISK";
+  if (status === "RESCHEDULED") return "PENDING";
   if (status === "NOT_REACHABLE") return "HIGH_RISK";
   if (status === "CONTACTED" || status === "PAYMENT_PROMISED") return "ACTIVE";
   return "PENDING";
@@ -24,19 +32,26 @@ export async function POST(request: Request) {
 
   try {
     const body = schema.parse(await request.json());
-    const customer = await prisma.customer.findUnique({ where: { id: body.customerId } });
+    const shopId = requireShopId(request, session);
+    const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
-    const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : null;
+    const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+    const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : scheduledAt;
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
       const followUp = await tx.followUp.create({
         data: {
+          shopId,
           customerId: body.customerId,
           status: body.status,
           priority: body.priority,
           notes: body.notes,
+          reminderNotes: body.reminderNotes,
+          customerResponse: body.customerResponse,
+          scheduledAt,
+          completedAt: body.status === "COMPLETED" || body.status === "PAID" ? now : null,
           nextFollowupDate: nextDate,
           createdById: session.id,
         },
@@ -72,6 +87,14 @@ export async function POST(request: Request) {
       return { followUp, customer: updated };
     });
 
+    await logActivity({
+      action: "follow_up_created",
+      userId: session.id,
+      shopId,
+      customerId: body.customerId,
+      details: `${body.status} ${nextDate?.toISOString() ?? ""}`.trim(),
+    });
+
     return NextResponse.json(result, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
@@ -84,6 +107,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const filter = searchParams.get("filter");
+  const view = searchParams.get("view") ?? "customers";
+  const shopId = requireShopId(request, session);
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -91,6 +116,7 @@ export async function GET(request: Request) {
   todayEnd.setHours(23, 59, 59, 999);
 
   let where: Record<string, unknown> = {
+    shopId,
     outstandingBalance: { gt: 0 },
     NOT: { status: "CLEARED" },
   };
@@ -110,6 +136,20 @@ export async function GET(request: Request) {
     where,
     orderBy: { nextFollowupDate: "asc" },
   });
+
+  if (view === "calendar") {
+    const from = searchParams.get("from") ? new Date(searchParams.get("from")!) : todayStart;
+    const to = searchParams.get("to") ? new Date(searchParams.get("to")!) : todayEnd;
+    const followUps = await prisma.followUp.findMany({
+      where: {
+        shopId,
+        scheduledAt: { gte: from, lte: to },
+      },
+      include: { customer: true, createdBy: { select: { name: true } } },
+      orderBy: { scheduledAt: "asc" },
+    });
+    return NextResponse.json(followUps);
+  }
 
   return NextResponse.json(customers);
 }

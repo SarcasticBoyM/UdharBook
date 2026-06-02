@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
+import { requireShopId } from "@/lib/tenant";
 
 const schema = z.object({
   amount: z.number().positive(),
@@ -21,13 +22,15 @@ export async function POST(
   try {
     const { id } = await params;
     const body = schema.parse(await request.json());
-    const customer = await prisma.customer.findUnique({ where: { id } });
+    const shopId = requireShopId(request, session);
+    const customer = await prisma.customer.findFirst({ where: { id, shopId } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
     const newBalance = Math.max(0, customer.outstandingBalance - body.amount);
     const result = await prisma.$transaction(async (tx) => {
       const payment = await tx.paymentEntry.create({
         data: {
+          shopId,
           customerId: id,
           amount: body.amount,
           paidAt: body.paidAt ? new Date(body.paidAt) : new Date(),
@@ -62,6 +65,7 @@ export async function POST(
 
     await logActivity({
       action: "payment_recorded",
+      shopId,
       userId: session.id,
       customerId: id,
       details: `Payment ${body.amount} recorded`,
@@ -72,4 +76,3 @@ export async function POST(
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-

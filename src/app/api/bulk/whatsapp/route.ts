@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
+import { requireShopId } from "@/lib/tenant";
 
 const schema = z.object({
   customerIds: z.array(z.string()).min(1),
@@ -14,8 +15,9 @@ export async function POST(request: Request) {
 
   try {
     const body = schema.parse(await request.json());
+    const shopId = requireShopId(request, session);
     const customers = await prisma.customer.findMany({
-      where: { id: { in: body.customerIds } },
+      where: { shopId, id: { in: body.customerIds } },
     });
 
     const links = customers.map((c) => ({
@@ -23,7 +25,7 @@ export async function POST(request: Request) {
       partyName: c.partyName,
       url: whatsappHref(
         c.contactNumber,
-        paymentReminderMessage(c.partyName, c.outstandingBalance)
+        paymentReminderMessage(c.partyName, c.outstandingBalance, c.nextFollowupDate)
       ),
     }));
 

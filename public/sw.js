@@ -31,3 +31,21 @@ self.addEventListener("fetch", (event) => {
       .catch(() => caches.match(request).then((cached) => cached || caches.match("/login")))
   );
 });
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "UDHARBOOK_NOTIFY") return;
+  const title = event.data.title || "UdharBook reminder";
+  const body = event.data.body || "A follow-up is due.";
+  self.registration.showNotification(title, {
+    body,
+    icon: "/icon.svg",
+    badge: "/icon.svg",
+    requireInteraction: true,
+    data: { url: "/follow-ups" },
+  });
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow(event.notification.data?.url || "/follow-ups"));
+});

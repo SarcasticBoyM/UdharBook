@@ -225,6 +225,7 @@ export default function CustomersPage() {
                         partyName={c.partyName}
                         contactNumber={c.contactNumber}
                         balance={c.outstandingBalance}
+                        dueDate={c.nextFollowupDate}
                         compact
                       />
                       <button

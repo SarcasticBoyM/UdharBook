@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { customersToExcel, followUpsToExcel, reportToCsv } from "@/lib/excel/export";
 import { agingBucket, agingBucketLabel } from "@/lib/aging";
+import { requireShopId } from "@/lib/tenant";
 
 export async function GET(
   request: Request,
@@ -12,6 +13,7 @@ export async function GET(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { type } = await params;
+  const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
   const format = searchParams.get("format") ?? "xlsx";
   const from = searchParams.get("from");
@@ -19,7 +21,7 @@ export async function GET(
 
   if (type === "outstanding") {
     const customers = await prisma.customer.findMany({
-      where: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       orderBy: { outstandingBalance: "desc" },
     });
 
@@ -55,12 +57,13 @@ export async function GET(
     const where =
       from && to
         ? {
+            shopId,
             followupDate: {
               gte: new Date(from),
               lte: new Date(to),
             },
           }
-        : {};
+        : { shopId };
 
     const followUps = await prisma.followUp.findMany({
       where,
@@ -100,7 +103,7 @@ export async function GET(
 
   if (type === "aging") {
     const customers = await prisma.customer.findMany({
-      where: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
     });
 
     const buckets: Record<string, typeof customers> = {

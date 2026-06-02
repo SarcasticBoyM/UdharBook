@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canDelete } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/phone";
+import { requireShopId } from "@/lib/tenant";
+import { logActivity } from "@/lib/activity";
 
 const updateSchema = z.object({
   partyName: z.string().min(1).optional(),
@@ -17,15 +19,16 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const customer = await prisma.customer.findUnique({
-    where: { id },
+  const shopId = requireShopId(request, session);
+  const customer = await prisma.customer.findFirst({
+    where: { id, shopId },
     include: {
       followUps: {
         orderBy: { followupDate: "desc" },
@@ -60,6 +63,7 @@ export async function PATCH(
   const { id } = await params;
   try {
     const body = updateSchema.parse(await request.json());
+    const shopId = requireShopId(request, session);
     const data = {
       ...body,
       contactNumber: body.contactNumber ? normalizePhone(body.contactNumber) : undefined,
@@ -71,7 +75,15 @@ export async function PATCH(
             : undefined,
     };
 
+    const existing = await prisma.customer.findFirst({ where: { id, shopId }, select: { id: true } });
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const customer = await prisma.customer.update({ where: { id }, data });
+    await logActivity({
+      action: "customer_updated",
+      userId: session.id,
+      shopId,
+      customerId: id,
+    });
     return NextResponse.json(customer);
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
@@ -79,7 +91,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
@@ -89,6 +101,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  await prisma.customer.delete({ where: { id } });
+  const shopId = requireShopId(request, session);
+  await prisma.customer.deleteMany({ where: { id, shopId } });
   return NextResponse.json({ ok: true });
 }

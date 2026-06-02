@@ -5,6 +5,8 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canDelete } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/phone";
+import { requireShopId } from "@/lib/tenant";
+import { logActivity } from "@/lib/activity";
 
 const createSchema = z.object({
   partyName: z.string().min(1),
@@ -28,8 +30,10 @@ export async function GET(request: Request) {
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
   const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 20)));
   const skip = (page - 1) * limit;
+  const shopId = requireShopId(request, session);
 
   const where: Prisma.CustomerWhereInput = {
+    shopId,
     ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
     ...(search
       ? {
@@ -70,9 +74,11 @@ export async function POST(request: Request) {
   try {
     const body = createSchema.parse(await request.json());
     const contactNumber = normalizePhone(body.contactNumber);
+    const shopId = requireShopId(request, session);
 
     const customer = await prisma.customer.create({
       data: {
+        shopId,
         partyName: body.partyName,
         contactNumber,
         outstandingBalance: body.outstandingBalance,
@@ -80,6 +86,14 @@ export async function POST(request: Request) {
         nextFollowupDate: body.nextFollowupDate ? new Date(body.nextFollowupDate) : null,
         status: body.status ?? (body.outstandingBalance === 0 ? "CLEARED" : "PENDING"),
       },
+    });
+
+    await logActivity({
+      action: "customer_created",
+      userId: session.id,
+      shopId,
+      customerId: customer.id,
+      details: customer.partyName,
     });
 
     return NextResponse.json(customer, { status: 201 });
@@ -101,6 +115,7 @@ export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-  await prisma.customer.delete({ where: { id } });
+  const shopId = requireShopId(request, session);
+  await prisma.customer.deleteMany({ where: { id, shopId } });
   return NextResponse.json({ ok: true });
 }

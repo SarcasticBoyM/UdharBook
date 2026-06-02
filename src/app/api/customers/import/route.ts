@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { canImport } from "@/lib/permissions";
 import { importCustomersFromExcel } from "@/lib/excel/import";
+import { requireShopId } from "@/lib/tenant";
+import { logActivity } from "@/lib/activity";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -42,8 +44,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "File is empty" }, { status: 400 });
     }
 
+    const shopId = requireShopId(request, session);
     const buffer = Buffer.from(await file.arrayBuffer());
-    const summary = await importCustomersFromExcel(buffer);
+    const summary = await importCustomersFromExcel(buffer, shopId);
+    await logActivity({
+      action: "excel_imported",
+      userId: session.id,
+      shopId,
+      details: `${summary.totalProcessed} rows processed`,
+    });
     return NextResponse.json(summary);
   } catch (err) {
     console.error("[import]", err);

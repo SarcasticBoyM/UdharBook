@@ -9,10 +9,11 @@ interface Props {
   partyName: string;
   contactNumber: string;
   balance: number;
+  dueDate?: Date | string | null;
   compact?: boolean;
 }
 
-export function CallActions({ partyName, contactNumber, balance, compact }: Props) {
+export function CallActions({ partyName, contactNumber, balance, dueDate, compact }: Props) {
   const [copied, setCopied] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -23,7 +24,7 @@ export function CallActions({ partyName, contactNumber, balance, compact }: Prop
     );
   }, []);
 
-  const waUrl = whatsappHref(contactNumber, paymentReminderMessage(partyName, balance));
+  const waUrl = whatsappHref(contactNumber, paymentReminderMessage(partyName, balance, dueDate));
 
   const copyNumber = async () => {
     await navigator.clipboard.writeText(displayPhone(contactNumber));

@@ -7,6 +7,8 @@ export interface SessionUser {
   name: string;
   email: string;
   role: UserRole;
+  shopId: string | null;
+  shopName?: string | null;
 }
 
 export interface ImportSummary {
@@ -26,6 +28,8 @@ export interface DashboardStats {
   todayFollowups: number;
   overdueFollowups: number;
   highOutstanding: number;
+  recoveryAmount: number;
+  staffActivity: { name: string; count: number }[];
   statusDistribution: { status: string; count: number }[];
   collectionProgress: { month: string; collected: number }[];
   outstandingSummary: { label: string; amount: number }[];

@@ -19,6 +19,8 @@ export async function createSession(user: SessionUser) {
     name: user.name,
     email: user.email,
     role: user.role,
+    shopId: user.shopId,
+    shopName: user.shopName,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime(`${MAX_AGE}s`)
@@ -51,6 +53,8 @@ export async function getSession(): Promise<SessionUser | null> {
       name: payload.name as string,
       email: payload.email as string,
       role: payload.role as SessionUser["role"],
+      shopId: (payload.shopId as string | null) ?? null,
+      shopName: (payload.shopName as string | null) ?? null,
     };
   } catch {
     return null;
@@ -58,15 +62,32 @@ export async function getSession(): Promise<SessionUser | null> {
 }
 
 export async function login(email: string, password: string): Promise<SessionUser | null> {
-  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+  const user = await prisma.user.findUnique({
+    where: { email: email.toLowerCase() },
+    include: { shop: { select: { name: true } } },
+  });
   if (!user) return null;
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return null;
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
+  await prisma.activityLog.create({
+    data: {
+      action: "user_login",
+      userId: user.id,
+      shopId: user.shopId,
+      details: user.email,
+    },
+  });
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     role: user.role,
+    shopId: user.shopId,
+    shopName: user.shop?.name ?? null,
   };
 }
 

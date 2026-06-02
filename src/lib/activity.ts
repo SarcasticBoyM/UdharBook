@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 
 export async function logActivity(input: {
   action: string;
+  shopId?: string;
   userId?: string;
   customerId?: string;
   details?: string;
@@ -11,6 +12,7 @@ export async function logActivity(input: {
     await prisma.activityLog.create({
       data: {
         action: input.action,
+        shopId: input.shopId,
         userId: input.userId,
         customerId: input.customerId,
         details: input.details,
@@ -23,4 +25,3 @@ export async function logActivity(input: {
     });
   }
 }
-

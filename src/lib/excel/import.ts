@@ -61,7 +61,7 @@ function parseBalance(value: string | null): number | null {
   return Number.isFinite(balance) && balance >= 0 ? balance : null;
 }
 
-export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSummary> {
+export async function importCustomersFromExcel(buffer: Buffer, shopId: string): Promise<ImportSummary> {
   try {
     const rows = await parseWorkbook(buffer);
 
@@ -109,17 +109,18 @@ export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSu
 
       try {
         const existing = await prisma.customer.findUnique({
-          where: { contactNumber },
+          where: { shopId_contactNumber: { shopId, contactNumber } },
           select: { id: true },
         });
 
         await prisma.customer.upsert({
-          where: { contactNumber },
+          where: { shopId_contactNumber: { shopId, contactNumber } },
           update: {
             outstandingBalance,
             updatedAt: new Date(),
           },
           create: {
+            shopId,
             partyName,
             contactNumber,
             outstandingBalance,

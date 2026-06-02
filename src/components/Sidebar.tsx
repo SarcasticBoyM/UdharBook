@@ -12,9 +12,11 @@ import {
   Upload,
   Users,
   WalletCards,
+  Store,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
+import { ShopSwitcher } from "./ShopSwitcher";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -22,13 +24,18 @@ const links = [
   { href: "/upload", label: "Upload Excel", icon: Upload },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },
   { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/shops", label: "Shops", icon: Store, superOnly: true },
 ];
 
 export function Sidebar({ userName, role }: { userName: string; role: string }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
-  const isAdmin = role === "ADMIN";
-  const navLinks = links.filter((link) => isAdmin || link.href !== "/upload");
+  const isAdmin = role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+  const isSuperAdmin = role === "SUPER_ADMIN";
+  const navLinks = links.filter((link) => {
+    if (link.superOnly) return isSuperAdmin;
+    return isAdmin || link.href !== "/upload";
+  });
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -47,6 +54,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
             <p className="mt-1 text-xs text-slate-500">
               {userName} | {role}
             </p>
+            <ShopSwitcher enabled={isSuperAdmin} />
           </div>
         </div>
       </div>

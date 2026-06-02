@@ -8,14 +8,15 @@ import { CallActions } from "@/components/CallActions";
 import { FollowUpModal } from "@/components/FollowUpModal";
 
 export default function FollowUpsPage() {
-  const [filter, setFilter] = useState<"today" | "overdue" | "">("today");
+  const [filter, setFilter] = useState<"today" | "week" | "upcoming" | "overdue" | "">("today");
   const [items, setItems] = useState<Customer[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDate, setBulkDate] = useState("");
   const [followUpId, setFollowUpId] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    const q = filter ? `?filter=${filter}` : "";
+    const normalizedFilter = filter === "week" || filter === "upcoming" ? "" : filter;
+    const q = normalizedFilter ? `?filter=${normalizedFilter}` : "";
     fetch(`/api/follow-ups${q}`)
       .then((r) => r.json())
       .then(setItems);
@@ -56,11 +57,22 @@ export default function FollowUpsPage() {
     load();
   };
 
+  const visibleItems = items.filter((item) => {
+    if (!item.nextFollowupDate) return filter !== "week" && filter !== "upcoming";
+    const date = new Date(item.nextFollowupDate);
+    const now = new Date();
+    const weekEnd = new Date(now);
+    weekEnd.setDate(now.getDate() + 7);
+    if (filter === "week") return date >= now && date <= weekEnd;
+    if (filter === "upcoming") return date > weekEnd;
+    return true;
+  });
+
   return (
     <div>
       <h1 className="text-2xl font-bold">Follow-ups</h1>
       <div className="mt-4 flex flex-wrap gap-2">
-        {(["today", "overdue", ""] as const).map((f) => (
+        {(["today", "week", "upcoming", "overdue", ""] as const).map((f) => (
           <button
             key={f || "all"}
             type="button"
@@ -71,7 +83,15 @@ export default function FollowUpsPage() {
                 : "border border-slate-300 dark:border-slate-600"
             }`}
           >
-            {f === "today" ? "Today" : f === "overdue" ? "Overdue" : "All pending"}
+            {f === "today"
+              ? "Today"
+              : f === "week"
+                ? "This week"
+                : f === "upcoming"
+                  ? "Upcoming"
+                  : f === "overdue"
+                    ? "Overdue"
+                    : "All pending"}
           </button>
         ))}
       </div>
@@ -98,7 +118,7 @@ export default function FollowUpsPage() {
       )}
 
       <div className="mt-6 space-y-4">
-        {items.map((c) => (
+        {visibleItems.map((c) => (
           <div key={c.id} className="card flex flex-wrap items-start justify-between gap-4">
             <div className="flex gap-3">
               <input
@@ -126,6 +146,7 @@ export default function FollowUpsPage() {
                 partyName={c.partyName}
                 contactNumber={c.contactNumber}
                 balance={c.outstandingBalance}
+                dueDate={c.nextFollowupDate}
                 compact
               />
               <button
@@ -138,7 +159,7 @@ export default function FollowUpsPage() {
             </div>
           </div>
         ))}
-        {items.length === 0 && <p className="text-slate-500">No follow-ups in this view.</p>}
+        {visibleItems.length === 0 && <p className="text-slate-500">No follow-ups in this view.</p>}
       </div>
 
       {followUpId && (

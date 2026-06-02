@@ -11,6 +11,9 @@ export function statusBadgeClass(status: CustomerStatus | FollowUpStatus): strin
     CONTACTED: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
     PAYMENT_PROMISED: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
     NOT_REACHABLE: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+    COMPLETED: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+    MISSED: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+    RESCHEDULED: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
   };
   return map[status];
 }

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { Upload, UserPlus, CalendarClock, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
@@ -9,16 +10,26 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
 import { agingBucket } from "@/lib/aging";
 
-async function getStats(): Promise<DashboardStats> {
+async function selectedShopId() {
+  const session = await getSession();
+  const cookieStore = await cookies();
+  const explicit = cookieStore.get("udharbook_shop")?.value ?? session?.shopId;
+  if (explicit) return explicit;
+  const firstShop = await prisma.shop.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
+  return firstShop?.id ?? "";
+}
+
+async function getStats(shopId: string): Promise<DashboardStats> {
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
-  const customers = await prisma.customer.findMany();
+  const customers = await prisma.customer.findMany({ where: { shopId } });
   const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0);
 
   const statusGroups = await prisma.customer.groupBy({
     by: ["status"],
+    where: { shopId },
     _count: { status: true },
   });
 
@@ -28,6 +39,7 @@ async function getStats(): Promise<DashboardStats> {
   }
 
   const payments = await prisma.paymentEntry.findMany({
+    where: { shopId },
     orderBy: { paidAt: "asc" },
     take: 200,
   });
@@ -36,6 +48,17 @@ async function getStats(): Promise<DashboardStats> {
     const key = payment.paidAt.toISOString().slice(0, 7);
     monthMap.set(key, (monthMap.get(key) ?? 0) + payment.amount);
   }
+
+  const staffGroups = await prisma.activityLog.groupBy({
+    by: ["userId"],
+    where: { shopId, createdAt: { gte: todayStart } },
+    _count: { userId: true },
+  });
+  const users = await prisma.user.findMany({
+    where: { id: { in: staffGroups.map((group) => group.userId).filter(Boolean) as string[] } },
+    select: { id: true, name: true },
+  });
+  const userMap = new Map(users.map((user) => [user.id, user.name]));
 
   return {
     totalCustomers: customers.length,
@@ -46,6 +69,11 @@ async function getStats(): Promise<DashboardStats> {
     ).length,
     overdueFollowups: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate < todayStart).length,
     highOutstanding: customers.filter((c) => c.outstandingBalance >= threshold).length,
+    recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
+    staffActivity: staffGroups.map((group) => ({
+      name: group.userId ? userMap.get(group.userId) ?? "Unknown" : "System",
+      count: group._count.userId,
+    })),
     statusDistribution: statusGroups.map((g) => ({ status: g.status, count: g._count.status })),
     collectionProgress: Array.from(monthMap.entries()).map(([month, collected]) => ({ month, collected })),
     outstandingSummary: Object.entries(agingMap).map(([label, amount]) => ({ label, amount })),
@@ -53,15 +81,16 @@ async function getStats(): Promise<DashboardStats> {
 }
 
 export default async function DashboardPage() {
-  await getSession();
-  const stats = await getStats();
+  const shopId = await selectedShopId();
+  const stats = await getStats(shopId);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
   const highBalanceCustomers = await prisma.customer.findMany({
-    where: { outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
+    where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
     orderBy: { outstandingBalance: "desc" },
     take: 5,
   });
   const recentActivity = await prisma.activityLog.findMany({
+    where: { shopId },
     orderBy: { createdAt: "desc" },
     take: 8,
     include: {

@@ -10,6 +10,14 @@ NEXT_PUBLIC_APP_URL="https://your-vercel-domain.vercel.app"
 HIGH_BALANCE_THRESHOLD=50000
 ADMIN_EMAIL="owner@example.com"
 ADMIN_PASSWORD="replace-with-a-strong-admin-password"
+SUPER_ADMIN_EMAIL="super@example.com"
+SUPER_ADMIN_PASSWORD="replace-with-a-strong-super-admin-password"
+STAFF_PASSWORD="replace-with-a-strong-staff-password"
+SHOP_NAME="Your Business Name"
+SHOP_OWNER_NAME="Owner Name"
+SHOP_MOBILE="9999999999"
+SHOP_GST="GSTIN"
+SHOP_ADDRESS="Business address"
 ```
 
 ## Variable Guide
@@ -20,3 +28,6 @@ ADMIN_PASSWORD="replace-with-a-strong-admin-password"
 - `NEXT_PUBLIC_APP_URL`: used to build password reset links.
 - `HIGH_BALANCE_THRESHOLD`: dashboard high-risk outstanding threshold.
 - `ADMIN_EMAIL` and `ADMIN_PASSWORD`: used only when seeding the admin user.
+- `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`: optional platform admin seed.
+- `STAFF_PASSWORD`: optional demo staff seed.
+- `SHOP_*`: optional default shop seed metadata.

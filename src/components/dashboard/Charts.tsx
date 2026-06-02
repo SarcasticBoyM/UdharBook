@@ -64,6 +64,21 @@ export function DashboardCharts({ stats }: { stats: DashboardStats }) {
           </ResponsiveContainer>
         </div>
       )}
+      <div className="card lg:col-span-2">
+        <h3 className="mb-4 font-semibold">Staff Activity Today</h3>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {stats.staffActivity.length === 0 ? (
+            <p className="text-sm text-slate-500">No staff activity logged today.</p>
+          ) : (
+            stats.staffActivity.map((item) => (
+              <div key={item.name} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <p className="text-sm font-medium">{item.name}</p>
+                <p className="mt-1 text-2xl font-bold">{item.count}</p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }

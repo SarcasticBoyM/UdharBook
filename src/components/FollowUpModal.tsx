@@ -4,10 +4,14 @@ import { useState } from "react";
 import type { FollowUpPriority, FollowUpStatus } from "@prisma/client";
 
 const STATUSES: { value: FollowUpStatus; label: string }[] = [
+  { value: "PENDING", label: "Pending" },
   { value: "CONTACTED", label: "Contacted" },
   { value: "PAYMENT_PROMISED", label: "Payment Promised" },
   { value: "PAID", label: "Paid" },
   { value: "NOT_REACHABLE", label: "Not Reachable" },
+  { value: "COMPLETED", label: "Completed" },
+  { value: "MISSED", label: "Missed" },
+  { value: "RESCHEDULED", label: "Rescheduled" },
 ];
 
 interface Props {
@@ -19,6 +23,8 @@ interface Props {
 export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
   const [status, setStatus] = useState<FollowUpStatus>("CONTACTED");
   const [notes, setNotes] = useState("");
+  const [reminderNotes, setReminderNotes] = useState("");
+  const [customerResponse, setCustomerResponse] = useState("");
   const [nextDate, setNextDate] = useState("");
   const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
   const [loading, setLoading] = useState(false);
@@ -37,6 +43,9 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
           status,
           priority,
           notes: notes || undefined,
+          reminderNotes: reminderNotes || undefined,
+          customerResponse: customerResponse || undefined,
+          scheduledAt: nextDate ? new Date(nextDate).toISOString() : null,
           nextFollowupDate: nextDate ? new Date(nextDate).toISOString() : null,
         }),
       });
@@ -79,11 +88,29 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
             />
           </div>
           <div>
-            <label className="text-sm font-medium">Next follow-up date</label>
+            <label className="text-sm font-medium">Next follow-up date & time</label>
             <input
-              type="date"
+              type="datetime-local"
               value={nextDate}
               onChange={(e) => setNextDate(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Reminder notes</label>
+            <textarea
+              value={reminderNotes}
+              onChange={(e) => setReminderNotes(e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Customer response</label>
+            <textarea
+              value={customerResponse}
+              onChange={(e) => setCustomerResponse(e.target.value)}
+              rows={2}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
           </div>
