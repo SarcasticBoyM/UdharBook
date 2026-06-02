@@ -118,8 +118,8 @@ export default function ShopsPage() {
     await load();
   };
 
-  const disableUser = async (user: ManagedUser, disabled: boolean) => {
-    await fetch(`/api/users/${user.id}/disable?disabled=${disabled}`, { method: "POST" });
+  const removeUser = async (user: ManagedUser, removed: boolean) => {
+    await fetch(`/api/users/${user.id}/disable?disabled=${removed}`, { method: "POST" });
     await load();
   };
 
@@ -214,12 +214,12 @@ export default function ShopsPage() {
                     <td className="p-2">{user.role}</td>
                     <td className="p-2">{user.shop?.shopName ?? "-"}</td>
                     <td className="p-2">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString("en-IN") : "-"}</td>
-                    <td className="p-2">{user.disabledAt ? "Disabled" : "Active"}</td>
+                    <td className="p-2">{user.disabledAt ? "Removed" : "Active"}</td>
                     <td className="p-2">
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => resetPassword(user)} className="rounded border px-2 py-1 text-xs">Reset</button>
-                        <button type="button" onClick={() => disableUser(user, !user.disabledAt)} className="rounded border px-2 py-1 text-xs">
-                          {user.disabledAt ? "Enable" : "Disable"}
+                        <button type="button" onClick={() => removeUser(user, !user.disabledAt)} className="rounded border px-2 py-1 text-xs">
+                          {user.disabledAt ? "Restore" : "Remove"}
                         </button>
                       </div>
                     </td>
