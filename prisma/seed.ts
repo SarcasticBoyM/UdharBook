@@ -19,7 +19,7 @@ async function upsertUser(input: {
   email: string;
   password: string;
   role: UserRole;
-  shopId?: string | null;
+  shopId: string;
 }) {
   const passwordHash = await bcrypt.hash(input.password, 12);
 
@@ -45,15 +45,16 @@ async function main() {
   const primaryShop = await prisma.shop.upsert({
     where: { id: "default-shop" },
     update: {
-      name: process.env.SHOP_NAME ?? "UdharBook Default Shop",
+      shopName: process.env.SHOP_NAME ?? "UdharBook Default Shop",
       ownerName: process.env.SHOP_OWNER_NAME ?? "Owner",
       subscriptionStatus: "ACTIVE",
     },
     create: {
       id: "default-shop",
-      name: process.env.SHOP_NAME ?? "UdharBook Default Shop",
+      shopName: process.env.SHOP_NAME ?? "UdharBook Default Shop",
       ownerName: process.env.SHOP_OWNER_NAME ?? "Owner",
-      mobileNumber: process.env.SHOP_MOBILE,
+      mobile: process.env.SHOP_MOBILE,
+      email: process.env.SHOP_EMAIL,
       gstNumber: process.env.SHOP_GST,
       address: process.env.SHOP_ADDRESS,
       subscriptionStatus: "ACTIVE",
@@ -67,6 +68,16 @@ async function main() {
     role: UserRole.SHOP_ADMIN,
     shopId: primaryShop.id,
   });
+  const platformShop = await prisma.shop.upsert({
+    where: { id: "platform-shop" },
+    update: {},
+    create: {
+      id: "platform-shop",
+      shopName: "UdharBook Platform",
+      ownerName: "UdharBook",
+      subscriptionStatus: "ACTIVE",
+    },
+  });
   const superPassword = process.env.SUPER_ADMIN_PASSWORD;
   const superAdmin = superPassword
     ? await upsertUser({
@@ -74,7 +85,7 @@ async function main() {
         email: process.env.SUPER_ADMIN_EMAIL ?? "superadmin@udharbook.local",
         password: superPassword,
         role: UserRole.SUPER_ADMIN,
-        shopId: null,
+        shopId: platformShop.id,
       })
     : null;
   const staffPassword = process.env.STAFF_PASSWORD;
@@ -88,7 +99,7 @@ async function main() {
       })
     : null;
 
-  console.log(`Seeded shop: ${primaryShop.name}`);
+  console.log(`Seeded shop: ${primaryShop.shopName}`);
   console.log(`Seeded users: ${[admin.email, staff?.email, superAdmin?.email].filter(Boolean).join(", ")}`);
 }
 

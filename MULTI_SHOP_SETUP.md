@@ -8,6 +8,8 @@ UdharBook now supports multiple isolated shops/businesses.
 - `SHOP_ADMIN`: manages one assigned shop.
 - `STAFF`: works inside one assigned shop.
 
+Every user has a `shopId`. Super Admins belong to the internal `UdharBook Platform` shop and can switch into tenant shops from the sidebar.
+
 ## Database Migration
 
 Run:
@@ -43,3 +45,23 @@ STAFF_PASSWORD="strong-password" npm run prisma:seed
 
 Super Admins see a shop selector in the sidebar. The selected shop is stored in a secure same-site cookie and all dashboard, customer, payment, follow-up, import, export, report, and notification APIs use that shop scope.
 
+## Business Onboarding
+
+Open **Admin Panel > Create New Business** as Super Admin.
+
+The flow creates:
+
+- Shop/business profile
+- Shop Admin user
+- 24-hour temporary password
+
+The Shop Admin should log in and change/reset their password immediately.
+
+## User Management
+
+From the Admin Panel:
+
+- Create users
+- Assign users to shops
+- Disable or enable users
+- Reset passwords and generate temporary credentials

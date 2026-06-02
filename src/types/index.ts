@@ -7,7 +7,7 @@ export interface SessionUser {
   name: string;
   email: string;
   role: UserRole;
-  shopId: string | null;
+  shopId: string;
   shopName?: string | null;
 }
 

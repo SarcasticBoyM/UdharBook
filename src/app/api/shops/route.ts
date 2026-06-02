@@ -5,10 +5,11 @@ import { getSession } from "@/lib/auth";
 import { isSuperAdmin, visibleShops } from "@/lib/tenant";
 
 const schema = z.object({
-  name: z.string().min(1),
+  shopName: z.string().min(1),
   ownerName: z.string().min(1),
+  email: z.string().email().optional(),
   gstNumber: z.string().optional(),
-  mobileNumber: z.string().optional(),
+  mobile: z.string().optional(),
   address: z.string().optional(),
   subscriptionStatus: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED", "CANCELLED"]).default("TRIAL"),
 });
@@ -33,4 +34,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-

@@ -48,7 +48,23 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, getSecret());
+    const role = payload.role as string | undefined;
+    const shopId = payload.shopId as string | undefined;
+
+    if (pathname.startsWith("/shops") && role !== "SUPER_ADMIN") {
+      return secure(NextResponse.redirect(new URL("/", request.url)));
+    }
+    if (pathname.startsWith("/api/shops") && role !== "SUPER_ADMIN") {
+      return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
+    }
+    if (pathname.startsWith("/api/onboarding") && role !== "SUPER_ADMIN") {
+      return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
+    }
+    if (!shopId) {
+      return secure(NextResponse.redirect(new URL("/login", request.url)));
+    }
+
     return secure(NextResponse.next());
   } catch {
     if (pathname.startsWith("/api/")) {

@@ -53,7 +53,7 @@ export async function getSession(): Promise<SessionUser | null> {
       name: payload.name as string,
       email: payload.email as string,
       role: payload.role as SessionUser["role"],
-      shopId: (payload.shopId as string | null) ?? null,
+      shopId: payload.shopId as string,
       shopName: (payload.shopName as string | null) ?? null,
     };
   } catch {
@@ -64,9 +64,11 @@ export async function getSession(): Promise<SessionUser | null> {
 export async function login(email: string, password: string): Promise<SessionUser | null> {
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
-    include: { shop: { select: { name: true } } },
+    include: { shop: { select: { shopName: true } } },
   });
   if (!user) return null;
+  if (user.disabledAt) return null;
+  if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) return null;
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return null;
   await prisma.user.update({
@@ -87,7 +89,7 @@ export async function login(email: string, password: string): Promise<SessionUse
     email: user.email,
     role: user.role,
     shopId: user.shopId,
-    shopName: user.shop?.name ?? null,
+    shopName: user.shop?.shopName ?? null,
   };
 }
 

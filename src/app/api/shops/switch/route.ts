@@ -16,7 +16,9 @@ export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
     const shop = await prisma.shop.findUnique({ where: { id: body.shopId } });
-    if (!shop) return NextResponse.json({ error: "Shop not found" }, { status: 404 });
+    if (!shop || shop.id === "platform-shop") {
+      return NextResponse.json({ error: "Shop not found" }, { status: 404 });
+    }
 
     const response = NextResponse.json({ ok: true, shop });
     response.cookies.set("udharbook_shop", body.shopId, {

@@ -41,7 +41,7 @@ export function customerWhereForShop(
 
 export async function visibleShops(session: SessionUser) {
   if (isSuperAdmin(session)) {
-    return prisma.shop.findMany({ orderBy: { createdAt: "desc" } });
+    return prisma.shop.findMany({ where: { id: { not: "platform-shop" } }, orderBy: { createdAt: "desc" } });
   }
   if (!session.shopId) return [];
   return prisma.shop.findMany({ where: { id: session.shopId } });

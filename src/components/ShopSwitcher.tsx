@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 type Shop = {
   id: string;
-  name: string;
+  shopName: string;
 };
 
 export function ShopSwitcher({ enabled }: { enabled: boolean }) {
@@ -42,7 +42,7 @@ export function ShopSwitcher({ enabled }: { enabled: boolean }) {
     >
       {shops.map((shop) => (
         <option key={shop.id} value={shop.id}>
-          {shop.name}
+          {shop.shopName}
         </option>
       ))}
     </select>

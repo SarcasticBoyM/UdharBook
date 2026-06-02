@@ -1,0 +1,71 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/db";
+import { getSession, hashPassword } from "@/lib/auth";
+import { canManageShop, isSuperAdmin, requireShopId } from "@/lib/tenant";
+import { generateTemporaryPassword } from "@/lib/password";
+import { logActivity } from "@/lib/activity";
+
+const createSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(["SHOP_ADMIN", "STAFF"]),
+  shopId: z.string().optional(),
+});
+
+export async function GET(request: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canManageShop(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const shopId = isSuperAdmin(session) ? new URL(request.url).searchParams.get("shopId") : session.shopId;
+  const users = await prisma.user.findMany({
+    where: {
+      ...(shopId ? { shopId } : {}),
+      role: { not: "SUPER_ADMIN" },
+    },
+    include: { shop: { select: { shopName: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return NextResponse.json({ users });
+}
+
+export async function POST(request: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canManageShop(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  try {
+    const body = createSchema.parse(await request.json());
+    const shopId = isSuperAdmin(session) ? body.shopId ?? requireShopId(request, session) : session.shopId;
+    if (!shopId || shopId === "platform-shop") {
+      return NextResponse.json({ error: "A business shop is required" }, { status: 400 });
+    }
+    if (!isSuperAdmin(session) && body.role === "SHOP_ADMIN") {
+      return NextResponse.json({ error: "Shop admins can only create staff" }, { status: 403 });
+    }
+    const temporaryPassword = generateTemporaryPassword();
+    const user = await prisma.user.create({
+      data: {
+        name: body.name,
+        email: body.email.toLowerCase(),
+        role: body.role,
+        shopId,
+        passwordHash: await hashPassword(temporaryPassword),
+        passwordResetRequired: true,
+        tempPasswordExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+      include: { shop: { select: { shopName: true } } },
+    });
+    await logActivity({
+      action: "user_created",
+      userId: session.id,
+      shopId,
+      details: user.email,
+    });
+    return NextResponse.json({ user, temporaryPassword }, { status: 201 });
+  } catch {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+}
+

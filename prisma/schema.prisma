@@ -49,10 +49,11 @@ enum SubscriptionStatus {
 
 model Shop {
   id                 String             @id @default(cuid())
-  name               String
+  shopName           String             @map("name")
   ownerName          String
+  email              String?
   gstNumber          String?
-  mobileNumber       String?
+  mobile             String?            @map("mobileNumber")
   address            String?
   subscriptionStatus SubscriptionStatus @default(TRIAL)
   createdAt          DateTime           @default(now())
@@ -74,9 +75,12 @@ model User {
   email        String     @unique
   passwordHash String
   role         UserRole   @default(STAFF)
-  shopId       String?
-  shop         Shop?      @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  shopId       String
+  shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  disabledAt   DateTime?
   lastLoginAt  DateTime?
+  passwordResetRequired Boolean @default(false)
+  tempPasswordExpiresAt DateTime?
   createdAt    DateTime   @default(now())
   followUps    FollowUp[]
   statusHistory StatusHistory[]
