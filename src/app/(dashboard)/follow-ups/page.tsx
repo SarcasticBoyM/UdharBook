@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Customer } from "@prisma/client";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -14,16 +14,16 @@ export default function FollowUpsPage() {
   const [bulkDate, setBulkDate] = useState("");
   const [followUpId, setFollowUpId] = useState<string | null>(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     const q = filter ? `?filter=${filter}` : "";
     fetch(`/api/follow-ups${q}`)
       .then((r) => r.json())
       .then(setItems);
-  };
+  }, [filter]);
 
   useEffect(() => {
     load();
-  }, [filter]);
+  }, [load]);
 
   const bulkSchedule = async () => {
     if (!bulkDate || selected.size === 0) return;

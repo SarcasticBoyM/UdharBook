@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -43,15 +43,15 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [showModal, setShowModal] = useState(false);
 
-  const load = () => {
+  const load = useCallback(() => {
     fetch(`/api/customers/${id}`)
       .then((r) => r.json())
       .then(setCustomer);
-  };
+  }, [id]);
 
   useEffect(() => {
     load();
-  }, [id]);
+  }, [load]);
 
   if (!customer) {
     return <p className="text-slate-500">Loading…</p>;

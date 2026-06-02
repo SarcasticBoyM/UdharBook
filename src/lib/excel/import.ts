@@ -1,7 +1,5 @@
 import ExcelJS from "exceljs";
-import { Prisma, type FollowUpStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { normalizePhone } from "@/lib/phone";
 import type { ImportSummary } from "@/types";
 
 const PLACEHOLDER_PREFIX = "NO-PH-";
@@ -28,7 +26,9 @@ function placeholderContact(partyName: string): string {
 function parseContact(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  return trimmed.replace(/\D/g, "").slice(-10) || null;
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
 }
 
 type CellValue = string | number | boolean | null | undefined;
@@ -40,9 +40,25 @@ function cellValue(val: CellValue): string | null {
   return null;
 }
 
-function findIncludes(...keys: string[]): string {
-  const lowerKeys = keys.map((k) => k.toLowerCase());
-  return lowerKeys.join("|")
+function normalizeHeader(header: string): string {
+  return header.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function findField(row: Record<string, unknown>, ...keys: string[]): unknown {
+  const normalizedKeys = keys.map(normalizeHeader);
+  const match = Object.keys(row).find((header) => {
+    const normalizedHeader = normalizeHeader(header);
+    return normalizedKeys.some((key) => normalizedHeader.includes(key));
+  });
+  return match ? row[match] : undefined;
+}
+
+function parseBalance(value: string | null): number | null {
+  if (!value) return 0;
+  const cleaned = value.replace(/[,\s]/g, "").replace(/[^0-9.-]/g, "");
+  if (!cleaned) return 0;
+  const balance = Number.parseFloat(cleaned);
+  return Number.isFinite(balance) && balance >= 0 ? balance : null;
 }
 
 export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSummary> {
@@ -51,65 +67,79 @@ export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSu
 
     if (rows.length === 0) {
       return {
-        success: false,
+        totalProcessed: 0,
         created: 0,
+        updated: 0,
         skipped: 0,
-        errors: "No data found in Excel file",
+        errors: [{ row: 0, message: "No data found in Excel file" }],
       };
     }
 
     let created = 0;
+    let updated = 0;
     let skipped = 0;
-    const errors: string[] = [];
+    const errors: ImportSummary["errors"] = [];
 
     for (let idx = 0; idx < rows.length; idx++) {
+      const rowNumber = idx + 2;
       const row = rows[idx];
       const parsed = parseRow(row);
 
       if (!parsed) {
         skipped++;
+        errors.push({
+          row: rowNumber,
+          message: "Valid customer name and non-negative outstanding balance are required",
+        });
         continue;
       }
 
       const { partyName, contactNumber, outstandingBalance } = parsed;
 
       try {
+        const existing = await prisma.customer.findUnique({
+          where: { contactNumber },
+          select: { id: true },
+        });
+
         await prisma.customer.upsert({
           where: { contactNumber },
           update: {
-            name: partyName,
             outstandingBalance,
             updatedAt: new Date(),
           },
           create: {
-            name: partyName,
+            partyName,
             contactNumber,
             outstandingBalance,
           },
         });
-        created++;
+        if (existing) updated++;
+        else created++;
       } catch (err: unknown) {
         skipped++;
         const errMsg =
           err instanceof Error ? err.message : String(err);
-        errors.push(`Row ${idx + 2}: ${errMsg}`);
+        errors.push({ row: rowNumber, message: errMsg });
       }
     }
 
     return {
-      success: errors.length === 0,
+      totalProcessed: rows.length,
       created,
+      updated,
       skipped,
-      errors: errors.length > 0 ? errors.join("; ") : undefined,
+      errors,
     };
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : String(err);
     return {
-      success: false,
+      totalProcessed: 0,
       created: 0,
+      updated: 0,
       skipped: 0,
-      errors: `Failed to parse Excel file: ${message}`,
+      errors: [{ row: 0, message: `Failed to parse Excel file: ${message}` }],
     };
   }
 }
@@ -120,34 +150,36 @@ function parseRow(row: Record<string, unknown>): {
   outstandingBalance: number;
 } | null {
   const nameValue = cellValue(
-    row[findIncludes("party", "name", "customer", "clientname")] as CellValue
+    findField(row, "partyname", "customername", "clientname", "name") as CellValue
   );
   if (!nameValue) return null;
 
   const partyName = normalizeName(nameValue);
 
   const contactValue = cellValue(
-    row[findIncludes("phone", "mobile", "contact", "number")] as CellValue
+    findField(row, "contactnumber", "mobile", "phone", "contact", "number") as CellValue
   );
   const contactNumber = parseContact(contactValue || "") || placeholderContact(partyName);
 
   const balanceValue = cellValue(
-    row[findIncludes("balance", "outstanding", "pending", "dueamount", "osamount")] as CellValue
+    findField(row, "outstandingbalance", "closingbalance", "pendingamount", "dueamount", "osamount", "balance", "amount") as CellValue
   );
-  const outstandingBalance = parseFloat(balanceValue || "0") || 0;
+  const outstandingBalance = parseBalance(balanceValue);
+  if (outstandingBalance == null) return null;
 
   return { partyName, contactNumber, outstandingBalance };
 }
 
 async function parseWorkbook(buffer: Buffer): Promise<Record<string, unknown>[]> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer as any);
+  const workbookBuffer = new Uint8Array(buffer).buffer;
+  await workbook.xlsx.load(workbookBuffer);
   const sheet = workbook.worksheets[0];
   if (!sheet) return [];
 
   const headers: Record<number, string> = {};
   sheet.getRow(1).eachCell((cell, col) => {
-    headers[col] = String(cellValue(cell.value) ?? "").trim();
+    headers[col] = String(cellValue(cell.value as CellValue) ?? "").trim();
   });
 
   const rows: Record<string, unknown>[] = [];
