@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { canImport } from "@/lib/permissions";
-import { importCustomersFromBuffer } from "@/lib/excel/import";
+import { importCustomersFromExcel } from "@/lib/excel/import";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const summary = await importCustomersFromBuffer(buffer);
+    const summary = await importCustomersFromExcel(buffer);
     return NextResponse.json(summary);
   } catch (err) {
     console.error("[import]", err);
