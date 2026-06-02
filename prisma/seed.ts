@@ -3,34 +3,52 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-async function main() {
-  const passwordHash = await bcrypt.hash("admin123", 12);
+async function upsertUser(input: {
+  name: string;
+  email: string;
+  password: string;
+  role: UserRole;
+}) {
+  const passwordHash = await bcrypt.hash(input.password, 12);
 
-  await prisma.user.upsert({
-    where: { email: "admin@shop.local" },
-    update: {},
-    create: {
-      name: "Admin",
-      email: "admin@shop.local",
+  return prisma.user.upsert({
+    where: { email: input.email },
+    update: {
+      name: input.name,
       passwordHash,
-      role: UserRole.ADMIN,
+      role: input.role,
     },
-  });
-
-  await prisma.user.upsert({
-    where: { email: "staff@shop.local" },
-    update: {},
     create: {
-      name: "Staff User",
-      email: "staff@shop.local",
-      passwordHash: await bcrypt.hash("staff123", 12),
-      role: UserRole.STAFF,
+      name: input.name,
+      email: input.email,
+      passwordHash,
+      role: input.role,
     },
   });
+}
 
-  console.log("Seeded users: admin@shop.local / admin123, staff@shop.local / staff123");
+async function main() {
+  const admin = await upsertUser({
+    name: "Admin",
+    email: "admin@shop.local",
+    password: "admin123",
+    role: UserRole.ADMIN,
+  });
+  const staff = await upsertUser({
+    name: "Staff User",
+    email: "staff@shop.local",
+    password: "staff123",
+    role: UserRole.STAFF,
+  });
+
+  console.log(`Seeded users: ${admin.email}, ${staff.email}`);
 }
 
 main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+  .catch((error) => {
+    console.error("Seed failed:", error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

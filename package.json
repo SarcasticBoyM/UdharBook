@@ -7,8 +7,12 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:seed": "prisma db seed",
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
+    "seed": "prisma db seed",
     "postinstall": "prisma generate"
   },
   "prisma": {
