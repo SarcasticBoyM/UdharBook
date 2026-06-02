@@ -19,7 +19,7 @@ export async function GET(
 
   if (type === "outstanding") {
     const customers = await prisma.customer.findMany({
-      where: { outstandingBalance: { gt: 0 }, NOT: { status: "PAID" } },
+      where: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       orderBy: { outstandingBalance: "desc" },
     });
 
@@ -100,7 +100,7 @@ export async function GET(
 
   if (type === "aging") {
     const customers = await prisma.customer.findMany({
-      where: { outstandingBalance: { gt: 0 }, NOT: { status: "PAID" } },
+      where: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
     });
 
     const buckets: Record<string, typeof customers> = {

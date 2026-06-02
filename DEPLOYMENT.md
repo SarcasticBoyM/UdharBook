@@ -1,79 +1,34 @@
-# Deployment Guide
+# UdharBook Deployment
 
-Deploy the Payment Follow-up application to production on Vercel.
+## Vercel
 
-## Prerequisites
-
-- Node.js 18+ installed
-- GitHub account with repository access
-- Production database URL (PostgreSQL recommended)
-
-## Production Deployment on Vercel
-
-### Step 1: Create Vercel Project
-
-1. Go to https://vercel.com/new
-2. Import your GitHub repository
-3. Configure project settings
-
-### Step 2: Configure Environment Variables
-
-In Vercel Dashboard → Project Settings → Environment Variables:
-
-**Required Variables:**
-
-| Variable | Value | Notes |
-|----------|-------|-------|
-| `DATABASE_URL` | PostgreSQL connection string | Use persistent database, not SQLite |
-| `SESSION_SECRET` | 32+ character random string | Generate with `openssl rand -base64 32` |
-| `HIGH_BALANCE_THRESHOLD` | `50000` | Adjust based on your needs |
-| `NODE_ENV` | `production` | Auto-set by Vercel |
-
-### Step 3: Deploy
-
-Push to GitHub - Vercel auto-deploys on push.
+1. Connect the GitHub repository to Vercel.
+2. Set the environment variables from `ENV_SETUP.md`.
+3. Ensure Supabase allows the Vercel deployment region to connect.
+4. Run database migrations before or during deployment:
 
 ```bash
-git push origin main
+npm run prisma:migrate:deploy
 ```
 
-### Step 4: Verify Deployment
+5. Seed the admin user with a strong password:
 
-1. Production app loads
-2. Login with admin credentials
-3. Create users via admin panel
-4. Verify all features work
-
-## Security Checklist
-
-- [x] SESSION_SECRET set to 32+ random characters
-- [x] Database connection uses TLS/SSL
-- [x] Environment variables not committed to git
-- [x] API routes check user authentication
-- [x] Admin routes verify ADMIN role
-- [x] Passwords hashed with bcrypt
-- [x] Input validation on all forms
-- [x] CSRF protection via same-site cookies
-
-## Troubleshooting
-
-### Build Failures
-
-**Error: "prisma generate failed"**
 ```bash
-rm -rf node_modules
-npm install
+ADMIN_EMAIL="owner@example.com" ADMIN_PASSWORD="long-random-password" npm run prisma:seed
 ```
 
-**Error: "DATABASE_URL not set"**
-- Verify environment variable in Vercel Dashboard
-- Settings → Environment Variables
+6. Deploy:
 
-### Users Cannot Login
-- Verify SESSION_SECRET is correct
-- Check browser cookies are not blocked
-- Clear browser cache
+```bash
+npm run build
+```
 
-## Support
+Vercel runs `postinstall`, which generates Prisma Client automatically.
 
-For more details, see [DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md)
+## Notes
+
+- Use the Supabase direct database URL for `DIRECT_URL`.
+- Use the Supabase pooled URL for `DATABASE_URL`.
+- Keep `SESSION_SECRET` at least 32 random characters in production.
+- The app is PWA-ready through `/manifest.webmanifest`, `/icon.svg`, and `/sw.js`.
+- If Prisma migration fails locally with a Windows TLS credential error, run migrations from Vercel, Supabase-compatible CI, WSL, or another machine with working PostgreSQL TLS.

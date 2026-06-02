@@ -1,17 +1,16 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { prisma } from "./db";
 import type { SessionUser } from "@/types";
+import { env } from "@/lib/env";
 
-const COOKIE_NAME = "pf_session";
+export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 function getSecret() {
-  // Must match fallback in src/middleware.ts so sessions stay valid in dev.
-  const secret =
-    process.env.SESSION_SECRET ?? "dev-secret-change-in-production-min-32-chars";
-  return new TextEncoder().encode(secret);
+  return new TextEncoder().encode(env.SESSION_SECRET);
 }
 
 export async function createSession(user: SessionUser) {
@@ -59,7 +58,7 @@ export async function getSession(): Promise<SessionUser | null> {
 }
 
 export async function login(email: string, password: string): Promise<SessionUser | null> {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (!user) return null;
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return null;
@@ -75,4 +74,54 @@ export async function requireSession(): Promise<SessionUser> {
   const session = await getSession();
   if (!session) throw new Error("UNAUTHORIZED");
   return session;
+}
+
+export async function hashPassword(password: string) {
+  return bcrypt.hash(password, 12);
+}
+
+function resetTokenHash(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export async function createPasswordReset(email: string) {
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+  if (!user) return null;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: user.id,
+      tokenHash: resetTokenHash(token),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    },
+  });
+
+  return {
+    email: user.email,
+    resetUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/reset-password?token=${token}`,
+    token,
+  };
+}
+
+export async function resetPassword(token: string, password: string) {
+  const tokenHash = resetTokenHash(token);
+  const record = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+    include: { user: true },
+  });
+  if (!record || record.usedAt || record.expiresAt < new Date()) return false;
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: record.userId },
+      data: { passwordHash: await hashPassword(password) },
+    }),
+    prisma.passwordResetToken.update({
+      where: { id: record.id },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+
+  return true;
 }

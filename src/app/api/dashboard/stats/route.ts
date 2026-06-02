@@ -14,7 +14,7 @@ export async function GET() {
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
   const customers = await prisma.customer.findMany();
-  const active = customers.filter((c) => c.status !== "PAID" && c.outstandingBalance > 0);
+  const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0);
 
   const totalOutstanding = active.reduce((s, c) => s + c.outstandingBalance, 0);
   const pendingFollowup = active.filter(
@@ -42,16 +42,15 @@ export async function GET() {
     agingMap[bucket] += c.outstandingBalance;
   }
 
-  const paidFollowUps = await prisma.followUp.findMany({
-    where: { status: "PAID" },
-    orderBy: { followupDate: "asc" },
+  const payments = await prisma.paymentEntry.findMany({
+    orderBy: { paidAt: "asc" },
     take: 200,
   });
 
   const monthMap = new Map<string, number>();
-  for (const f of paidFollowUps) {
-    const key = f.followupDate.toISOString().slice(0, 7);
-    monthMap.set(key, (monthMap.get(key) ?? 0) + 1);
+  for (const payment of payments) {
+    const key = payment.paidAt.toISOString().slice(0, 7);
+    monthMap.set(key, (monthMap.get(key) ?? 0) + payment.amount);
   }
 
   const stats: DashboardStats = {

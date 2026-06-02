@@ -36,12 +36,29 @@ type CustomerDetail = {
     createdAt: string;
     changedBy: { name: string };
   }[];
+  payments: {
+    id: string;
+    amount: number;
+    paidAt: string;
+    method: string | null;
+    notes: string | null;
+    createdBy: { name: string };
+  }[];
+  comments: {
+    id: string;
+    note: string;
+    createdAt: string;
+    createdBy: { name: string };
+  }[];
 };
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentNotes, setPaymentNotes] = useState("");
+  const [note, setNote] = useState("");
 
   const load = useCallback(() => {
     fetch(`/api/customers/${id}`)
@@ -52,6 +69,40 @@ export default function CustomerDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const addPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = Number(paymentAmount);
+    if (!amount) return;
+    const res = await fetch(`/api/customers/${id}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount,
+        notes: paymentNotes || undefined,
+        paidAt: new Date().toISOString(),
+      }),
+    });
+    if (res.ok) {
+      setPaymentAmount("");
+      setPaymentNotes("");
+      load();
+    }
+  };
+
+  const addNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!note.trim()) return;
+    const res = await fetch(`/api/customers/${id}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    });
+    if (res.ok) {
+      setNote("");
+      load();
+    }
+  };
 
   if (!customer) {
     return <p className="text-slate-500">Loading…</p>;
@@ -143,6 +194,74 @@ export default function CustomerDetailPage() {
             )}
           </ul>
         </div>
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <form onSubmit={addPayment} className="card">
+          <h2 className="font-semibold">Record Payment</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <input
+              type="number"
+              min="1"
+              step="0.01"
+              value={paymentAmount}
+              onChange={(e) => setPaymentAmount(e.target.value)}
+              placeholder="Amount received"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            />
+            <input
+              value={paymentNotes}
+              onChange={(e) => setPaymentNotes(e.target.value)}
+              placeholder="Method or note"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            />
+          </div>
+          <button type="submit" className="mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white">
+            Save payment
+          </button>
+          <ul className="mt-4 space-y-2 text-sm">
+            {customer.payments.length === 0 ? (
+              <li className="text-slate-500">No payments recorded</li>
+            ) : (
+              customer.payments.map((p) => (
+                <li key={p.id} className="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-800">
+                  <span>
+                    {formatDate(p.paidAt)} by {p.createdBy.name}
+                  </span>
+                  <span className="font-medium">{formatCurrency(p.amount)}</span>
+                </li>
+              ))
+            )}
+          </ul>
+        </form>
+
+        <form onSubmit={addNote} className="card">
+          <h2 className="font-semibold">Notes & Comments</h2>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            placeholder="Add an internal note"
+            className="mt-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
+          <button type="submit" className="mt-3 rounded-lg bg-brand-600 px-4 py-2 text-sm text-white">
+            Add note
+          </button>
+          <ul className="mt-4 max-h-56 space-y-3 overflow-y-auto text-sm">
+            {customer.comments.length === 0 ? (
+              <li className="text-slate-500">No comments yet</li>
+            ) : (
+              customer.comments.map((comment) => (
+                <li key={comment.id} className="border-l-2 border-slate-200 pl-3 dark:border-slate-700">
+                  <p>{comment.note}</p>
+                  <p className="text-xs text-slate-500">
+                    {formatDate(comment.createdAt)} by {comment.createdBy.name}
+                  </p>
+                </li>
+              ))
+            )}
+          </ul>
+        </form>
       </div>
 
       <div className="card mt-6">

@@ -1,6 +1,7 @@
 node_modules
 .next
 .npm-cache
+.cache
 .vercel-cli
 .env
 *.db

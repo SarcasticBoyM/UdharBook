@@ -79,6 +79,7 @@ export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSu
     let updated = 0;
     let skipped = 0;
     const errors: ImportSummary["errors"] = [];
+    const seenContacts = new Set<string>();
 
     for (let idx = 0; idx < rows.length; idx++) {
       const rowNumber = idx + 2;
@@ -96,6 +97,16 @@ export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSu
 
       const { partyName, contactNumber, outstandingBalance } = parsed;
 
+      if (seenContacts.has(contactNumber)) {
+        skipped++;
+        errors.push({
+          row: rowNumber,
+          message: "Duplicate contact number in uploaded file",
+        });
+        continue;
+      }
+      seenContacts.add(contactNumber);
+
       try {
         const existing = await prisma.customer.findUnique({
           where: { contactNumber },
@@ -112,6 +123,7 @@ export async function importCustomersFromExcel(buffer: Buffer): Promise<ImportSu
             partyName,
             contactNumber,
             outstandingBalance,
+            status: outstandingBalance === 0 ? "CLEARED" : "PENDING",
           },
         });
         if (existing) updated++;

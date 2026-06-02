@@ -13,12 +13,26 @@ enum UserRole {
   STAFF
 }
 
+enum CustomerStatus {
+  ACTIVE
+  PENDING
+  HIGH_RISK
+  CLEARED
+}
+
 enum FollowUpStatus {
   PENDING
   CONTACTED
   PAYMENT_PROMISED
   PAID
   NOT_REACHABLE
+}
+
+enum FollowUpPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
 }
 
 model User {
@@ -30,6 +44,10 @@ model User {
   createdAt    DateTime   @default(now())
   followUps    FollowUp[]
   statusHistory StatusHistory[]
+  notes        CustomerNote[]
+  payments     PaymentEntry[]
+  activityLogs ActivityLog[]
+  passwordResetTokens PasswordResetToken[]
 }
 
 model Customer {
@@ -39,7 +57,7 @@ model Customer {
   outstandingBalance Float          @default(0)
   lastFollowupDate   DateTime?
   nextFollowupDate   DateTime?
-  status             FollowUpStatus @default(PENDING)
+  status             CustomerStatus @default(PENDING)
   notes              String?
   totalCallsMade     Int            @default(0)
   balanceAsOfDate    DateTime       @default(now())
@@ -47,10 +65,15 @@ model Customer {
   updatedAt          DateTime       @updatedAt
   followUps          FollowUp[]
   statusHistory      StatusHistory[]
+  payments           PaymentEntry[]
+  comments           CustomerNote[]
+  activityLogs       ActivityLog[]
 
   @@index([nextFollowupDate])
   @@index([status])
   @@index([outstandingBalance])
+  @@index([partyName])
+  @@index([createdAt])
 }
 
 model FollowUp {
@@ -59,21 +82,84 @@ model FollowUp {
   customer         Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
   followupDate     DateTime       @default(now())
   status           FollowUpStatus
+  priority         FollowUpPriority @default(MEDIUM)
   notes            String?
   nextFollowupDate DateTime?
   createdById      String
   createdBy        User           @relation(fields: [createdById], references: [id])
   createdAt        DateTime       @default(now())
+
+  @@index([customerId, followupDate])
+  @@index([nextFollowupDate])
+  @@index([priority])
 }
 
 model StatusHistory {
   id          String          @id @default(cuid())
   customerId  String
   customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  fromStatus  FollowUpStatus?
-  toStatus    FollowUpStatus
+  fromStatus  CustomerStatus?
+  toStatus    CustomerStatus
   notes       String?
   changedById String
   changedBy   User            @relation(fields: [changedById], references: [id])
   createdAt   DateTime        @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+model PaymentEntry {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  amount      Float
+  paidAt      DateTime @default(now())
+  method      String?
+  notes       String?
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([customerId, paidAt])
+  @@index([paidAt])
+}
+
+model CustomerNote {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  note        String
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+model ActivityLog {
+  id          String    @id @default(cuid())
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  action      String
+  details     String?
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([customerId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }

@@ -5,7 +5,7 @@ import { getSession } from "@/lib/auth";
 import { startOfDay, endOfDay } from "date-fns";
 import { StatCards } from "@/components/dashboard/StatCards";
 import { DashboardCharts } from "@/components/dashboard/Charts";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
 import { agingBucket } from "@/lib/aging";
 
@@ -15,7 +15,7 @@ async function getStats(): Promise<DashboardStats> {
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
   const customers = await prisma.customer.findMany();
-  const active = customers.filter((c) => c.status !== "PAID" && c.outstandingBalance > 0);
+  const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0);
 
   const statusGroups = await prisma.customer.groupBy({
     by: ["status"],
@@ -27,15 +27,14 @@ async function getStats(): Promise<DashboardStats> {
     agingMap[agingBucket(c.balanceAsOfDate)] += c.outstandingBalance;
   }
 
-  const paidFollowUps = await prisma.followUp.findMany({
-    where: { status: "PAID" },
-    orderBy: { followupDate: "asc" },
+  const payments = await prisma.paymentEntry.findMany({
+    orderBy: { paidAt: "asc" },
     take: 200,
   });
   const monthMap = new Map<string, number>();
-  for (const f of paidFollowUps) {
-    const key = f.followupDate.toISOString().slice(0, 7);
-    monthMap.set(key, (monthMap.get(key) ?? 0) + 1);
+  for (const payment of payments) {
+    const key = payment.paidAt.toISOString().slice(0, 7);
+    monthMap.set(key, (monthMap.get(key) ?? 0) + payment.amount);
   }
 
   return {
@@ -58,15 +57,23 @@ export default async function DashboardPage() {
   const stats = await getStats();
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
   const highBalanceCustomers = await prisma.customer.findMany({
-    where: { outstandingBalance: { gte: threshold }, NOT: { status: "PAID" } },
+    where: { outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
     orderBy: { outstandingBalance: "desc" },
     take: 5,
+  });
+  const recentActivity = await prisma.activityLog.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 8,
+    include: {
+      user: { select: { name: true } },
+      customer: { select: { partyName: true, id: true } },
+    },
   });
 
   return (
     <div>
       <h1 className="text-2xl font-bold">Dashboard</h1>
-      <p className="text-slate-500">Payment follow-up overview</p>
+      <p className="text-slate-500">UdharBook collections and recovery overview</p>
 
       {(stats.overdueFollowups > 0 || stats.todayFollowups > 0) && (
         <div className="mt-4 space-y-2">
@@ -93,7 +100,7 @@ export default async function DashboardPage() {
 
       {highBalanceCustomers.length > 0 && (
         <div className="card mt-6">
-          <h3 className="font-semibold">High Outstanding Customers</h3>
+          <h3 className="font-semibold">High Risk Outstanding Customers</h3>
           <ul className="mt-3 space-y-2">
             {highBalanceCustomers.map((c) => (
               <li key={c.id} className="flex justify-between text-sm">
@@ -106,6 +113,32 @@ export default async function DashboardPage() {
           </ul>
         </div>
       )}
+
+      <div className="card mt-6">
+        <h3 className="font-semibold">Recent Activity</h3>
+        <ul className="mt-3 space-y-3 text-sm">
+          {recentActivity.length === 0 ? (
+            <li className="text-slate-500">No activity yet</li>
+          ) : (
+            recentActivity.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 last:border-0 dark:border-slate-800">
+                <span>
+                  <span className="font-medium">{item.action.replace(/_/g, " ")}</span>
+                  {item.customer && (
+                    <>
+                      {" for "}
+                      <Link href={`/customers/${item.customer.id}`} className="text-brand-600 hover:underline">
+                        {item.customer.partyName}
+                      </Link>
+                    </>
+                  )}
+                </span>
+                <span className="text-xs text-slate-500">{formatDate(item.createdAt)}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
         <Link

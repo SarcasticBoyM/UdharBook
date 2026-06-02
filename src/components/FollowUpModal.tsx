@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { FollowUpStatus } from "@prisma/client";
+import type { FollowUpPriority, FollowUpStatus } from "@prisma/client";
 
 const STATUSES: { value: FollowUpStatus; label: string }[] = [
   { value: "CONTACTED", label: "Contacted" },
@@ -20,6 +20,7 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
   const [status, setStatus] = useState<FollowUpStatus>("CONTACTED");
   const [notes, setNotes] = useState("");
   const [nextDate, setNextDate] = useState("");
+  const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -34,6 +35,7 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
         body: JSON.stringify({
           customerId,
           status,
+          priority,
           notes: notes || undefined,
           nextFollowupDate: nextDate ? new Date(nextDate).toISOString() : null,
         }),
@@ -84,6 +86,20 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
               onChange={(e) => setNextDate(e.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Priority</label>
+            <select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as FollowUpPriority)}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+            >
+              {(["LOW", "MEDIUM", "HIGH", "URGENT"] as FollowUpPriority[]).map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex justify-end gap-2">

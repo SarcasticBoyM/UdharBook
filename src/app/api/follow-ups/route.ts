@@ -6,9 +6,17 @@ import { getSession } from "@/lib/auth";
 const schema = z.object({
   customerId: z.string(),
   status: z.enum(["CONTACTED", "PAYMENT_PROMISED", "PAID", "NOT_REACHABLE", "PENDING"]),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
   notes: z.string().optional(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
 });
+
+function customerStatusFromFollowUp(status: z.infer<typeof schema>["status"], balance: number) {
+  if (status === "PAID" || balance === 0) return "CLEARED";
+  if (status === "NOT_REACHABLE") return "HIGH_RISK";
+  if (status === "CONTACTED" || status === "PAYMENT_PROMISED") return "ACTIVE";
+  return "PENDING";
+}
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -27,18 +35,22 @@ export async function POST(request: Request) {
         data: {
           customerId: body.customerId,
           status: body.status,
+          priority: body.priority,
           notes: body.notes,
           nextFollowupDate: nextDate,
           createdById: session.id,
         },
       });
 
-      if (customer.status !== body.status) {
+      const newBalance = body.status === "PAID" ? 0 : customer.outstandingBalance;
+      const nextCustomerStatus = customerStatusFromFollowUp(body.status, newBalance);
+
+      if (customer.status !== nextCustomerStatus) {
         await tx.statusHistory.create({
           data: {
             customerId: body.customerId,
             fromStatus: customer.status,
-            toStatus: body.status,
+            toStatus: nextCustomerStatus,
             notes: body.notes,
             changedById: session.id,
           },
@@ -48,12 +60,12 @@ export async function POST(request: Request) {
       const updated = await tx.customer.update({
         where: { id: body.customerId },
         data: {
-          status: body.status,
+          status: nextCustomerStatus,
           notes: body.notes ?? customer.notes,
           lastFollowupDate: now,
           nextFollowupDate: nextDate,
           totalCallsMade: { increment: 1 },
-          outstandingBalance: body.status === "PAID" ? 0 : customer.outstandingBalance,
+          outstandingBalance: newBalance,
         },
       });
 
@@ -80,7 +92,7 @@ export async function GET(request: Request) {
 
   let where: Record<string, unknown> = {
     outstandingBalance: { gt: 0 },
-    NOT: { status: "PAID" },
+    NOT: { status: "CLEARED" },
   };
   if (filter === "today") {
     where = {

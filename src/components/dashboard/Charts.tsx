@@ -38,7 +38,7 @@ export function DashboardCharts({ stats }: { stats: DashboardStats }) {
         </ResponsiveContainer>
       </div>
       <div className="card">
-        <h3 className="mb-4 font-semibold">Follow-up Status Distribution</h3>
+        <h3 className="mb-4 font-semibold">Customer Status Distribution</h3>
         <ResponsiveContainer width="100%" height={260}>
           <PieChart>
             <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
@@ -53,12 +53,12 @@ export function DashboardCharts({ stats }: { stats: DashboardStats }) {
       </div>
       {stats.collectionProgress.length > 0 && (
         <div className="card lg:col-span-2">
-          <h3 className="mb-4 font-semibold">Collection Progress (Paid follow-ups)</h3>
+          <h3 className="mb-4 font-semibold">Monthly Recovery</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={stats.collectionProgress}>
               <XAxis dataKey="month" />
               <YAxis />
-              <Tooltip />
+              <Tooltip formatter={(v: number) => formatCurrency(v)} />
               <Bar dataKey="collected" fill="#10b981" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

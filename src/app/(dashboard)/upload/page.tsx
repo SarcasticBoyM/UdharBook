@@ -54,6 +54,20 @@ export default function UploadPage() {
     }
   };
 
+  const downloadErrors = () => {
+    if (!summary?.errors.length) return;
+    const csv = [
+      "Row,Error",
+      ...summary.errors.map((err) => `${err.row},"${err.message.replace(/"/g, '""')}"`),
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "udharbook-import-errors.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="max-w-2xl">
       <h1 className="text-2xl font-bold">Upload Excel</h1>
@@ -108,6 +122,13 @@ export default function UploadPage() {
           {summary.errors.length > 0 && (
             <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
               <h3 className="text-sm font-medium text-red-600">Validation errors</h3>
+              <button
+                type="button"
+                onClick={downloadErrors}
+                className="mt-2 rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-950"
+              >
+                Download error report
+              </button>
               <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs text-red-700 dark:text-red-400">
                 {summary.errors.map((err, i) => (
                   <li key={i}>

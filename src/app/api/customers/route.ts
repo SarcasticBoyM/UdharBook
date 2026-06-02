@@ -12,6 +12,7 @@ const createSchema = z.object({
   outstandingBalance: z.number().min(0).default(0),
   notes: z.string().optional(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
+  status: z.enum(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"]).optional(),
 });
 
 export async function GET(request: Request) {
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
   const skip = (page - 1) * limit;
 
   const where: Prisma.CustomerWhereInput = {
-    ...(status ? { status: status as Prisma.EnumFollowUpStatusFilter["equals"] } : {}),
+    ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
     ...(search
       ? {
           OR: [
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
     ...(view === "pending"
       ? {
           outstandingBalance: { gt: 0 },
-          NOT: { status: "PAID" },
+          NOT: { status: "CLEARED" },
         }
       : {}),
   };
@@ -77,7 +78,7 @@ export async function POST(request: Request) {
         outstandingBalance: body.outstandingBalance,
         notes: body.notes,
         nextFollowupDate: body.nextFollowupDate ? new Date(body.nextFollowupDate) : null,
-        status: body.outstandingBalance === 0 ? "PAID" : "PENDING",
+        status: body.status ?? (body.outstandingBalance === 0 ? "CLEARED" : "PENDING"),
       },
     });
 

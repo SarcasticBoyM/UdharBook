@@ -1,6 +1,6 @@
-import type { FollowUpStatus, UserRole } from "@prisma/client";
+import type { CustomerStatus, FollowUpPriority, FollowUpStatus, UserRole } from "@prisma/client";
 
-export type { FollowUpStatus, UserRole };
+export type { CustomerStatus, FollowUpPriority, FollowUpStatus, UserRole };
 
 export interface SessionUser {
   id: string;

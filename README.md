@@ -1,112 +1,47 @@
-# Payment Follow-up & Credit Tracking
+# UdharBook
 
-Web app for tracking customer outstanding balances, payment follow-ups, and collection activities.
+UdharBook is a production-ready credit follow-up SaaS for small businesses and finance teams. It tracks customer balances, reminders, payments, notes, WhatsApp follow-ups, Excel imports, and recovery reporting.
 
 ## Features
 
-- Excel upload (.xlsx) with validation and upsert by contact number
-- Customer database with follow-up status, notes, and call history
-- Dashboard with summary cards, charts, and alerts
-- Pending payments list with search, sort, filter, pagination
-- Click-to-call (mobile) / copy number (desktop) + WhatsApp with pre-filled message
-- Follow-up logging with status history
-- Customer detail page with timeline
-- Reports: Outstanding, Follow-up, Aging (Excel + CSV)
-- Roles: Admin (full access) and Staff (no delete / no import)
-- Dark mode, mobile-responsive UI
-- Bulk WhatsApp and bulk follow-up scheduling
+- Admin/staff authentication with hashed passwords and protected sessions
+- Customer balance tracking with Active, Pending, High Risk, and Cleared statuses
+- Dashboard totals, overdue alerts, today reminders, monthly recovery graph, and recent activity
+- Customer search, filters, pagination, payment entries, notes, and history timelines
+- WhatsApp reminder buttons with auto-generated payment messages
+- Reminder scheduling, follow-up priorities, browser notifications, and overdue views
+- Excel import validation, duplicate prevention, downloadable error reports, and Excel exports
+- PWA manifest, installable app branding, app icon, splash metadata, and offline app-shell caching
+- Prisma schema indexes, API validation, rate limiting, security headers, logging, and environment validation
+- Dark mode and mobile-responsive finance-style UI
 
-## Tech Stack
+## Quick Start
 
-- Next.js 15 (App Router) + TypeScript
-- SQLite + Prisma (switch to PostgreSQL by changing `provider` and `DATABASE_URL`)
-- Tailwind CSS + Recharts
-- Session auth (JWT cookie)
-
-## Prerequisites
-
-- [Node.js](https://nodejs.org/) 18+ (includes npm)
-- Optional: Git
-
-## Setup
-
-```powershell
-cd C:\Users\Admin\Desktop\app
-copy .env.example .env
+```bash
 npm install
-npx prisma db push
-npm run db:seed
+npm run prisma:generate
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Open `http://localhost:3000`.
 
-### Default logins
+## Production Checks
 
-| Role  | Email              | Password  |
-|-------|--------------------|-----------|
-| Admin | admin@shop.local   | admin123  |
-| Staff | staff@shop.local   | staff123  |
-
-Change passwords after first login in production.
-
-## Excel import format
-
-| Party Name | Contact Number | Outstanding Balance Amount |
-|------------|----------------|------------------------------|
-| ABC Traders | 9876543210    | 15000                        |
-
-- Contact: 10-digit Indian mobile or with country code
-- Duplicate contact numbers update the existing customer
-
-## PostgreSQL (production)
-
-1. Set `DATABASE_URL` to your Postgres connection string
-2. In `prisma/schema.prisma`, change `provider` from `sqlite` to `postgresql`
-3. Run `npx prisma migrate dev`
-
-## Deploy (Vercel)
-
-1. Push repo to GitHub
-2. Import project on Vercel
-3. Add env vars: `DATABASE_URL`, `SESSION_SECRET`, `HIGH_BALANCE_THRESHOLD`
-4. Use Vercel Postgres or Neon for database
-5. Build command: `npm run build`
-
-## Project structure
-
-```
-src/app/          # Pages and API routes
-src/components/   # UI components
-src/lib/          # DB, auth, excel, phone, whatsapp
-prisma/           # Schema and seed
+```bash
+npm run lint
+npm run build
+npm run prisma:migrate:deploy
+ADMIN_PASSWORD="use-a-strong-password" npm run prisma:seed
 ```
 
-## API overview
+For hosted Supabase databases, the seed requires `ADMIN_PASSWORD` and will not create default credentials.
 
-| Endpoint | Description |
-|----------|-------------|
-| POST `/api/auth/login` | Login |
-| GET `/api/dashboard/stats` | Dashboard metrics |
-| GET/POST `/api/customers` | List / create |
-| POST `/api/customers/import` | Excel import (admin) |
-| POST `/api/follow-ups` | Log call |
-| GET `/api/reports/[type]` | Export reports |
+## Default Local Login
 
-## Security / npm audit
+Local-only seed fallback:
 
-Do **not** run `npm audit fix --force` (it can downgrade Next.js and break the app).
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | admin@udharbook.local | admin12345 |
 
-After pulling updates, reinstall dependencies:
-
-```cmd
-cd C:\Users\Admin\Desktop\app
-npm install
-npm audit
-```
-
-The project removes the vulnerable `xlsx` package and uses ExcelJS for imports. `package.json` `overrides` pin safer `postcss` and `uuid` versions for nested dependencies.
-
-## License
-
-Private / internal use for your business.
+For production, set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before running the seed.

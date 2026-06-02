@@ -12,7 +12,7 @@ const updateSchema = z.object({
   notes: z.string().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
   status: z
-    .enum(["PENDING", "CONTACTED", "PAYMENT_PROMISED", "PAID", "NOT_REACHABLE"])
+    .enum(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"])
     .optional(),
 });
 
@@ -34,6 +34,14 @@ export async function GET(
       statusHistory: {
         orderBy: { createdAt: "desc" },
         include: { changedBy: { select: { name: true } } },
+      },
+      payments: {
+        orderBy: { paidAt: "desc" },
+        include: { createdBy: { select: { name: true } } },
+      },
+      comments: {
+        orderBy: { createdAt: "desc" },
+        include: { createdBy: { select: { name: true } } },
       },
     },
   });

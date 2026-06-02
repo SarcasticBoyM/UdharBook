@@ -3,6 +3,17 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
+function isHostedDatabase() {
+  return (process.env.DATABASE_URL ?? "").includes("supabase.com");
+}
+
+function requiredPassword(name: string, fallback: string) {
+  const value = process.env[name];
+  if (value) return value;
+  if (!isHostedDatabase()) return fallback;
+  throw new Error(`${name} is required when seeding a hosted database`);
+}
+
 async function upsertUser(input: {
   name: string;
   email: string;
@@ -12,7 +23,7 @@ async function upsertUser(input: {
   const passwordHash = await bcrypt.hash(input.password, 12);
 
   return prisma.user.upsert({
-    where: { email: input.email },
+    where: { email: input.email.toLowerCase() },
     update: {
       name: input.name,
       passwordHash,
@@ -20,7 +31,7 @@ async function upsertUser(input: {
     },
     create: {
       name: input.name,
-      email: input.email,
+      email: input.email.toLowerCase(),
       passwordHash,
       role: input.role,
     },
@@ -30,18 +41,21 @@ async function upsertUser(input: {
 async function main() {
   const admin = await upsertUser({
     name: "Admin",
-    email: "admin@shop.local",
-    password: "admin123",
+    email: process.env.ADMIN_EMAIL ?? "admin@udharbook.local",
+    password: requiredPassword("ADMIN_PASSWORD", "admin12345"),
     role: UserRole.ADMIN,
   });
-  const staff = await upsertUser({
-    name: "Staff User",
-    email: "staff@shop.local",
-    password: "staff123",
-    role: UserRole.STAFF,
-  });
+  const staffPassword = process.env.STAFF_PASSWORD;
+  const staff = staffPassword
+    ? await upsertUser({
+        name: "Staff User",
+        email: "staff@udharbook.local",
+        password: staffPassword,
+        role: UserRole.STAFF,
+      })
+    : null;
 
-  console.log(`Seeded users: ${admin.email}, ${staff.email}`);
+  console.log(`Seeded users: ${[admin.email, staff?.email].filter(Boolean).join(", ")}`);
 }
 
 main()

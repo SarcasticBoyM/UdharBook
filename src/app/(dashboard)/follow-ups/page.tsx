@@ -25,6 +25,23 @@ export default function FollowUpsPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      Notification.requestPermission().catch(() => undefined);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (filter === "overdue" && items.length > 0) {
+      new Notification("UdharBook overdue follow-ups", {
+        body: `${items.length} customer${items.length === 1 ? "" : "s"} need attention.`,
+        icon: "/icon.svg",
+      });
+    }
+  }, [filter, items.length]);
+
   const bulkSchedule = async () => {
     if (!bulkDate || selected.size === 0) return;
     await fetch("/api/bulk/follow-ups", {

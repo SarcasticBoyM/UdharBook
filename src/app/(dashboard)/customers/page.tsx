@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import type { Customer, FollowUpStatus } from "@prisma/client";
+import type { Customer, CustomerStatus } from "@prisma/client";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statusBadgeClass, formatStatus, followupRowClass } from "@/lib/status-colors";
 import { CallActions } from "@/components/CallActions";
@@ -69,6 +69,10 @@ export default function CustomersPage() {
     }
   };
 
+  const exportExcel = () => {
+    window.location.href = "/api/reports/outstanding?format=xlsx";
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -85,6 +89,13 @@ export default function CustomersPage() {
         >
           Add Customer
         </Link>
+        <button
+          type="button"
+          onClick={exportExcel}
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800"
+        >
+          Export Excel
+        </button>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -117,7 +128,7 @@ export default function CustomersPage() {
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         >
           <option value="">All statuses</option>
-          {(["PENDING", "CONTACTED", "PAYMENT_PROMISED", "NOT_REACHABLE"] as FollowUpStatus[]).map(
+          {(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"] as CustomerStatus[]).map(
             (s) => (
               <option key={s} value={s}>
                 {formatStatus(s)}

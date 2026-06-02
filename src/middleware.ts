@@ -2,8 +2,18 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
-const COOKIE_NAME = "pf_session";
-const PUBLIC = ["/login", "/api/auth/login"];
+const COOKIE_NAME = "udharbook_session";
+const PUBLIC = [
+  "/login",
+  "/forgot-password",
+  "/reset-password",
+  "/api/auth/login",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+  "/manifest.webmanifest",
+  "/sw.js",
+  "/icon.svg",
+];
 
 function getSecret() {
   const secret =
@@ -22,23 +32,38 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    const origin = request.headers.get("origin");
+    if (origin && origin !== request.nextUrl.origin) {
+      return secure(NextResponse.json({ error: "Invalid origin" }, { status: 403 }));
+    }
+  }
+
   const token = request.cookies.get(COOKIE_NAME)?.value;
   if (!token) {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
     }
-    return NextResponse.redirect(new URL("/login", request.url));
+    return secure(NextResponse.redirect(new URL("/login", request.url)));
   }
 
   try {
     await jwtVerify(token, getSecret());
-    return NextResponse.next();
+    return secure(NextResponse.next());
   } catch {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
     }
-    return NextResponse.redirect(new URL("/login", request.url));
+    return secure(NextResponse.redirect(new URL("/login", request.url)));
   }
+}
+
+function secure(response: NextResponse) {
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  return response;
 }
 
 export const config = {
