@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  STAFF
+}
+
+enum FollowUpStatus {
+  PENDING
+  CONTACTED
+  PAYMENT_PROMISED
+  PAID
+  NOT_REACHABLE
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         UserRole   @default(STAFF)
+  createdAt    DateTime   @default(now())
+  followUps    FollowUp[]
+  statusHistory StatusHistory[]
+}
+
+model Customer {
+  id                 String         @id @default(cuid())
+  partyName          String
+  contactNumber      String         @unique
+  outstandingBalance Float          @default(0)
+  lastFollowupDate   DateTime?
+  nextFollowupDate   DateTime?
+  status             FollowUpStatus @default(PENDING)
+  notes              String?
+  totalCallsMade     Int            @default(0)
+  balanceAsOfDate    DateTime       @default(now())
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  followUps          FollowUp[]
+  statusHistory      StatusHistory[]
+
+  @@index([nextFollowupDate])
+  @@index([status])
+  @@index([outstandingBalance])
+}
+
+model FollowUp {
+  id               String         @id @default(cuid())
+  customerId       String
+  customer         Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  followupDate     DateTime       @default(now())
+  status           FollowUpStatus
+  notes            String?
+  nextFollowupDate DateTime?
+  createdById      String
+  createdBy        User           @relation(fields: [createdById], references: [id])
+  createdAt        DateTime       @default(now())
+}
+
+model StatusHistory {
+  id          String          @id @default(cuid())
+  customerId  String
+  customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  fromStatus  FollowUpStatus?
+  toStatus    FollowUpStatus
+  notes       String?
+  changedById String
+  changedBy   User            @relation(fields: [changedById], references: [id])
+  createdAt   DateTime        @default(now())
+}

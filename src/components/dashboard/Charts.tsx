@@ -1,0 +1,69 @@
+"use client";
+
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
+import type { DashboardStats } from "@/types";
+import { formatCurrency } from "@/lib/utils";
+import { formatStatus } from "@/lib/status-colors";
+
+const COLORS = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"];
+
+export function DashboardCharts({ stats }: { stats: DashboardStats }) {
+  const statusData = stats.statusDistribution.map((s) => ({
+    name: formatStatus(s.status as Parameters<typeof formatStatus>[0]),
+    value: s.count,
+  }));
+
+  return (
+    <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="card">
+        <h3 className="mb-4 font-semibold">Outstanding by Aging</h3>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={stats.outstandingSummary}>
+            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 12 }} />
+            <Tooltip formatter={(v: number) => formatCurrency(v)} />
+            <Bar dataKey="amount" fill="#2563eb" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="card">
+        <h3 className="mb-4 font-semibold">Follow-up Status Distribution</h3>
+        <ResponsiveContainer width="100%" height={260}>
+          <PieChart>
+            <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+              {statusData.map((_, i) => (
+                <Cell key={i} fill={COLORS[i % COLORS.length]} />
+              ))}
+            </Pie>
+            <Legend />
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      {stats.collectionProgress.length > 0 && (
+        <div className="card lg:col-span-2">
+          <h3 className="mb-4 font-semibold">Collection Progress (Paid follow-ups)</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={stats.collectionProgress}>
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="collected" fill="#10b981" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
