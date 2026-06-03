@@ -31,18 +31,18 @@ export async function GET(request: Request) {
   const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 20)));
   const skip = (page - 1) * limit;
   const shopId = requireShopId(request, session);
+  const phoneSearch = search.replace(/\D/g, "");
+  const searchOr: Prisma.CustomerWhereInput[] = search
+    ? [
+        { partyName: { contains: search } },
+        ...(phoneSearch ? [{ contactNumber: { contains: phoneSearch } }] : []),
+      ]
+    : [];
 
   const where: Prisma.CustomerWhereInput = {
     shopId,
     ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
-    ...(search
-      ? {
-          OR: [
-            { partyName: { contains: search } },
-            { contactNumber: { contains: search.replace(/\D/g, "") } },
-          ],
-        }
-      : {}),
+    ...(searchOr.length ? { OR: searchOr } : {}),
     ...(view === "pending"
       ? {
           outstandingBalance: { gt: 0 },

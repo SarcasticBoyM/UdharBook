@@ -1,4 +1,5 @@
 export type ExtractedChequeFields = {
+  customerName?: string;
   chequeNumber?: string;
   bankName?: string;
   chequeDate?: string;
@@ -25,6 +26,7 @@ type OcrProvider = {
 };
 
 export const emptyFieldConfidence: Record<keyof ExtractedChequeFields, number> = {
+  customerName: 0,
   chequeNumber: 0,
   bankName: 0,
   chequeDate: 0,
@@ -113,12 +115,15 @@ function extractFromRawText(rawText: string) {
 
   const holderLine = lines.find((line) => /pay|bearer|holder|name/i.test(line));
   if (holderLine) {
-    fields.accountHolderName = holderLine
+    const detectedName = holderLine
       .replace(/pay|bearer|holder|name|or order|rupees/gi, "")
       .replace(/[:|-]/g, "")
       .trim()
       .slice(0, 80);
+    fields.accountHolderName = detectedName;
+    fields.customerName = detectedName;
     fieldConfidence.accountHolderName = 0.45;
+    fieldConfidence.customerName = 0.45;
   }
 
   const confidenceValues = Object.values(fieldConfidence).filter(Boolean);

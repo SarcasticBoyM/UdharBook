@@ -9,6 +9,7 @@ import {
   Camera,
   CheckCircle2,
   History,
+  ImagePlus,
   Landmark,
   Loader2,
   Plus,
@@ -25,6 +26,7 @@ type CustomerOption = {
   partyName: string;
   contactNumber: string;
   outstandingBalance: number;
+  lastFollowupDate?: string | null;
 };
 
 type UserOption = {
@@ -112,6 +114,7 @@ type ChequeForm = {
 };
 
 type OcrFields = {
+  customerName?: string;
   chequeNumber?: string;
   bankName?: string;
   chequeDate?: string;
@@ -277,6 +280,11 @@ export default function ChequeCollectionsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<ChequeForm>(emptyForm);
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [recentCustomers, setRecentCustomers] = useState<CustomerOption[]>([]);
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [customerError, setCustomerError] = useState("");
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [suggestedCustomerQuery, setSuggestedCustomerQuery] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCheque, setSelectedCheque] = useState<ChequeItem | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
@@ -322,23 +330,43 @@ export default function ChequeCollectionsPage() {
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       const search = form.customerSearch.trim();
-      if (search.length < 2) {
+      if (form.customerId) {
         setCustomers([]);
         return;
       }
-      const res = await fetch(`/api/customers?search=${encodeURIComponent(search)}&limit=20`, {
+      if (search.length < 2) {
+        setCustomers([]);
+        setCustomerLoading(false);
+        setCustomerError("");
+        return;
+      }
+      setCustomerLoading(true);
+      setCustomerError("");
+      const res = await fetch(`/api/customers?search=${encodeURIComponent(search)}&limit=12`, {
         signal: controller.signal,
       }).catch(() => null);
       if (res?.ok) {
         const payload = await res.json();
         setCustomers(payload.items ?? []);
+      } else if (!controller.signal.aborted) {
+        setCustomers([]);
+        setCustomerError("Could not search customers. Check connection and try again.");
       }
+      setCustomerLoading(false);
     }, 250);
     return () => {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [form.customerSearch]);
+  }, [form.customerId, form.customerSearch]);
+
+  useEffect(() => {
+    if (!formOpen) return;
+    fetch("/api/customers?limit=8&sort=nextFollowup&order=desc")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => setRecentCustomers(payload?.items ?? []))
+      .catch(() => setRecentCustomers([]));
+  }, [formOpen]);
 
   useEffect(() => {
     if (!notificationEnabled || !data?.alerts) return;
@@ -451,6 +479,28 @@ export default function ChequeCollectionsPage() {
   };
 
   const scanChequeFile = async (file: File) => {
+    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) {
+      setScanResult({
+        ok: false,
+        provider: "manual",
+        fields: {},
+        rawText: "",
+        confidence: 0,
+        fieldConfidence: {
+          customerName: 0,
+          chequeNumber: 0,
+          bankName: 0,
+          chequeDate: 0,
+          accountHolderName: 0,
+          amount: 0,
+          micrCode: 0,
+          ifscCode: 0,
+          branch: 0,
+        },
+        warning: "Please upload a JPG, PNG, or WEBP cheque image.",
+      });
+      return;
+    }
     setScanning(true);
     setScanResult(null);
     try {
@@ -464,8 +514,12 @@ export default function ChequeCollectionsPage() {
       const result = (await res.json()) as ScanResult;
       setScanResult(result);
       if (result.fields) {
+        const detectedCustomerName = result.fields.customerName?.trim();
         setForm((current) => ({
           ...current,
+          customerSearch: current.customerId
+            ? current.customerSearch
+            : detectedCustomerName || current.customerSearch,
           chequeNumber: result.fields.chequeNumber ?? current.chequeNumber,
           bankName: result.fields.bankName ?? current.bankName,
           branch: result.fields.branch ?? current.branch,
@@ -475,6 +529,10 @@ export default function ChequeCollectionsPage() {
           micrCode: result.fields.micrCode ?? current.micrCode,
           ifscCode: result.fields.ifscCode ?? current.ifscCode,
         }));
+        if (detectedCustomerName) {
+          setSuggestedCustomerQuery(detectedCustomerName);
+          setShowCustomerDropdown(true);
+        }
       }
     } catch {
       setScanResult({
@@ -484,6 +542,7 @@ export default function ChequeCollectionsPage() {
         rawText: "",
         confidence: 0,
         fieldConfidence: {
+          customerName: 0,
           chequeNumber: 0,
           bankName: 0,
           chequeDate: 0,
@@ -499,6 +558,19 @@ export default function ChequeCollectionsPage() {
       setScanning(false);
     }
   };
+
+  const selectCustomer = (customer: CustomerOption) => {
+    setForm((current) => ({
+      ...current,
+      customerId: customer.id,
+      customerSearch: `${customer.partyName} - ${customer.contactNumber}`,
+    }));
+    setShowCustomerDropdown(false);
+    setCustomers([]);
+  };
+
+  const visibleCustomerSuggestions =
+    form.customerSearch.trim().length >= 2 || suggestedCustomerQuery ? customers : recentCustomers;
 
   return (
     <div className="pb-24">
@@ -796,22 +868,39 @@ export default function ChequeCollectionsPage() {
                   </p>
                   <p className="mt-1 text-xs text-slate-500">Camera and gallery both supported. Detected values stay editable.</p>
                 </div>
-                <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">
-                  {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
-                  {scanning ? "Scanning..." : "Scan Cheque"}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={async (event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      await scanChequeFile(file);
-                      event.target.value = "";
-                    }}
-                  />
-                </label>
+                <div className="flex flex-wrap gap-2">
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">
+                    {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                    {scanning ? "Scanning..." : "Camera"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      capture="environment"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        await scanChequeFile(file);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    <ImagePlus className="h-4 w-4" />
+                    Upload from Gallery
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        if (!file) return;
+                        await scanChequeFile(file);
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
 
               {form.frontImageUrl && (
@@ -846,33 +935,73 @@ export default function ChequeCollectionsPage() {
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <label className="md:col-span-2">
-                <span className="text-sm font-medium">Customer</span>
+                <span className="flex items-center justify-between gap-2 text-sm font-medium">
+                  Customer
+                  {suggestedCustomerQuery && !form.customerId ? (
+                    <span className="rounded-full bg-brand-50 px-2 py-1 text-xs text-brand-700">
+                      Suggested from scan
+                    </span>
+                  ) : null}
+                </span>
                 <input
                   value={form.customerSearch}
-                  onChange={(e) => setForm((current) => ({ ...current, customerSearch: e.target.value, customerId: "" }))}
+                  onChange={(e) => {
+                    setForm((current) => ({ ...current, customerSearch: e.target.value, customerId: "" }));
+                    setSuggestedCustomerQuery("");
+                    setShowCustomerDropdown(true);
+                  }}
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && visibleCustomerSuggestions[0] && !form.customerId) {
+                      event.preventDefault();
+                      selectCustomer(visibleCustomerSuggestions[0]);
+                    }
+                    if (event.key === "Escape") setShowCustomerDropdown(false);
+                  }}
                   placeholder="Search customer by name or mobile"
                   className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
                   required={!form.customerId}
                 />
-                {customers.length > 0 && !form.customerId && (
-                  <div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
-                    {customers.map((customer) => (
-                      <button
-                        key={customer.id}
-                        type="button"
-                        onClick={() =>
-                          setForm((current) => ({
-                            ...current,
-                            customerId: customer.id,
-                            customerSearch: `${customer.partyName} - ${customer.contactNumber}`,
-                          }))
-                        }
-                        className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left text-sm last:border-b-0 dark:border-slate-800"
-                      >
-                        <span>{customer.partyName}</span>
-                        <span className="text-slate-500">{formatCurrency(customer.outstandingBalance)}</span>
-                      </button>
-                    ))}
+                {showCustomerDropdown && !form.customerId && (
+                  <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-950">
+                    <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800">
+                      {form.customerSearch.trim().length >= 2 || suggestedCustomerQuery
+                        ? "Suggested Customer Matches"
+                        : "Recent Customers"}
+                    </div>
+                    {customerLoading ? (
+                      <div className="flex items-center gap-2 px-3 py-4 text-sm text-slate-500">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Searching customers
+                      </div>
+                    ) : customerError ? (
+                      <div className="px-3 py-4 text-sm text-red-600">{customerError}</div>
+                    ) : visibleCustomerSuggestions.length === 0 ? (
+                      <div className="px-3 py-4 text-sm text-slate-500">No customers found</div>
+                    ) : (
+                      visibleCustomerSuggestions.map((customer) => (
+                        <button
+                          key={customer.id}
+                          type="button"
+                          onClick={() => selectCustomer(customer)}
+                          className="flex min-h-16 w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 text-left text-sm last:border-b-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
+                        >
+                          <span className="min-w-0">
+                            <span className="block font-semibold">
+                              <HighlightedText text={customer.partyName} query={form.customerSearch || suggestedCustomerQuery} />
+                            </span>
+                            <span className="mt-1 block text-xs text-slate-500">
+                              <HighlightedText text={customer.contactNumber} query={form.customerSearch} />
+                              {" | Last follow-up: "}
+                              {formatDate(customer.lastFollowupDate)}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-right text-sm font-bold text-slate-700 dark:text-slate-200">
+                            {formatCurrency(customer.outstandingBalance)}
+                          </span>
+                        </button>
+                      ))
+                    )}
                   </div>
                 )}
               </label>
@@ -980,5 +1109,22 @@ function Timeline({ activities }: { activities: ChequeActivity[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return <>{text}</>;
+  const index = text.toLowerCase().indexOf(cleanQuery.toLowerCase());
+  if (index === -1) return <>{text}</>;
+
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="rounded bg-yellow-200 px-0.5 text-slate-950">
+        {text.slice(index, index + cleanQuery.length)}
+      </mark>
+      {text.slice(index + cleanQuery.length)}
+    </>
   );
 }
