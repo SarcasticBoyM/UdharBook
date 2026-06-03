@@ -225,15 +225,24 @@ async function prepareChequeImage(file: File) {
   });
   const maxWidth = 1400;
   const scale = Math.min(1, maxWidth / image.width);
-  const width = Math.round(image.width * scale);
-  const height = Math.round(image.height * scale);
+  const sourceWidth = Math.round(image.width * scale);
+  const sourceHeight = Math.round(image.height * scale);
+  const shouldRotate = sourceHeight > sourceWidth * 1.25;
+  const width = shouldRotate ? sourceHeight : sourceWidth;
+  const height = shouldRotate ? sourceWidth : sourceHeight;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) return original;
-  ctx.filter = "contrast(1.18) brightness(1.08) saturate(0.9)";
-  ctx.drawImage(image, 0, 0, width, height);
+  ctx.filter = "grayscale(0.15) contrast(1.28) brightness(1.1) saturate(0.85)";
+  if (shouldRotate) {
+    ctx.translate(width, 0);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(image, 0, 0, sourceWidth, sourceHeight);
+  } else {
+    ctx.drawImage(image, 0, 0, width, height);
+  }
   return canvas.toDataURL("image/jpeg", 0.76);
 }
 
@@ -241,6 +250,50 @@ function confidenceTone(value?: number) {
   if (!value) return "";
   if (value >= 0.75) return "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20";
   return "border-amber-300 bg-amber-50 dark:bg-amber-950/20";
+}
+
+function loadOcrCorrections() {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(window.localStorage.getItem("chequeOcrCorrections") ?? "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function applyOcrCorrections(result: ScanResult) {
+  const corrections = loadOcrCorrections();
+  const fields = { ...result.fields };
+  for (const [key, correctedValue] of Object.entries(corrections)) {
+    const [field, originalValue] = key.split("::");
+    if (!originalValue || !correctedValue) continue;
+    const fieldName = field as keyof OcrFields;
+    if (String(fields[fieldName] ?? "").toLowerCase() === originalValue.toLowerCase()) {
+      fields[fieldName] = (fieldName === "amount" ? Number(correctedValue) : correctedValue) as never;
+    }
+  }
+  return { ...result, fields };
+}
+
+function saveOcrCorrections(scanResult: ScanResult | null, form: ChequeForm) {
+  if (!scanResult || typeof window === "undefined") return;
+  const next = loadOcrCorrections();
+  const pairs: [keyof OcrFields, string][] = [
+    ["chequeNumber", form.chequeNumber],
+    ["bankName", form.bankName],
+    ["chequeDate", form.chequeDate],
+    ["accountHolderName", form.accountHolderName],
+    ["amount", form.amount],
+    ["micrCode", form.micrCode],
+    ["ifscCode", form.ifscCode],
+    ["branch", form.branch],
+  ];
+  for (const [field, corrected] of pairs) {
+    const original = scanResult.fields[field];
+    if (!original || !corrected || String(original) === String(corrected)) continue;
+    next[`${field}::${String(original)}`] = corrected;
+  }
+  window.localStorage.setItem("chequeOcrCorrections", JSON.stringify(next));
 }
 
 function alertText(alerts: ChequeResponse["alerts"]) {
@@ -462,6 +515,7 @@ export default function ChequeCollectionsPage() {
     });
     setSaving(false);
     if (res.ok) {
+      saveOcrCorrections(scanResult, form);
       setForm(emptyForm());
       setScanResult(null);
       setSelectedCustomer(null);
@@ -528,7 +582,8 @@ export default function ChequeCollectionsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageDataUrl }),
       });
-      const result = (await res.json()) as ScanResult;
+      let result = (await res.json()) as ScanResult;
+      result = applyOcrCorrections(result);
       setScanResult(result);
       if (result.fields) {
         const detectedCustomerName =
@@ -584,6 +639,34 @@ export default function ChequeCollectionsPage() {
         },
         warning: "Could not detect all cheque details. Please enter manually.",
       });
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const retryCurrentScan = async () => {
+    if (!form.frontImageUrl) return;
+    setScanning(true);
+    try {
+      const res = await fetch("/api/cheques/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: form.frontImageUrl }),
+      });
+      let result = (await res.json()) as ScanResult;
+      result = applyOcrCorrections(result);
+      setScanResult(result);
+      setForm((current) => ({
+        ...current,
+        chequeNumber: result.fields.chequeNumber ?? current.chequeNumber,
+        bankName: result.fields.bankName ?? current.bankName,
+        branch: result.fields.branch ?? current.branch,
+        chequeDate: result.fields.chequeDate ?? current.chequeDate,
+        amount: result.fields.amount ? String(result.fields.amount) : current.amount,
+        accountHolderName: result.fields.accountHolderName ?? current.accountHolderName,
+        micrCode: result.fields.micrCode ?? current.micrCode,
+        ifscCode: result.fields.ifscCode ?? current.ifscCode,
+      }));
     } finally {
       setScanning(false);
     }
@@ -967,6 +1050,16 @@ export default function ChequeCollectionsPage() {
                     {scanResult.provider ? ` | ${scanResult.provider}` : ""}
                   </p>
                   {scanResult.warning && <p className="mt-1">{scanResult.warning}</p>}
+                  {form.frontImageUrl && (
+                    <button
+                      type="button"
+                      onClick={retryCurrentScan}
+                      disabled={scanning}
+                      className="mt-3 rounded-lg border border-current px-3 py-2 text-xs font-semibold disabled:opacity-60"
+                    >
+                      {scanning ? "Retrying..." : "Retry scan"}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1126,7 +1219,7 @@ function Input({
         {label}
         {confidence ? (
           <span className={cn("rounded-full px-2 py-0.5 text-[11px]", confidence >= 0.75 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
-            {confidence >= 0.75 ? "Detected" : "Verify"}
+            {confidence >= 0.75 ? "Verified" : "Verify"} {Math.round(confidence * 100)}%
           </span>
         ) : null}
       </span>
