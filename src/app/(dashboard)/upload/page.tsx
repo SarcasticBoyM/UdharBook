@@ -46,7 +46,7 @@ export default function UploadPage() {
           : "";
       setError(
         (err instanceof Error ? err.message : "Failed to fetch") +
-          ". Ensure the dev server is running and you are logged in as admin." +
+          ". Ensure the dev server is running and you are logged in." +
           hint
       );
     } finally {
@@ -86,7 +86,7 @@ export default function UploadPage() {
         />
         <p className="mt-2 text-xs text-slate-500">
           Existing customers are updated; new rows are created with Pending status. Empty rows
-          (no name and no contact) are ignored. Admin login required.
+          (no name and no contact) are ignored.
         </p>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <button

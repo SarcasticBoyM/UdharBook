@@ -24,8 +24,8 @@ const links = [
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/upload", label: "Upload Excel", icon: Upload },
-  { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },
+  { href: "/reports", label: "Reports", icon: FileBarChart, adminOnly: true },
   { href: "/shops", label: "Shops", icon: Store, superOnly: true },
 ];
 
@@ -36,7 +36,8 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const isSuperAdmin = role === "SUPER_ADMIN";
   const navLinks = links.filter((link) => {
     if (link.superOnly) return isSuperAdmin;
-    return isAdmin || link.href !== "/upload";
+    if (link.adminOnly) return isAdmin;
+    return true;
   });
 
   const logout = async () => {

@@ -15,7 +15,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     if (!canImport(session.role)) {
-      return NextResponse.json({ error: "Admin only — log in as admin to import" }, { status: 403 });
+      return NextResponse.json({ error: "You do not have permission to import customers" }, { status: 403 });
     }
 
     const formData = await request.formData();

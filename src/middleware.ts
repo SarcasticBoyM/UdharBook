@@ -61,6 +61,15 @@ export async function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/onboarding") && role !== "SUPER_ADMIN") {
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
+    if ((pathname.startsWith("/follow-ups") || pathname.startsWith("/reports")) && role === "STAFF") {
+      return secure(NextResponse.redirect(new URL("/today-follow-ups", request.url)));
+    }
+    if (
+      (pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/reports")) &&
+      role === "STAFF"
+    ) {
+      return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
+    }
     if (!shopId) {
       return secure(NextResponse.redirect(new URL("/login", request.url)));
     }
