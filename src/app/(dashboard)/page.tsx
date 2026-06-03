@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { Upload, UserPlus, CalendarClock, AlertTriangle } from "lucide-react";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { startOfDay, endOfDay } from "date-fns";
@@ -10,16 +11,50 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
 import { agingBucket } from "@/lib/aging";
 
+export const dynamic = "force-dynamic";
+
+const emptyStats: DashboardStats = {
+  totalCustomers: 0,
+  totalOutstanding: 0,
+  pendingFollowup: 0,
+  todayFollowups: 0,
+  overdueFollowups: 0,
+  highOutstanding: 0,
+  recoveryAmount: 0,
+  staffActivity: [],
+  statusDistribution: [],
+  collectionProgress: [],
+  outstandingSummary: [
+    { label: "0-30", amount: 0 },
+    { label: "31-60", amount: 0 },
+    { label: "61-90", amount: 0 },
+    { label: "90+", amount: 0 },
+  ],
+};
+
+type RecentActivityItem = Prisma.ActivityLogGetPayload<{
+  include: {
+    user: { select: { name: true } };
+    customer: { select: { partyName: true; id: true } };
+  };
+}>;
+
 async function selectedShopId() {
-  const session = await getSession();
-  const cookieStore = await cookies();
-  const explicit = cookieStore.get("udharbook_shop")?.value ?? session?.shopId;
-  if (explicit) return explicit;
-  const firstShop = await prisma.shop.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
-  return firstShop?.id ?? "";
+  try {
+    const session = await getSession();
+    const cookieStore = await cookies();
+    const explicit = cookieStore.get("udharbook_shop")?.value ?? session?.shopId;
+    if (explicit) return explicit;
+    const firstShop = await prisma.shop.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
+    return firstShop?.id ?? "";
+  } catch (error) {
+    console.error("Dashboard shop lookup failed", error);
+    return "";
+  }
 }
 
 async function getStats(shopId: string): Promise<DashboardStats> {
+  if (!shopId) return emptyStats;
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
@@ -82,27 +117,51 @@ async function getStats(shopId: string): Promise<DashboardStats> {
 
 export default async function DashboardPage() {
   const shopId = await selectedShopId();
-  const stats = await getStats(shopId);
+  let dashboardError = false;
+  let stats = emptyStats;
+  let highBalanceCustomers: Awaited<ReturnType<typeof prisma.customer.findMany>> = [];
+  let recentActivity: RecentActivityItem[] = [];
+
+  try {
+    stats = await getStats(shopId);
+  } catch (error) {
+    dashboardError = true;
+    console.error("Dashboard stats failed", error);
+  }
+
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
-  const highBalanceCustomers = await prisma.customer.findMany({
-    where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
-    orderBy: { outstandingBalance: "desc" },
-    take: 5,
-  });
-  const recentActivity = await prisma.activityLog.findMany({
-    where: { shopId },
-    orderBy: { createdAt: "desc" },
-    take: 8,
-    include: {
-      user: { select: { name: true } },
-      customer: { select: { partyName: true, id: true } },
-    },
-  });
+  if (shopId) {
+    try {
+      highBalanceCustomers = await prisma.customer.findMany({
+        where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
+        orderBy: { outstandingBalance: "desc" },
+        take: 5,
+      });
+      recentActivity = await prisma.activityLog.findMany({
+        where: { shopId },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        include: {
+          user: { select: { name: true } },
+          customer: { select: { partyName: true, id: true } },
+        },
+      });
+    } catch (error) {
+      dashboardError = true;
+      console.error("Dashboard secondary queries failed", error);
+    }
+  }
 
   return (
     <div>
       <h1 className="text-2xl font-bold">Dashboard</h1>
       <p className="text-slate-500">UdharBook collections and recovery overview</p>
+
+      {dashboardError && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Dashboard data could not be loaded right now. Other modules can still be opened from the sidebar.
+        </div>
+      )}
 
       {(stats.overdueFollowups > 0 || stats.todayFollowups > 0) && (
         <div className="mt-4 space-y-2">

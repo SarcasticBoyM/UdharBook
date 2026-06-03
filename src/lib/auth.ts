@@ -4,13 +4,16 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "./db";
 import type { SessionUser } from "@/types";
-import { env } from "@/lib/env";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 function getSecret() {
-  return new TextEncoder().encode(env.SESSION_SECRET);
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 24) {
+    throw new Error("SESSION_SECRET is missing or too short");
+  }
+  return new TextEncoder().encode(secret);
 }
 
 export async function createSession(user: SessionUser) {
