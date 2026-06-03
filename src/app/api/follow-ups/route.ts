@@ -108,6 +108,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const filter = searchParams.get("filter");
   const view = searchParams.get("view") ?? "customers";
+  const skip = Number(searchParams.get("skip") ?? 0);
+  const take = Math.min(Number(searchParams.get("take") ?? 30), 100);
   const shopId = requireShopId(request, session);
 
   const todayStart = new Date();
@@ -123,7 +125,7 @@ export async function GET(request: Request) {
   if (filter === "today") {
     where = {
       ...where,
-      nextFollowupDate: { gte: todayStart, lte: todayEnd },
+      nextFollowupDate: { lte: todayEnd },
     };
   } else if (filter === "overdue") {
     where = {
@@ -131,11 +133,6 @@ export async function GET(request: Request) {
       nextFollowupDate: { lt: todayStart },
     };
   }
-
-  const customers = await prisma.customer.findMany({
-    where,
-    orderBy: { nextFollowupDate: "asc" },
-  });
 
   if (view === "calendar") {
     const from = searchParams.get("from") ? new Date(searchParams.get("from")!) : todayStart;
@@ -151,5 +148,27 @@ export async function GET(request: Request) {
     return NextResponse.json(followUps);
   }
 
-  return NextResponse.json(customers);
+  const [customers, total] = await prisma.$transaction([
+    prisma.customer.findMany({
+      where,
+      include: {
+        followUps: {
+          orderBy: { followupDate: "desc" },
+          take: 8,
+          include: { createdBy: { select: { name: true } } },
+        },
+        payments: {
+          orderBy: { paidAt: "desc" },
+          take: 1,
+          include: { createdBy: { select: { name: true } } },
+        },
+      },
+      orderBy: [{ nextFollowupDate: "asc" }, { outstandingBalance: "desc" }],
+      skip,
+      take,
+    }),
+    prisma.customer.count({ where }),
+  ]);
+
+  return NextResponse.json({ customers, total, skip, take, hasMore: skip + customers.length < total });
 }
