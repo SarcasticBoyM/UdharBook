@@ -25,8 +25,10 @@ enum FollowUpStatus {
   PENDING
   CONTACTED
   PAYMENT_PROMISED
+  PARTIAL_PAID
   PAID
   NOT_REACHABLE
+  WRONG_NUMBER
   COMPLETED
   MISSED
   RESCHEDULED
@@ -139,7 +141,10 @@ model FollowUp {
   nextFollowupDate DateTime?
   scheduledAt      DateTime?
   completedAt      DateTime?
+  rescheduledAt    DateTime?
   remindedAt       DateTime?
+  actionLoggedAt   DateTime       @default(now())
+  queueRank        Int?
   createdById      String
   createdBy        User           @relation(fields: [createdById], references: [id])
   createdAt        DateTime       @default(now())
@@ -147,7 +152,9 @@ model FollowUp {
   @@index([customerId, followupDate])
   @@index([nextFollowupDate])
   @@index([scheduledAt])
+  @@index([rescheduledAt])
   @@index([priority])
+  @@index([queueRank])
   @@index([shopId, scheduledAt])
   @@index([shopId, status])
 }

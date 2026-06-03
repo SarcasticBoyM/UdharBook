@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarClock,
+  CalendarCheck2,
   FileBarChart,
   LayoutDashboard,
   LogOut,
@@ -20,6 +21,7 @@ import { ShopSwitcher } from "./ShopSwitcher";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/upload", label: "Upload Excel", icon: Upload },
   { href: "/follow-ups", label: "Follow-ups", icon: CalendarClock },
