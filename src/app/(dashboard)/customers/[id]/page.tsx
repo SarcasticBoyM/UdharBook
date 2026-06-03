@@ -50,6 +50,27 @@ type CustomerDetail = {
     createdAt: string;
     createdBy: { name: string };
   }[];
+  cheques: {
+    id: string;
+    chequeNumber: string;
+    bankName: string;
+    chequeDate: string;
+    amount: number;
+    status: string;
+    collectionDateTime: string;
+    depositDateTime: string | null;
+    bounceReason: string | null;
+    collectedBy: { name: string; role: string };
+    depositedBy: { name: string; role: string } | null;
+    activities: {
+      id: string;
+      type: string;
+      toStatus: string | null;
+      notes: string | null;
+      createdAt: string;
+      user: { name: string; role: string };
+    }[];
+  }[];
 };
 
 export default function CustomerDetailPage() {
@@ -107,6 +128,17 @@ export default function CustomerDetailPage() {
   if (!customer) {
     return <p className="text-slate-500">Loading…</p>;
   }
+
+  const chequeSummary = {
+    total: customer.cheques.length,
+    clearedAmount: customer.cheques
+      .filter((cheque) => cheque.status === "CLEARED")
+      .reduce((sum, cheque) => sum + cheque.amount, 0),
+    bounced: customer.cheques.filter((cheque) => cheque.status === "BOUNCED").length,
+    pending: customer.cheques.filter((cheque) =>
+      ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED"].includes(cheque.status)
+    ).length,
+  };
 
   return (
     <div>
@@ -282,6 +314,90 @@ export default function CustomerDetailPage() {
                     <p className="mt-1 text-xs">Next: {formatDate(f.nextFollowupDate)}</p>
                   )}
                 </div>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+
+      <div className="card mt-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Cheque History</h2>
+            <p className="mt-1 text-sm text-slate-500">Collection, deposit, clearance, and bounce tracking.</p>
+          </div>
+          <Link href="/cheques" className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
+            Open Cheque Collections
+          </Link>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">Total cheques</p>
+            <p className="mt-1 text-xl font-bold">{chequeSummary.total}</p>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+            <p className="text-xs">Cleared amount</p>
+            <p className="mt-1 text-xl font-bold">{formatCurrency(chequeSummary.clearedAmount)}</p>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+            <p className="text-xs">Pending cheques</p>
+            <p className="mt-1 text-xl font-bold">{chequeSummary.pending}</p>
+          </div>
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+            <p className="text-xs">Bounced cheques</p>
+            <p className="mt-1 text-xl font-bold">{chequeSummary.bounced}</p>
+          </div>
+        </div>
+
+        <ul className="mt-5 space-y-4">
+          {customer.cheques.length === 0 ? (
+            <li className="text-sm text-slate-500">No cheques recorded</li>
+          ) : (
+            customer.cheques.map((cheque) => (
+              <li key={cheque.id} className="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">
+                      {cheque.chequeNumber} | {cheque.bankName}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Collected {formatDate(cheque.collectionDateTime)} by {cheque.collectedBy.name}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold">{formatCurrency(cheque.amount)}</p>
+                    <p className="text-xs text-slate-500">{cheque.status.replace(/_/g, " ")}</p>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                  <p>
+                    <span className="text-slate-500">Cheque date:</span> {formatDate(cheque.chequeDate)}
+                  </p>
+                  <p>
+                    <span className="text-slate-500">Deposit:</span> {formatDate(cheque.depositDateTime)}
+                  </p>
+                  <p>
+                    <span className="text-slate-500">Deposited by:</span> {cheque.depositedBy?.name ?? "-"}
+                  </p>
+                </div>
+                {cheque.bounceReason && <p className="mt-2 text-sm text-red-700">Bounce reason: {cheque.bounceReason}</p>}
+                {cheque.activities.length > 0 && (
+                  <ul className="mt-3 space-y-2 border-l-2 border-slate-200 pl-3 text-sm dark:border-slate-700">
+                    {cheque.activities.map((activity) => (
+                      <li key={activity.id}>
+                        <p className="font-medium">
+                          {activity.type.replace(/_/g, " ")}
+                          {activity.toStatus ? ` - ${activity.toStatus.replace(/_/g, " ")}` : ""}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {formatDate(activity.createdAt)} by {activity.user.name}
+                        </p>
+                        {activity.notes && <p className="text-slate-600 dark:text-slate-300">{activity.notes}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))
           )}

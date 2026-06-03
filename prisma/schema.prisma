@@ -49,6 +49,27 @@ enum SubscriptionStatus {
   CANCELLED
 }
 
+enum ChequeStatus {
+  COLLECTED
+  PENDING_DEPOSIT
+  DEPOSITED
+  CLEARED
+  BOUNCED
+  REPLACED
+  CANCELLED
+}
+
+enum ChequeActivityType {
+  CREATED
+  STATUS_CHANGED
+  DEPOSITED
+  CLEARED
+  BOUNCED
+  REPLACED
+  CANCELLED
+  NOTE
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -66,6 +87,8 @@ model Shop {
   payments           PaymentEntry[]
   notes              CustomerNote[]
   activityLogs       ActivityLog[]
+  cheques            Cheque[]
+  chequeActivities   ChequeActivity[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -90,6 +113,9 @@ model User {
   payments     PaymentEntry[]
   activityLogs ActivityLog[]
   passwordResetTokens PasswordResetToken[]
+  collectedCheques Cheque[] @relation("ChequeCollectedBy")
+  depositedCheques Cheque[] @relation("ChequeDepositedBy")
+  chequeActivities ChequeActivity[]
 
   @@index([shopId])
   @@index([role])
@@ -115,6 +141,7 @@ model Customer {
   payments           PaymentEntry[]
   comments           CustomerNote[]
   activityLogs       ActivityLog[]
+  cheques            Cheque[]
 
   @@index([nextFollowupDate])
   @@index([status])
@@ -190,6 +217,68 @@ model PaymentEntry {
   @@index([customerId, paidAt])
   @@index([paidAt])
   @@index([shopId, paidAt])
+}
+
+model Cheque {
+  id                 String       @id @default(cuid())
+  shopId             String
+  shop               Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId         String
+  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerCode       String?
+  chequeNumber       String
+  bankName           String
+  branch             String?
+  chequeDate         DateTime
+  amount             Float
+  accountHolderName  String
+  collectedById      String
+  collectedBy        User         @relation("ChequeCollectedBy", fields: [collectedById], references: [id])
+  collectionDateTime DateTime
+  collectionNotes    String?
+  frontImageUrl      String?
+  backImageUrl       String?
+  depositDateTime    DateTime?
+  depositBankAccount String?
+  depositSlipUrl     String?
+  depositedById      String?
+  depositedBy        User?        @relation("ChequeDepositedBy", fields: [depositedById], references: [id])
+  status             ChequeStatus @default(COLLECTED)
+  bounceReason       String?
+  bouncedAt          DateTime?
+  clearedAt          DateTime?
+  cancelledAt        DateTime?
+  replacedByChequeId String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  activities         ChequeActivity[]
+
+  @@unique([shopId, chequeNumber, bankName])
+  @@index([shopId, status])
+  @@index([shopId, chequeDate])
+  @@index([shopId, collectionDateTime])
+  @@index([shopId, depositDateTime])
+  @@index([customerId, createdAt])
+  @@index([collectedById, collectionDateTime])
+}
+
+model ChequeActivity {
+  id         String             @id @default(cuid())
+  shopId     String
+  shop       Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  chequeId   String
+  cheque     Cheque             @relation(fields: [chequeId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User               @relation(fields: [userId], references: [id])
+  type       ChequeActivityType
+  fromStatus ChequeStatus?
+  toStatus   ChequeStatus?
+  notes      String?
+  createdAt  DateTime           @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([chequeId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model CustomerNote {

@@ -46,6 +46,18 @@ export async function GET(
         orderBy: { createdAt: "desc" },
         include: { createdBy: { select: { name: true } } },
       },
+      cheques: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          collectedBy: { select: { name: true, role: true } },
+          depositedBy: { select: { name: true, role: true } },
+          activities: {
+            orderBy: { createdAt: "desc" },
+            include: { user: { select: { name: true, role: true } } },
+            take: 10,
+          },
+        },
+      },
     },
   });
 

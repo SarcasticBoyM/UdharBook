@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   CalendarClock,
   CalendarCheck2,
+  Landmark,
   FileBarChart,
   LayoutDashboard,
   LogOut,
@@ -22,6 +23,7 @@ import { ShopSwitcher } from "./ShopSwitcher";
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
+  { href: "/cheques", label: "Cheque Collections", icon: Landmark },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/upload", label: "Upload Excel", icon: Upload },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },
