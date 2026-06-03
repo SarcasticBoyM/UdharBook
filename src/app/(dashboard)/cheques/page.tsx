@@ -27,6 +27,7 @@ type CustomerOption = {
   contactNumber: string;
   outstandingBalance: number;
   lastFollowupDate?: string | null;
+  matchScore?: number;
 };
 
 type UserOption = {
@@ -133,6 +134,12 @@ type ScanResult = {
   confidence: number;
   fieldConfidence: Record<keyof OcrFields, number>;
   warning?: string;
+};
+
+type CustomerSearchResponse = {
+  success: boolean;
+  customers: CustomerOption[];
+  error?: string;
 };
 
 const tabs: { label: string; value: ChequeStatus | "ALL" }[] = [
@@ -285,6 +292,7 @@ export default function ChequeCollectionsPage() {
   const [customerError, setCustomerError] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [suggestedCustomerQuery, setSuggestedCustomerQuery] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCheque, setSelectedCheque] = useState<ChequeItem | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
@@ -334,7 +342,7 @@ export default function ChequeCollectionsPage() {
         setCustomers([]);
         return;
       }
-      if (search.length < 2) {
+      if (search.length < 1) {
         setCustomers([]);
         setCustomerLoading(false);
         setCustomerError("");
@@ -342,18 +350,19 @@ export default function ChequeCollectionsPage() {
       }
       setCustomerLoading(true);
       setCustomerError("");
-      const res = await fetch(`/api/customers?search=${encodeURIComponent(search)}&limit=12`, {
+      const res = await fetch(`/api/customers/search?q=${encodeURIComponent(search)}&limit=10`, {
         signal: controller.signal,
       }).catch(() => null);
       if (res?.ok) {
-        const payload = await res.json();
-        setCustomers(payload.items ?? []);
+        const payload = (await res.json()) as CustomerSearchResponse;
+        setCustomers(payload.customers ?? []);
+        setCustomerError(payload.error ?? "");
       } else if (!controller.signal.aborted) {
         setCustomers([]);
         setCustomerError("Could not search customers. Check connection and try again.");
       }
       setCustomerLoading(false);
-    }, 250);
+    }, 300);
     return () => {
       controller.abort();
       window.clearTimeout(timer);
@@ -362,9 +371,9 @@ export default function ChequeCollectionsPage() {
 
   useEffect(() => {
     if (!formOpen) return;
-    fetch("/api/customers?limit=8&sort=nextFollowup&order=desc")
+    fetch("/api/customers/search?limit=8")
       .then((res) => (res.ok ? res.json() : null))
-      .then((payload) => setRecentCustomers(payload?.items ?? []))
+      .then((payload: CustomerSearchResponse | null) => setRecentCustomers(payload?.customers ?? []))
       .catch(() => setRecentCustomers([]));
   }, [formOpen]);
 
@@ -455,6 +464,7 @@ export default function ChequeCollectionsPage() {
     if (res.ok) {
       setForm(emptyForm());
       setScanResult(null);
+      setSelectedCustomer(null);
       setCustomers([]);
       setFormOpen(false);
       setActiveStatus("PENDING_DEPOSIT");
@@ -476,6 +486,13 @@ export default function ChequeCollectionsPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.set("format", format);
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
+  };
+
+  const searchCustomers = async (search: string) => {
+    const res = await fetch(`/api/customers/search?q=${encodeURIComponent(search)}&limit=10`);
+    if (!res.ok) return [];
+    const payload = (await res.json()) as CustomerSearchResponse;
+    return payload.customers ?? [];
   };
 
   const scanChequeFile = async (file: File) => {
@@ -514,7 +531,8 @@ export default function ChequeCollectionsPage() {
       const result = (await res.json()) as ScanResult;
       setScanResult(result);
       if (result.fields) {
-        const detectedCustomerName = result.fields.customerName?.trim();
+        const detectedCustomerName =
+          result.fields.customerName?.trim() || result.fields.accountHolderName?.trim();
         setForm((current) => ({
           ...current,
           customerSearch: current.customerId
@@ -532,6 +550,18 @@ export default function ChequeCollectionsPage() {
         if (detectedCustomerName) {
           setSuggestedCustomerQuery(detectedCustomerName);
           setShowCustomerDropdown(true);
+          const matches = await searchCustomers(detectedCustomerName);
+          setCustomers(matches);
+          const bestMatch = matches[0];
+          if (!form.customerId && bestMatch && (bestMatch.matchScore ?? 0) >= 850 && result.confidence >= 0.55) {
+            setSelectedCustomer(bestMatch);
+            setForm((current) => ({
+              ...current,
+              customerId: bestMatch.id,
+              customerSearch: `${bestMatch.partyName} - ${bestMatch.contactNumber}`,
+            }));
+            setShowCustomerDropdown(false);
+          }
         }
       }
     } catch {
@@ -560,6 +590,7 @@ export default function ChequeCollectionsPage() {
   };
 
   const selectCustomer = (customer: CustomerOption) => {
+    setSelectedCustomer(customer);
     setForm((current) => ({
       ...current,
       customerId: customer.id,
@@ -570,7 +601,14 @@ export default function ChequeCollectionsPage() {
   };
 
   const visibleCustomerSuggestions =
-    form.customerSearch.trim().length >= 2 || suggestedCustomerQuery ? customers : recentCustomers;
+    form.customerSearch.trim().length >= 1 || suggestedCustomerQuery ? customers : recentCustomers;
+  const canSaveCheque =
+    Boolean(form.customerId) &&
+    Boolean(form.chequeNumber.trim()) &&
+    Boolean(form.bankName.trim()) &&
+    Boolean(form.chequeDate) &&
+    Number(form.amount) > 0 &&
+    Boolean(form.accountHolderName.trim());
 
   return (
     <div className="pb-24">
@@ -947,6 +985,7 @@ export default function ChequeCollectionsPage() {
                   value={form.customerSearch}
                   onChange={(e) => {
                     setForm((current) => ({ ...current, customerSearch: e.target.value, customerId: "" }));
+                    setSelectedCustomer(null);
                     setSuggestedCustomerQuery("");
                     setShowCustomerDropdown(true);
                   }}
@@ -962,6 +1001,24 @@ export default function ChequeCollectionsPage() {
                   className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
                   required={!form.customerId}
                 />
+                {selectedCustomer && (
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                    <span>
+                      Selected: <strong>{selectedCustomer.partyName}</strong> | {selectedCustomer.contactNumber}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCustomer(null);
+                        setForm((current) => ({ ...current, customerId: "", customerSearch: "" }));
+                        setShowCustomerDropdown(true);
+                      }}
+                      className="rounded-md border border-emerald-300 px-2 py-1 text-xs font-semibold"
+                    >
+                      Change
+                    </button>
+                  </div>
+                )}
                 {showCustomerDropdown && !form.customerId && (
                   <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-950">
                     <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800">
@@ -1030,7 +1087,7 @@ export default function ChequeCollectionsPage() {
               <button type="button" onClick={() => setFormOpen(false)} className="min-h-12 flex-1 rounded-lg border border-slate-300 text-sm font-semibold">
                 Cancel
               </button>
-              <button type="submit" disabled={saving || !form.customerId} className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950">
+              <button type="submit" disabled={saving || !canSaveCheque} className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950">
                 {saving ? "Saving..." : "Save Cheque"}
               </button>
             </div>

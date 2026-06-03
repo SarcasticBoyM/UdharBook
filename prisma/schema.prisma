@@ -148,6 +148,8 @@ model Customer {
   @@index([outstandingBalance])
   @@index([partyName])
   @@index([createdAt])
+  @@index([shopId, partyName])
+  @@index([shopId, contactNumber])
   @@index([shopId, nextFollowupDate])
   @@index([shopId, status])
   @@unique([shopId, contactNumber])
