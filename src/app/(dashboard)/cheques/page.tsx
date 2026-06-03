@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import {
   AlertTriangle,
   Banknote,
   CalendarClock,
+  Camera,
   CheckCircle2,
   History,
   Landmark,
@@ -12,7 +14,7 @@ import {
   Plus,
   Search,
   ShieldAlert,
-  UploadCloud,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import type { ChequeStatus } from "@prisma/client";
@@ -49,6 +51,11 @@ type ChequeItem = {
   chequeDate: string;
   amount: number;
   accountHolderName: string;
+  micrCode: string | null;
+  ifscCode: string | null;
+  ocrConfidence: number | null;
+  ocrExtractedData: Record<string, unknown> | null;
+  ocrEditedFields: Record<string, boolean> | null;
   status: ChequeStatus;
   collectionDateTime: string;
   collectionNotes: string | null;
@@ -90,18 +97,39 @@ type ChequeResponse = {
 type ChequeForm = {
   customerId: string;
   customerSearch: string;
-  customerCode: string;
   chequeNumber: string;
   bankName: string;
   branch: string;
   chequeDate: string;
   amount: string;
   accountHolderName: string;
+  micrCode: string;
+  ifscCode: string;
   collectionDate: string;
   collectionTime: string;
   collectionNotes: string;
   frontImageUrl: string;
-  backImageUrl: string;
+};
+
+type OcrFields = {
+  chequeNumber?: string;
+  bankName?: string;
+  chequeDate?: string;
+  accountHolderName?: string;
+  amount?: number;
+  micrCode?: string;
+  ifscCode?: string;
+  branch?: string;
+};
+
+type ScanResult = {
+  ok: boolean;
+  provider: string;
+  fields: OcrFields;
+  rawText: string;
+  confidence: number;
+  fieldConfidence: Record<keyof OcrFields, number>;
+  warning?: string;
 };
 
 const tabs: { label: string; value: ChequeStatus | "ALL" }[] = [
@@ -145,18 +173,18 @@ const emptyForm = (): ChequeForm => {
   return {
     customerId: "",
     customerSearch: "",
-    customerCode: "",
     chequeNumber: "",
     bankName: "",
     branch: "",
     chequeDate: parts.date,
     amount: "",
     accountHolderName: "",
+    micrCode: "",
+    ifscCode: "",
     collectionDate: parts.date,
     collectionTime: parts.time,
     collectionNotes: "",
     frontImageUrl: "",
-    backImageUrl: "",
   };
 };
 
@@ -175,6 +203,34 @@ function fileToDataUrl(file: File) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+async function prepareChequeImage(file: File) {
+  const original = await fileToDataUrl(file);
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = original;
+  });
+  const maxWidth = 1400;
+  const scale = Math.min(1, maxWidth / image.width);
+  const width = Math.round(image.width * scale);
+  const height = Math.round(image.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return original;
+  ctx.filter = "contrast(1.18) brightness(1.08) saturate(0.9)";
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", 0.76);
+}
+
+function confidenceTone(value?: number) {
+  if (!value) return "";
+  if (value >= 0.75) return "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20";
+  return "border-amber-300 bg-amber-50 dark:bg-amber-950/20";
 }
 
 function alertText(alerts: ChequeResponse["alerts"]) {
@@ -224,6 +280,8 @@ export default function ChequeCollectionsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCheque, setSelectedCheque] = useState<ChequeItem | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const touchStart = useRef<Record<string, number>>({});
 
   useEffect(() => {
@@ -331,12 +389,23 @@ export default function ChequeCollectionsPage() {
   const submitCheque = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
+    const editedFields = scanResult
+      ? {
+          chequeNumber: Boolean(scanResult.fields.chequeNumber && form.chequeNumber !== scanResult.fields.chequeNumber),
+          bankName: Boolean(scanResult.fields.bankName && form.bankName !== scanResult.fields.bankName),
+          chequeDate: Boolean(scanResult.fields.chequeDate && form.chequeDate !== scanResult.fields.chequeDate),
+          accountHolderName: Boolean(scanResult.fields.accountHolderName && form.accountHolderName !== scanResult.fields.accountHolderName),
+          amount: Boolean(scanResult.fields.amount && Number(form.amount) !== scanResult.fields.amount),
+          micrCode: Boolean(scanResult.fields.micrCode && form.micrCode !== scanResult.fields.micrCode),
+          ifscCode: Boolean(scanResult.fields.ifscCode && form.ifscCode !== scanResult.fields.ifscCode),
+          branch: Boolean(scanResult.fields.branch && form.branch !== scanResult.fields.branch),
+        }
+      : undefined;
     const res = await fetch("/api/cheques", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         customerId: form.customerId,
-        customerCode: form.customerCode || undefined,
         chequeNumber: form.chequeNumber,
         bankName: form.bankName,
         branch: form.branch || undefined,
@@ -346,12 +415,18 @@ export default function ChequeCollectionsPage() {
         collectionDateTime: toDateTime(form.collectionDate, form.collectionTime),
         collectionNotes: form.collectionNotes || undefined,
         frontImageUrl: form.frontImageUrl || undefined,
-        backImageUrl: form.backImageUrl || undefined,
+        micrCode: form.micrCode || undefined,
+        ifscCode: form.ifscCode || undefined,
+        ocrRawText: scanResult?.rawText || undefined,
+        ocrExtractedData: scanResult?.fields,
+        ocrConfidence: scanResult?.confidence,
+        ocrEditedFields: editedFields,
       }),
     });
     setSaving(false);
     if (res.ok) {
       setForm(emptyForm());
+      setScanResult(null);
       setCustomers([]);
       setFormOpen(false);
       setActiveStatus("PENDING_DEPOSIT");
@@ -373,6 +448,56 @@ export default function ChequeCollectionsPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.set("format", format);
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
+  };
+
+  const scanChequeFile = async (file: File) => {
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const imageDataUrl = await prepareChequeImage(file);
+      setForm((current) => ({ ...current, frontImageUrl: imageDataUrl }));
+      const res = await fetch("/api/cheques/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl }),
+      });
+      const result = (await res.json()) as ScanResult;
+      setScanResult(result);
+      if (result.fields) {
+        setForm((current) => ({
+          ...current,
+          chequeNumber: result.fields.chequeNumber ?? current.chequeNumber,
+          bankName: result.fields.bankName ?? current.bankName,
+          branch: result.fields.branch ?? current.branch,
+          chequeDate: result.fields.chequeDate ?? current.chequeDate,
+          amount: result.fields.amount ? String(result.fields.amount) : current.amount,
+          accountHolderName: result.fields.accountHolderName ?? current.accountHolderName,
+          micrCode: result.fields.micrCode ?? current.micrCode,
+          ifscCode: result.fields.ifscCode ?? current.ifscCode,
+        }));
+      }
+    } catch {
+      setScanResult({
+        ok: false,
+        provider: "manual",
+        fields: {},
+        rawText: "",
+        confidence: 0,
+        fieldConfidence: {
+          chequeNumber: 0,
+          bankName: 0,
+          chequeDate: 0,
+          accountHolderName: 0,
+          amount: 0,
+          micrCode: 0,
+          ifscCode: 0,
+          branch: 0,
+        },
+        warning: "Could not detect all cheque details. Please enter manually.",
+      });
+    } finally {
+      setScanning(false);
+    }
   };
 
   return (
@@ -655,11 +780,68 @@ export default function ChequeCollectionsPage() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold">Collect New Cheque</h2>
-                <p className="mt-1 text-sm text-slate-500">Capture cheque, customer, collection, and photo details.</p>
+                <p className="mt-1 text-sm text-slate-500">Scan the cheque, verify editable details, then save.</p>
               </div>
               <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border p-2">
                 <XCircle className="h-5 w-5" />
               </button>
+            </div>
+
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-semibold">
+                    <Sparkles className="h-4 w-4 text-brand-600" />
+                    AI cheque scan
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">Camera and gallery both supported. Detected values stay editable.</p>
+                </div>
+                <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">
+                  {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                  {scanning ? "Scanning..." : "Scan Cheque"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      if (!file) return;
+                      await scanChequeFile(file);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+
+              {form.frontImageUrl && (
+                <Image
+                  src={form.frontImageUrl}
+                  alt="Uploaded cheque preview"
+                  width={1200}
+                  height={520}
+                  unoptimized
+                  className="mt-4 max-h-52 w-full rounded-lg object-contain ring-1 ring-slate-200 dark:ring-slate-700"
+                />
+              )}
+
+              {scanResult && (
+                <div
+                  className={cn(
+                    "mt-4 rounded-lg border p-3 text-sm",
+                    scanResult.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"
+                  )}
+                >
+                  <p className="font-semibold">
+                    {scanResult.ok ? "Detected Automatically" : "Could not detect all cheque details"}
+                  </p>
+                  <p className="mt-1">
+                    Confidence: {Math.round((scanResult.confidence ?? 0) * 100)}%
+                    {scanResult.provider ? ` | ${scanResult.provider}` : ""}
+                  </p>
+                  {scanResult.warning && <p className="mt-1">{scanResult.warning}</p>}
+                </div>
+              )}
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -694,13 +876,14 @@ export default function ChequeCollectionsPage() {
                   </div>
                 )}
               </label>
-              <Input label="Customer code" value={form.customerCode} onChange={(value) => setForm((current) => ({ ...current, customerCode: value }))} />
-              <Input label="Cheque number" value={form.chequeNumber} onChange={(value) => setForm((current) => ({ ...current, chequeNumber: value }))} required />
-              <Input label="Bank name" value={form.bankName} onChange={(value) => setForm((current) => ({ ...current, bankName: value }))} required />
-              <Input label="Branch" value={form.branch} onChange={(value) => setForm((current) => ({ ...current, branch: value }))} />
-              <Input label="Cheque date" type="date" value={form.chequeDate} onChange={(value) => setForm((current) => ({ ...current, chequeDate: value }))} required />
-              <Input label="Amount" type="number" value={form.amount} onChange={(value) => setForm((current) => ({ ...current, amount: value }))} required />
-              <Input label="Account holder name" value={form.accountHolderName} onChange={(value) => setForm((current) => ({ ...current, accountHolderName: value }))} required />
+              <Input label="Cheque number" value={form.chequeNumber} confidence={scanResult?.fieldConfidence.chequeNumber} onChange={(value) => setForm((current) => ({ ...current, chequeNumber: value }))} required />
+              <Input label="Bank name" value={form.bankName} confidence={scanResult?.fieldConfidence.bankName} onChange={(value) => setForm((current) => ({ ...current, bankName: value }))} required />
+              <Input label="Branch" value={form.branch} confidence={scanResult?.fieldConfidence.branch} onChange={(value) => setForm((current) => ({ ...current, branch: value }))} />
+              <Input label="Cheque date" type="date" value={form.chequeDate} confidence={scanResult?.fieldConfidence.chequeDate} onChange={(value) => setForm((current) => ({ ...current, chequeDate: value }))} required />
+              <Input label="Amount" type="number" value={form.amount} confidence={scanResult?.fieldConfidence.amount} onChange={(value) => setForm((current) => ({ ...current, amount: value }))} required />
+              <Input label="Account holder name" value={form.accountHolderName} confidence={scanResult?.fieldConfidence.accountHolderName} onChange={(value) => setForm((current) => ({ ...current, accountHolderName: value }))} required />
+              <Input label="MICR code" value={form.micrCode} confidence={scanResult?.fieldConfidence.micrCode} onChange={(value) => setForm((current) => ({ ...current, micrCode: value }))} />
+              <Input label="IFSC code" value={form.ifscCode} confidence={scanResult?.fieldConfidence.ifscCode} onChange={(value) => setForm((current) => ({ ...current, ifscCode: value.toUpperCase() }))} />
               <Input label="Collection date" type="date" value={form.collectionDate} onChange={(value) => setForm((current) => ({ ...current, collectionDate: value }))} required />
               <Input label="Collection time" type="time" value={form.collectionTime} onChange={(value) => setForm((current) => ({ ...current, collectionTime: value }))} required />
               <label className="md:col-span-2">
@@ -712,8 +895,6 @@ export default function ChequeCollectionsPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
                 />
               </label>
-              <FileInput label="Cheque front photo" onChange={(value) => setForm((current) => ({ ...current, frontImageUrl: value }))} />
-              <FileInput label="Cheque back photo" onChange={(value) => setForm((current) => ({ ...current, backImageUrl: value }))} />
             </div>
 
             <div className="sticky bottom-0 -mx-5 mt-6 flex gap-3 border-t border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
@@ -744,48 +925,35 @@ function Input({
   onChange,
   type = "text",
   required,
+  confidence,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
   required?: boolean;
+  confidence?: number;
 }) {
   return (
     <label>
-      <span className="text-sm font-medium">{label}</span>
+      <span className="flex items-center justify-between gap-2 text-sm font-medium">
+        {label}
+        {confidence ? (
+          <span className={cn("rounded-full px-2 py-0.5 text-[11px]", confidence >= 0.75 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+            {confidence >= 0.75 ? "Detected" : "Verify"}
+          </span>
+        ) : null}
+      </span>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+        className={cn(
+          "mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950",
+          confidenceTone(confidence)
+        )}
       />
-    </label>
-  );
-}
-
-function FileInput({ label, onChange }: { label: string; onChange: (value: string) => void }) {
-  const [fileName, setFileName] = useState("");
-  return (
-    <label className="rounded-lg border border-dashed border-slate-300 p-4 text-sm dark:border-slate-700">
-      <span className="flex items-center gap-2 font-medium">
-        <UploadCloud className="h-4 w-4" />
-        {label}
-      </span>
-      <input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="mt-3 block w-full text-sm"
-        onChange={async (event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          setFileName(file.name);
-          onChange(await fileToDataUrl(file));
-        }}
-      />
-      {fileName && <p className="mt-2 text-xs text-slate-500">{fileName}</p>}
     </label>
   );
 }

@@ -238,6 +238,12 @@ model Cheque {
   collectionNotes    String?
   frontImageUrl      String?
   backImageUrl       String?
+  micrCode           String?
+  ifscCode           String?
+  ocrRawText         String?
+  ocrExtractedData   Json?
+  ocrConfidence      Float?
+  ocrEditedFields    Json?
   depositDateTime    DateTime?
   depositBankAccount String?
   depositSlipUrl     String?
