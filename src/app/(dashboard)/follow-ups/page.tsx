@@ -24,14 +24,19 @@ type ReportRow = {
   customerName: string;
   mobileNumber: string;
   outstandingAmount: number;
+  followUpDateTime: string | null;
+  reminderStatus: string;
   lastFollowUp: string | null;
   nextFollowUp: string | null;
   staffName: string;
+  userRole: string;
   followUpStatus: string;
   promiseDate: string | null;
   recoveryAmount: number;
   paymentStatus: string;
   notes: string;
+  completionStatus: string;
+  createdAt: string;
   lastActivityTimestamp: string;
 };
 
@@ -101,24 +106,21 @@ function statusLabel(value: string) {
   return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-function todayInput() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export default function FollowUpReportsPage() {
   const [data, setData] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
-    from: todayInput(),
-    to: todayInput(),
+    from: "",
+    to: "",
     staffId: "",
     customer: "",
     status: "",
     minAmount: "",
     maxAmount: "",
     overdueOnly: false,
+    todayOnly: false,
     promiseOnly: false,
     completedOnly: false,
     pendingOnly: false,
@@ -238,10 +240,11 @@ export default function FollowUpReportsPage() {
           <Input label="Max amount" type="number" value={filters.maxAmount} onChange={(value) => updateFilter("maxAmount", value)} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
+          <Chip active={filters.todayOnly} label="Today" onClick={() => updateFilter("todayOnly", !filters.todayOnly)} />
+          <Chip active={filters.pendingOnly} label="Pending" onClick={() => updateFilter("pendingOnly", !filters.pendingOnly)} />
+          <Chip active={filters.completedOnly} label="Completed" onClick={() => updateFilter("completedOnly", !filters.completedOnly)} />
           <Chip active={filters.overdueOnly} label="Overdue only" onClick={() => updateFilter("overdueOnly", !filters.overdueOnly)} />
           <Chip active={filters.promiseOnly} label="Promise to Pay only" onClick={() => updateFilter("promiseOnly", !filters.promiseOnly)} />
-          <Chip active={filters.completedOnly} label="Completed only" onClick={() => updateFilter("completedOnly", !filters.completedOnly)} />
-          <Chip active={filters.pendingOnly} label="Pending only" onClick={() => updateFilter("pendingOnly", !filters.pendingOnly)} />
         </div>
       </section>
 
@@ -303,14 +306,18 @@ export default function FollowUpReportsPage() {
                 <Th />
                 <Th>Customer Name</Th>
                 <Th>Mobile Number</Th>
-                <Th>Outstanding Amount</Th>
-                <Th>Last Follow-up</Th>
+                <Th>Balance Amount</Th>
+                <Th>Follow-up Date & Time</Th>
+                <Th>Reminder Status</Th>
                 <Th>Next Follow-up</Th>
-                <Th>Staff Name</Th>
+                <Th>Created By</Th>
+                <Th>User Role</Th>
                 <Th>Status</Th>
                 <Th>Promise Date</Th>
                 <Th>Recovery Amount</Th>
                 <Th>Payment Status</Th>
+                <Th>Completion</Th>
+                <Th>Created At</Th>
                 <Th>Last Activity</Th>
               </tr>
             </thead>
@@ -327,23 +334,27 @@ export default function FollowUpReportsPage() {
                       <Td>{row.customerName}</Td>
                       <Td>{row.mobileNumber}</Td>
                       <Td>{formatCurrency(row.outstandingAmount)}</Td>
-                      <Td>{formatDateTime(row.lastFollowUp)}</Td>
+                      <Td>{formatDateTime(row.followUpDateTime)}</Td>
+                      <Td>{row.reminderStatus}</Td>
                       <Td>{formatDateTime(row.nextFollowUp)}</Td>
                       <Td>{row.staffName}</Td>
+                      <Td>{statusLabel(row.userRole)}</Td>
                       <Td><StatusPill status={row.followUpStatus} /></Td>
                       <Td>{formatDateTime(row.promiseDate)}</Td>
                       <Td>{formatCurrency(row.recoveryAmount)}</Td>
                       <Td>{row.paymentStatus}</Td>
+                      <Td>{row.completionStatus}</Td>
+                      <Td>{formatDateTime(row.createdAt)}</Td>
                       <Td>{formatDateTime(row.lastActivityTimestamp)}</Td>
                     </tr>
                     {expanded === row.id && (
                       <tr className="border-t border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
-                        <td colSpan={12} className="p-4">
+                        <td colSpan={15} className="p-4">
                           <div className="border-l-2 border-brand-300 pl-4">
                             <p className="font-semibold">Activity Timeline</p>
                             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{row.notes || "No notes recorded."}</p>
                             <p className="mt-1 text-xs text-slate-500">
-                              {statusLabel(row.followUpStatus)} by {row.staffName} at {formatDateTime(row.lastActivityTimestamp)}
+                              {statusLabel(row.followUpStatus)} by {row.staffName} ({statusLabel(row.userRole)}) at {formatDateTime(row.lastActivityTimestamp)}
                             </p>
                           </div>
                         </td>
@@ -353,7 +364,7 @@ export default function FollowUpReportsPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={12} className="p-8 text-center text-slate-500">
+                  <td colSpan={15} className="p-8 text-center text-slate-500">
                     No report rows match the selected filters.
                   </td>
                 </tr>

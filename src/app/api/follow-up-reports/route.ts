@@ -37,7 +37,7 @@ function formatDateTime(date: Date | null | undefined) {
 function rowFromFollowUp(row: Prisma.FollowUpGetPayload<{
   include: {
     customer: { include: { payments: true } };
-    createdBy: { select: { id: true; name: true } };
+    createdBy: { select: { id: true; name: true; role: true } };
   };
 }>) {
   const lastPayment = row.customer.payments[0];
@@ -48,15 +48,20 @@ function rowFromFollowUp(row: Prisma.FollowUpGetPayload<{
     customerName: row.customer.partyName,
     mobileNumber: row.customer.contactNumber,
     outstandingAmount: row.customer.outstandingBalance,
+    followUpDateTime: row.followupDate,
+    reminderStatus: row.remindedAt ? "Reminder sent" : row.scheduledAt ? "Reminder scheduled" : "No reminder",
     lastFollowUp: row.customer.lastFollowupDate ?? row.followupDate,
     nextFollowUp: row.nextFollowupDate ?? row.customer.nextFollowupDate,
     staffId: row.createdById,
     staffName: row.createdBy.name,
+    userRole: row.createdBy.role,
     followUpStatus: row.status,
     promiseDate: row.status === "PAYMENT_PROMISED" ? row.nextFollowupDate : null,
     recoveryAmount,
     paymentStatus: row.customer.outstandingBalance <= 0 ? "Recovered" : recoveryAmount > 0 ? "Partial" : "Pending",
     notes: row.notes ?? row.customerResponse ?? "",
+    completionStatus: row.completedAt ? "Completed" : row.status === "PAID" || row.status === "COMPLETED" ? "Completed" : "Open",
+    createdAt: row.createdAt,
     lastActivityTimestamp: row.actionLoggedAt ?? row.followupDate,
   };
 }
@@ -68,23 +73,30 @@ async function rowsToExcel(rows: ReturnType<typeof rowFromFollowUp>[]) {
     { header: "Customer Name", key: "customerName", width: 28 },
     { header: "Mobile Number", key: "mobileNumber", width: 16 },
     { header: "Outstanding Amount", key: "outstandingAmount", width: 18 },
+    { header: "Follow-up Date & Time", key: "followUpDateTime", width: 24 },
+    { header: "Reminder Status", key: "reminderStatus", width: 20 },
     { header: "Last Follow-up", key: "lastFollowUp", width: 24 },
     { header: "Next Follow-up", key: "nextFollowUp", width: 24 },
-    { header: "Staff Name", key: "staffName", width: 18 },
+    { header: "Created By", key: "staffName", width: 18 },
+    { header: "User Role", key: "userRole", width: 16 },
     { header: "Follow-up Status", key: "followUpStatus", width: 18 },
     { header: "Promise Date", key: "promiseDate", width: 24 },
     { header: "Recovery Amount", key: "recoveryAmount", width: 18 },
     { header: "Payment Status", key: "paymentStatus", width: 16 },
-    { header: "Notes", key: "notes", width: 42 },
+    { header: "Notes/Remarks", key: "notes", width: 42 },
+    { header: "Completion Status", key: "completionStatus", width: 18 },
+    { header: "Created At", key: "createdAt", width: 24 },
     { header: "Last Activity Timestamp", key: "lastActivityTimestamp", width: 28 },
   ];
   sheet.getRow(1).font = { bold: true };
   rows.forEach((row) =>
     sheet.addRow({
       ...row,
+      followUpDateTime: formatDateTime(row.followUpDateTime),
       lastFollowUp: formatDateTime(row.lastFollowUp),
       nextFollowUp: formatDateTime(row.nextFollowUp),
       promiseDate: formatDateTime(row.promiseDate),
+      createdAt: formatDateTime(row.createdAt),
       lastActivityTimestamp: formatDateTime(row.lastActivityTimestamp),
     })
   );
@@ -97,28 +109,38 @@ function rowsToCsv(rows: ReturnType<typeof rowFromFollowUp>[]) {
       "Customer Name",
       "Mobile Number",
       "Outstanding Amount",
+      "Follow-up Date & Time",
+      "Reminder Status",
       "Last Follow-up",
       "Next Follow-up",
-      "Staff Name",
+      "Created By",
+      "User Role",
       "Follow-up Status",
       "Promise Date",
       "Recovery Amount",
       "Payment Status",
-      "Notes",
+      "Notes/Remarks",
+      "Completion Status",
+      "Created At",
       "Last Activity Timestamp",
     ],
     rows.map((row) => [
       row.customerName,
       row.mobileNumber,
       String(row.outstandingAmount),
+      formatDateTime(row.followUpDateTime),
+      row.reminderStatus,
       formatDateTime(row.lastFollowUp),
       formatDateTime(row.nextFollowUp),
       row.staffName,
+      row.userRole,
       row.followUpStatus,
       formatDateTime(row.promiseDate),
       String(row.recoveryAmount),
       row.paymentStatus,
       row.notes,
+      row.completionStatus,
+      formatDateTime(row.createdAt),
       formatDateTime(row.lastActivityTimestamp),
     ])
   );
@@ -172,6 +194,7 @@ export async function GET(request: Request) {
   const minAmount = Number(searchParams.get("minAmount") || "");
   const maxAmount = Number(searchParams.get("maxAmount") || "");
   const overdueOnly = searchParams.get("overdueOnly") === "true";
+  const todayOnly = searchParams.get("todayOnly") === "true";
   const promiseOnly = searchParams.get("promiseOnly") === "true";
   const completedOnly = searchParams.get("completedOnly") === "true";
   const pendingOnly = searchParams.get("pendingOnly") === "true";
@@ -180,7 +203,11 @@ export async function GET(request: Request) {
 
   const where: Prisma.FollowUpWhereInput = {
     shopId,
-    ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    ...(todayOnly
+      ? { followupDate: { gte: todayStart, lte: todayEnd } }
+      : from || to
+        ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
+        : {}),
     ...(staffId ? { createdById: staffId } : {}),
     ...(status ? { status: status as Prisma.EnumFollowUpStatusFilter["equals"] } : {}),
     ...(promiseOnly ? { status: "PAYMENT_PROMISED" } : {}),
@@ -210,7 +237,7 @@ export async function GET(request: Request) {
         payments: { orderBy: { paidAt: "desc" as const }, take: 1 },
       },
     },
-    createdBy: { select: { id: true, name: true } },
+    createdBy: { select: { id: true, name: true, role: true } },
   };
 
   const [followUps, total, users, paymentsToday, outstanding, allToday, staffGroups, trendRows] =
@@ -218,7 +245,11 @@ export async function GET(request: Request) {
       prisma.followUp.findMany({
         where,
         include,
-        orderBy: { followupDate: "desc" },
+        orderBy: [
+          { nextFollowupDate: { sort: "asc", nulls: "last" } },
+          { scheduledAt: { sort: "asc", nulls: "last" } },
+          { followupDate: "asc" },
+        ],
         skip: format ? 0 : skip,
         take: format ? 1000 : limit,
       }),
