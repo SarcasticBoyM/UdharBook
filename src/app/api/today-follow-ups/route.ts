@@ -152,7 +152,7 @@ function matchesFilter(filter: string, customer: QueueCustomer, todayStart: Date
   if (filter === "today") return dueToday;
   if (filter === "high_amount") return customer.outstandingBalance >= HIGH_AMOUNT;
   if (filter === "no_followup") return customer.followUps.length <= 1 && !customer.lastFollowupDate;
-  if (filter === "pending") return customer.status !== "CLEARED";
+  if (filter === "pending") return customer.outstandingBalance > 0;
   if (filter === "promise") return latest?.status === "PAYMENT_PROMISED";
   if (filter === "not_answering") return latest?.status === "NOT_REACHABLE";
   if (filter === "urgent") return customer.smartPriority === "URGENT";
@@ -165,7 +165,6 @@ async function seedMissingFollowUps(shopId: string, userId: string) {
     where: {
       shopId,
       outstandingBalance: { gt: 0 },
-      NOT: { status: "CLEARED" },
       followUps: { none: {} },
     },
     include: {
@@ -237,7 +236,15 @@ export async function GET(request: Request) {
   const where: Prisma.CustomerWhereInput = {
     shopId,
     outstandingBalance: { gt: 0 },
-    NOT: { status: "CLEARED" },
+  };
+
+  const realActionTodayWhere: Prisma.FollowUpWhereInput = {
+    status: { not: "PENDING" },
+    OR: [
+      { followupDate: { gte: todayStart, lte: todayEnd } },
+      { completedAt: { gte: todayStart, lte: todayEnd } },
+      { rescheduledAt: { gte: todayStart, lte: todayEnd } },
+    ],
   };
 
   const [customers, doneCustomers, todayRecovery, staffActivity] = await prisma.$transaction([
@@ -251,10 +258,7 @@ export async function GET(request: Request) {
       where: {
         shopId,
         followUps: {
-          some: {
-            actionLoggedAt: { gte: todayStart, lte: todayEnd },
-            status: { not: "PENDING" },
-          },
+          some: realActionTodayWhere,
         },
       },
       include,
@@ -267,7 +271,7 @@ export async function GET(request: Request) {
     }),
     prisma.followUp.groupBy({
       by: ["createdById"],
-      where: { shopId, actionLoggedAt: { gte: todayStart, lte: todayEnd }, status: { not: "PENDING" } },
+      where: { shopId, ...realActionTodayWhere },
       orderBy: { createdById: "asc" },
       _count: { _all: true },
     }),
@@ -318,8 +322,15 @@ export async function GET(request: Request) {
   const done = doneCustomers.map((customer) => {
     const smart = smartPriority(customer);
     const todayAction = customer.followUps.find((followUp) => {
-      const actionTime = new Date(followUp.actionLoggedAt);
-      return actionTime >= todayStart && actionTime <= todayEnd && followUp.status !== "PENDING";
+      const followupDate = new Date(followUp.followupDate);
+      const completedAt = followUp.completedAt ? new Date(followUp.completedAt) : null;
+      const rescheduledAt = followUp.rescheduledAt ? new Date(followUp.rescheduledAt) : null;
+      return (
+        followUp.status !== "PENDING" &&
+        ((followupDate >= todayStart && followupDate <= todayEnd) ||
+          (completedAt !== null && completedAt >= todayStart && completedAt <= todayEnd) ||
+          (rescheduledAt !== null && rescheduledAt >= todayStart && rescheduledAt <= todayEnd))
+      );
     });
     return {
       ...customer,

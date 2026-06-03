@@ -327,6 +327,10 @@ export default function TodayFollowUpsPage() {
   }, [query]);
 
   useEffect(() => {
+    setPending([]);
+  }, [debouncedQuery, filter, sort]);
+
+  useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver((entries) => {
