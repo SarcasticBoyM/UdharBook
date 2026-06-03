@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  AlertTriangle,
   Bell,
   CheckCircle2,
   Clock3,
@@ -74,24 +73,88 @@ type QueueCustomer = {
   todayAction?: FollowUpItem;
   touchedAt?: string;
   optimisticStatus?: QueueStatus;
+  smartPriority?: FollowUpPriority;
+  smartPriorityLabel?: string;
+  queueScore?: number;
+  section?: "urgent" | "today" | "recent";
 };
 
 type TodayResponse = {
   pending: QueueCustomer[];
   done: QueueCustomer[];
   summary: {
+    totalCustomers: number;
+    totalPendingCustomers: number;
+    totalPendingAmount: number;
     totalToday: number;
     pending: number;
     completed: number;
+    actionedToday: number;
+    callsCompleted: number;
     recoveryToday: number;
     overdue: number;
+    autoCreated: number;
+    staffPerformance: { staffId: string; name: string; actions: number }[];
   };
+  sections: { urgent: number; today: number; recent: number; done: number };
   pagination: { skip: number; take: number; hasMore: boolean };
 };
+
+type SortKey =
+  | "amount_desc"
+  | "amount_asc"
+  | "overdue_desc"
+  | "oldest_followup"
+  | "newest_followup"
+  | "last_contacted"
+  | "never_contacted"
+  | "priority_desc"
+  | "priority_asc"
+  | "az"
+  | "za";
+
+type FilterKey =
+  | "all"
+  | "overdue"
+  | "today"
+  | "high_amount"
+  | "no_followup"
+  | "done"
+  | "pending"
+  | "promise"
+  | "not_answering"
+  | "urgent";
 
 const PAGE_SIZE = 30;
 const HIGH_AMOUNT = 50000;
 const COMPLETE_STATUSES: QueueStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "amount_desc", label: "Highest Pending Amount" },
+  { value: "amount_asc", label: "Lowest Pending Amount" },
+  { value: "overdue_desc", label: "Most Overdue" },
+  { value: "oldest_followup", label: "Oldest Follow-up" },
+  { value: "newest_followup", label: "Newest Follow-up" },
+  { value: "last_contacted", label: "Last Contacted" },
+  { value: "never_contacted", label: "Never Contacted" },
+  { value: "priority_desc", label: "Priority High to Low" },
+  { value: "priority_asc", label: "Priority Low to High" },
+  { value: "az", label: "Alphabetical A-Z" },
+  { value: "za", label: "Alphabetical Z-A" },
+];
+
+const FILTERS: { value: FilterKey; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "overdue", label: "Overdue" },
+  { value: "today", label: "Due Today" },
+  { value: "high_amount", label: "High Amount" },
+  { value: "no_followup", label: "No Follow-up Yet" },
+  { value: "done", label: "Follow-up Done Today" },
+  { value: "pending", label: "Pending Only" },
+  { value: "promise", label: "Promise to Pay" },
+  { value: "not_answering", label: "Not Answering" },
+  { value: "urgent", label: "Urgent Recovery" },
+];
 
 const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
   { value: "CONTACTED", label: "Called", tone: "border-sky-200 bg-sky-50 text-sky-800" },
@@ -170,18 +233,6 @@ function derivedPriority(customer: QueueCustomer): FollowUpPriority {
   return "LOW";
 }
 
-function queueScore(customer: QueueCustomer) {
-  const priorityScore = { URGENT: 4000, HIGH: 3000, MEDIUM: 2000, LOW: 1000 }[derivedPriority(customer)];
-  const overdueScore = daysOverdue(customer) * 10000;
-  const amountScore = Math.min(customer.outstandingBalance, 500000);
-  const recentPenalty = customer.touchedAt || customer.lastFollowupDate
-    ? new Date(customer.touchedAt ?? customer.lastFollowupDate ?? 0).getTime() > Date.now() - 2 * 60 * 60 * 1000
-      ? 100000
-      : 0
-    : 0;
-  return overdueScore + priorityScore + amountScore - recentPenalty;
-}
-
 function cardTone(customer: QueueCustomer, done = false) {
   if (done || customer.status === "CLEARED" || customer.optimisticStatus === "PAID") return "green";
   if (derivedPriority(customer) === "URGENT" || daysOverdue(customer) > 0) return "red";
@@ -196,14 +247,25 @@ export default function TodayFollowUpsPage() {
   const [pending, setPending] = useState<QueueCustomer[]>([]);
   const [done, setDone] = useState<QueueCustomer[]>([]);
   const [summary, setSummary] = useState<TodayResponse["summary"]>({
+    totalCustomers: 0,
+    totalPendingCustomers: 0,
+    totalPendingAmount: 0,
     totalToday: 0,
     pending: 0,
     completed: 0,
+    actionedToday: 0,
+    callsCompleted: 0,
     recoveryToday: 0,
     overdue: 0,
+    autoCreated: 0,
+    staffPerformance: [],
   });
+  const [sections, setSections] = useState<TodayResponse["sections"]>({ urgent: 0, today: 0, recent: 0, done: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [sort, setSort] = useState<SortKey>("priority_desc");
+  const [filter, setFilter] = useState<FilterKey>("all");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -219,6 +281,7 @@ export default function TodayFollowUpsPage() {
     });
     setDone(data.done);
     setSummary(data.summary);
+    setSections(data.sections);
     setHasMore(data.pagination.hasMore);
   }, []);
 
@@ -227,7 +290,14 @@ export default function TodayFollowUpsPage() {
       if (reset) setLoading(true);
       else setLoadingMore(true);
       try {
-        const res = await fetch(`/api/today-follow-ups?take=${PAGE_SIZE}&skip=${skip}`);
+        const params = new URLSearchParams({
+          take: String(PAGE_SIZE),
+          skip: String(skip),
+          sort,
+          filter,
+          search: debouncedQuery,
+        });
+        const res = await fetch(`/api/today-follow-ups?${params.toString()}`);
         const data = (await res.json()) as TodayResponse;
         mergeQueue(data, reset);
       } finally {
@@ -235,12 +305,26 @@ export default function TodayFollowUpsPage() {
         setLoadingMore(false);
       }
     },
-    [mergeQueue]
+    [debouncedQuery, filter, mergeQueue, sort]
   );
 
   useEffect(() => {
     loadPage(0, true);
   }, [loadPage]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("udharbook_today_followups_sort") as SortKey | null;
+    if (saved && SORT_OPTIONS.some((option) => option.value === saved)) setSort(saved);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("udharbook_today_followups_sort", sort);
+  }, [sort]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -257,19 +341,14 @@ export default function TodayFollowUpsPage() {
     [done, pending, selectedId]
   );
 
-  const visiblePending = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return [...pending]
-      .filter((customer) => {
-        if (!needle) return true;
-        return (
-          customer.partyName.toLowerCase().includes(needle) ||
-          customer.contactNumber.includes(needle) ||
-          displayPhone(customer.contactNumber).includes(needle)
-        );
-      })
-      .sort((a, b) => queueScore(b) - queueScore(a));
-  }, [pending, query]);
+  const pendingSections = useMemo(
+    () => ({
+      urgent: pending.filter((customer) => customer.section === "urgent"),
+      today: pending.filter((customer) => customer.section === "today" || !customer.section),
+      recent: pending.filter((customer) => customer.section === "recent"),
+    }),
+    [pending]
+  );
 
   const playAlert = useCallback(() => {
     if (!soundEnabled) return;
@@ -361,13 +440,14 @@ export default function TodayFollowUpsPage() {
       ...current,
       pending: shouldLeaveQueue ? Math.max(0, current.pending - 1) : current.pending,
       completed: current.completed + 1,
-      recoveryToday: current.recoveryToday + paidAmount + (status === "PAID" ? customer.outstandingBalance : 0),
+      recoveryToday: current.recoveryToday + paidAmount,
     }));
   };
 
   const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string) => {
     const nextDate = status === "RESCHEDULED" ? nextReminderDate(undefined, 10) : customer.nextFollowupDate;
-    applyOptimisticAction(customer, status, notes, nextDate);
+    const paidAmount = status === "PAID" ? customer.outstandingBalance : 0;
+    applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
     await fetch("/api/follow-ups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -378,6 +458,7 @@ export default function TodayFollowUpsPage() {
         notes,
         scheduledAt: nextDate,
         nextFollowupDate: nextDate,
+        paidAmount,
       }),
     });
   };
@@ -410,61 +491,112 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <section className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Metric label="Total today" value={summary.totalToday} icon={Clock3} />
-        <Metric label="Pending" value={summary.pending} icon={AlertTriangle} tone="yellow" />
-        <Metric label="Completed" value={summary.completed} icon={CheckCircle2} tone="green" />
-        <Metric label="Recovery today" value={formatCurrency(summary.recoveryToday)} icon={IndianRupee} tone="green" />
+      <section className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-8">
+        <Metric label="Pending customers" value={summary.totalPendingCustomers} icon={Clock3} />
+        <Metric label="Pending amount" value={formatCurrency(summary.totalPendingAmount)} icon={IndianRupee} />
         <Metric label="Overdue" value={summary.overdue} icon={ShieldAlert} tone="red" />
+        <Metric label="Completed today" value={summary.completed} icon={CheckCircle2} tone="green" />
+        <Metric label="Recovery today" value={formatCurrency(summary.recoveryToday)} icon={IndianRupee} tone="green" />
+        <Metric label="Actioned today" value={summary.actionedToday} icon={History} tone="green" />
+        <Metric label="Calls done" value={summary.callsCompleted} icon={Phone} />
+        <Metric label="Auto queued" value={summary.autoCreated} icon={Bell} tone="yellow" />
       </section>
 
-      <div className="sticky top-0 z-20 -mx-4 mt-4 border-y border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
+      <div className="sticky top-0 z-20 -mx-4 mt-4 space-y-3 border-y border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
         <label className="flex min-h-12 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
           <Search className="h-4 w-4 text-slate-400" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search party or mobile"
+            placeholder="Search party, mobile, notes, or amount"
             className="w-full bg-transparent text-sm outline-none"
           />
         </label>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {FILTERS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => {
+                  setFilter(item.value);
+                  setPending([]);
+                }}
+                className={cn(
+                  "shrink-0 rounded-full border px-3 py-2 text-xs font-semibold",
+                  filter === item.value
+                    ? "border-brand-600 bg-brand-600 text-white"
+                    : "border-slate-300 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <label className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+            Sort
+            <select
+              value={sort}
+              onChange={(event) => {
+                setSort(event.target.value as SortKey);
+                setPending([]);
+              }}
+              className="bg-transparent font-semibold outline-none"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <main className="space-y-5">
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-bold">Pending Queue</h2>
-              <span className="text-sm text-slate-500">{visiblePending.length} visible</span>
+          {loading ? (
+            <div className="flex min-h-56 items-center justify-center rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
             </div>
-            <div className="space-y-3">
-              {loading ? (
-                <div className="flex min-h-56 items-center justify-center rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-                  <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
-                </div>
-              ) : visiblePending.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500 dark:border-slate-700 dark:bg-slate-900">
-                  No pending follow-ups for today.
-                </div>
-              ) : (
-                visiblePending.map((customer) => (
-                  <CustomerCard
-                    key={customer.id}
-                    customer={customer}
-                    active={selectedId === customer.id}
-                    onOpen={() => setSelectedId(customer.id)}
-                    onQuickSave={quickSave}
-                  />
-                ))
-              )}
+          ) : pending.length === 0 && filter !== "done" ? (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500 dark:border-slate-700 dark:bg-slate-900">
+              No pending customers match this view.
+            </div>
+          ) : (
+            <>
+              <QueueSection
+                title="Urgent Recovery"
+                count={sections.urgent}
+                customers={pendingSections.urgent}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onQuickSave={quickSave}
+              />
+              <QueueSection
+                title="Today's Follow-ups"
+                count={sections.today}
+                customers={pendingSections.today}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onQuickSave={quickSave}
+              />
+              <QueueSection
+                title="Recently Contacted"
+                count={sections.recent}
+                customers={pendingSections.recent}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onQuickSave={quickSave}
+              />
               <div ref={sentinelRef} className="h-4" />
               {loadingMore && (
                 <div className="flex justify-center py-3">
                   <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
                 </div>
               )}
-            </div>
-          </section>
+            </>
+          )}
 
           <section className="border-t border-slate-200 pt-5 dark:border-slate-800">
             <div className="mb-3 flex items-center justify-between">
@@ -483,6 +615,20 @@ export default function TodayFollowUpsPage() {
               )}
             </div>
           </section>
+
+          {summary.staffPerformance.length > 0 && (
+            <section className="border-t border-slate-200 pt-5 dark:border-slate-800">
+              <h2 className="mb-3 text-lg font-bold">Staff Performance</h2>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {summary.staffPerformance.map((staff) => (
+                  <div key={staff.staffId} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                    <p className="font-semibold">{staff.name}</p>
+                    <p className="text-sm text-slate-500">{staff.actions} action{staff.actions === 1 ? "" : "s"} today</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </main>
 
         <ActionPanel
@@ -527,6 +673,48 @@ function Metric({
   );
 }
 
+function QueueSection({
+  title,
+  count,
+  customers,
+  selectedId,
+  onSelect,
+  onQuickSave,
+}: {
+  title: string;
+  count: number;
+  customers: QueueCustomer[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-bold">{title}</h2>
+        <span className="text-sm text-slate-500">{count} total</span>
+      </div>
+      {customers.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900">
+          No customers in this section.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {customers.map((customer) => (
+            <CustomerCard
+              key={customer.id}
+              customer={customer}
+              active={selectedId === customer.id}
+              onOpen={() => onSelect(customer.id)}
+              onQuickSave={onQuickSave}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CustomerCard({
   customer,
   active,
@@ -541,7 +729,8 @@ function CustomerCard({
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const latest = latestFollowUp(customer);
   const lastPayment = customer.payments[0];
-  const priority = derivedPriority(customer);
+  const priority = customer.smartPriority ?? derivedPriority(customer);
+  const priorityName = customer.smartPriorityLabel ?? (priority === "URGENT" ? "Critical" : statusLabel(priority));
   const tone = cardTone(customer);
   const overdue = daysOverdue(customer);
 
@@ -592,7 +781,7 @@ function CustomerCard({
             <div className="text-right">
               <p className="text-lg font-extrabold">{formatCurrency(customer.outstandingBalance)}</p>
               <span className={cn("mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold", priorityClass(priority))}>
-                {priority}
+                {priorityName}
               </span>
             </div>
           </div>
@@ -647,10 +836,33 @@ function CustomerCard({
               Done
             </button>
           </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <QuickButton label="Paid" onClick={() => onQuickSave(customer, "PAID", "Paid from quick action.")} />
+            <QuickButton label="Call Later" onClick={() => onQuickSave(customer, "RESCHEDULED", "Customer asked to call later.")} />
+            <QuickButton label="Promise" onClick={() => onQuickSave(customer, "PAYMENT_PROMISED", "Customer promised payment.")} />
+            <QuickButton label="No Answer" onClick={() => onQuickSave(customer, "NOT_REACHABLE", "Customer not responding.")} />
+            <QuickButton label="Reschedule" onClick={() => onQuickSave(customer, "RESCHEDULED", "Rescheduled from queue.")} />
+            <QuickButton label="Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Marked completed from queue.")} />
+          </div>
           <p className="mt-2 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to mark done, left to reschedule.</p>
         </div>
       </div>
     </article>
+  );
+}
+
+function QuickButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className="min-h-10 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+    >
+      {label}
+    </button>
   );
 }
 
