@@ -57,10 +57,26 @@ type Visit = {
 };
 
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
+type CustomerSource = "recent" | "pending_recovery" | "today_followup" | "high_amount" | "new_visit";
 
 const quickResults = ["Follow-up done", "Promise to pay", "Payment collected", "Not available", "Cheque pickup"];
 const visitTypes = ["Collection", "Follow-up", "New Lead", "Complaint", "Cheque Pickup", "Payment Reminder", "Other"];
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
+const customerSourceOptions: { label: string; value: CustomerSource }[] = [
+  { label: "Recent Customers", value: "recent" },
+  { label: "Pending Recovery", value: "pending_recovery" },
+  { label: "Today Follow-ups", value: "today_followup" },
+  { label: "High Amount", value: "high_amount" },
+  { label: "New Visit", value: "new_visit" },
+];
+
+const customerSourceLabels: Record<CustomerSource, string> = {
+  recent: "Showing recent customers",
+  pending_recovery: "Showing pending recovery customers",
+  today_followup: "Showing today's follow-up customers",
+  high_amount: "Showing high amount customers",
+  new_visit: "Start a new visit without selecting an existing customer",
+};
 
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
@@ -79,6 +95,7 @@ export default function FieldStaffPage() {
   const [lastGpsSyncAt, setLastGpsSyncAt] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [activeCustomerSource, setActiveCustomerSource] = useState<CustomerSource>("recent");
   const [searching, setSearching] = useState(false);
   const [customers, setCustomers] = useState<CustomerSuggestion[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
@@ -417,12 +434,16 @@ export default function FieldStaffPage() {
     setVisitType("New Lead");
   }
 
-  function applyChip(chip: string) {
-    if (chip === "New Visit") {
+  function applyChip(source: CustomerSource) {
+    setActiveCustomerSource(source);
+    setSelectedCustomer(null);
+    if (source === "new_visit") {
+      setSearch("");
+      setCustomers([]);
       startNewVisit("");
       return;
     }
-    setSearch(chip);
+    setShowNewVisit(false);
   }
 
   function gpsBadge() {
@@ -480,18 +501,24 @@ export default function FieldStaffPage() {
   useEffect(() => {
     const timer = window.setTimeout(async () => {
       const query = search.trim();
-      if (query.length < 1) {
+      const shouldLoadSource = activeCustomerSource !== "new_visit";
+      if (query.length < 1 && !shouldLoadSource) {
         setCustomers([]);
         return;
       }
       setSearching(true);
-      const res = await fetch(`/api/customers/search?q=${encodeURIComponent(query)}&limit=10`);
+      const params = new URLSearchParams({
+        q: query,
+        source: activeCustomerSource,
+        limit: "10",
+      });
+      const res = await fetch(`/api/customers/search?${params.toString()}`);
       const data = await res.json();
       setCustomers(data.customers ?? []);
       setSearching(false);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [activeCustomerSource, search]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 pb-28">
@@ -570,16 +597,35 @@ export default function FieldStaffPage() {
           </div>
 
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {["Recent Customers", "Pending Recovery", "Today Follow-ups", "High Amount", "New Visit"].map((chip) => (
-              <button key={chip} type="button" onClick={() => applyChip(chip)} className="shrink-0 rounded-full border border-slate-300 px-3 py-2 text-xs font-semibold dark:border-slate-700">
-                {chip}
+            {customerSourceOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => applyChip(option.value)}
+                className={`shrink-0 rounded-full border px-3 py-2 text-xs font-semibold ${
+                  activeCustomerSource === option.value
+                    ? "border-brand-600 bg-brand-50 text-brand-700"
+                    : "border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                }`}
+              >
+                {option.label}
               </button>
             ))}
           </div>
+          <p className="mt-1 text-xs text-slate-500">{customerSourceLabels[activeCustomerSource]}</p>
 
           <div className="relative mt-3">
             <Search className="absolute left-3 top-3.5 h-5 w-5 text-slate-400" />
-            <input value={search} onChange={(e) => { setSearch(e.target.value); setSelectedCustomer(null); }} placeholder="Search customer, business, or mobile" className="min-h-12 w-full rounded-lg border py-3 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSelectedCustomer(null);
+                if (activeCustomerSource === "new_visit") setActiveCustomerSource("recent");
+              }}
+              placeholder="Search customer, business, or mobile"
+              className="min-h-12 w-full rounded-lg border py-3 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900"
+            />
             {(customers.length > 0 || searching) && (
               <div className="absolute z-20 mt-2 max-h-96 w-full overflow-auto rounded-lg border bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
                 {searching && <p className="p-4 text-sm text-slate-500">Searching...</p>}

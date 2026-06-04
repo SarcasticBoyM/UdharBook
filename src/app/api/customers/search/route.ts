@@ -49,6 +49,17 @@ function serializeCustomer(customer: CustomerSearchRow, query: string) {
   };
 }
 
+function getTodayRangeInIndia() {
+  const now = new Date();
+  const indiaNow = new Date(now.getTime() + 330 * 60 * 1000);
+  const year = indiaNow.getUTCFullYear();
+  const month = indiaNow.getUTCMonth();
+  const date = indiaNow.getUTCDate();
+  const start = new Date(Date.UTC(year, month, date) - 330 * 60 * 1000);
+  const end = new Date(Date.UTC(year, month, date + 1) - 330 * 60 * 1000);
+  return { start, end };
+}
+
 export async function GET(request: Request) {
   try {
     const session = await getSession();
@@ -58,12 +69,24 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const query = (searchParams.get("q") ?? searchParams.get("search") ?? "").trim();
+    const source = (searchParams.get("source") ?? "").trim();
     const limit = Math.min(10, Math.max(1, Number(searchParams.get("limit") ?? 10)));
     const shopId = requireShopId(request, session);
     const phoneQuery = query.replace(/\D/g, "");
+    const today = getTodayRangeInIndia();
+
+    const sourceWhere: Prisma.CustomerWhereInput =
+      source === "pending_recovery"
+        ? { outstandingBalance: { gt: 0 } }
+        : source === "today_followup"
+          ? { nextFollowupDate: { gte: today.start, lt: today.end } }
+          : source === "high_amount"
+            ? { outstandingBalance: { gt: 0 } }
+            : {};
 
     const where: Prisma.CustomerWhereInput = {
       shopId,
+      ...sourceWhere,
       ...(query
         ? {
             OR: [
@@ -89,7 +112,11 @@ export async function GET(request: Request) {
           select: { checkInAt: true },
         },
       },
-      orderBy: query ? [{ outstandingBalance: "desc" }, { partyName: "asc" }] : [{ updatedAt: "desc" }],
+      orderBy: source === "high_amount"
+        ? [{ outstandingBalance: "desc" }, { partyName: "asc" }]
+        : query
+          ? [{ outstandingBalance: "desc" }, { partyName: "asc" }]
+          : [{ updatedAt: "desc" }],
       take: query ? 40 : limit,
     });
 
