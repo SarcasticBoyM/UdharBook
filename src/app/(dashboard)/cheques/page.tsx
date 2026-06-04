@@ -121,6 +121,13 @@ type ChequeResponse = {
     clearedToday: number;
     bounced: number;
     highValue: number;
+    totalCollected: number;
+    underClearingAmount: number;
+    clearedAmount: number;
+    bouncedAmount: number;
+    pendingDepositAmount: number;
+    depositedTodayAmount: number;
+    clearedTodayAmount: number;
   };
   pagination: { page: number; limit: number; total: number; pages: number };
 };
@@ -339,6 +346,10 @@ function alertText(alerts: ChequeResponse["alerts"]) {
   if (alerts.stale) parts.push(`${alerts.stale} pending deposit over 1 day`);
   if (alerts.chequeDateTomorrow) parts.push(`${alerts.chequeDateTomorrow} cheque dates tomorrow`);
   return parts.join(", ");
+}
+
+function normalizedChequeStatus(status: ChequeStatus) {
+  return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
 }
 
 function StatCard({
@@ -934,13 +945,14 @@ export default function ChequeCollectionsPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        <StatCard label="Collected Today" value={summary?.collectedToday ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
-        <StatCard label="Pending Deposit" value={summary?.pendingDeposit ?? 0} icon={CalendarClock} tone="border-amber-200 bg-amber-50 text-amber-800" />
-        <StatCard label="Deposited Today" value={summary?.depositedToday ?? 0} icon={Landmark} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
-        <StatCard label="Cleared Today" value={summary?.clearedToday ?? 0} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
-        <StatCard label="Bounce Alerts" value={summary?.bounced ?? 0} icon={ShieldAlert} tone="border-red-200 bg-red-50 text-red-800" />
-        <StatCard label="High Value" value={summary?.highValue ?? 0} icon={AlertTriangle} tone="border-purple-200 bg-purple-50 text-purple-800" />
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <StatCard label="Total collected" value={summary?.totalCollected ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
+        <StatCard label="Under clearing" value={formatCurrency(summary?.underClearingAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
+        <StatCard label="Cleared amount" value={formatCurrency(summary?.clearedAmount ?? 0)} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
+        <StatCard label="Bounced amount" value={formatCurrency(summary?.bouncedAmount ?? 0)} icon={ShieldAlert} tone="border-red-200 bg-red-50 text-red-800" />
+        <StatCard label="Pending deposit" value={formatCurrency(summary?.pendingDepositAmount ?? 0)} icon={Landmark} tone="border-amber-200 bg-amber-50 text-amber-800" />
+        <StatCard label="Today deposits" value={formatCurrency(summary?.depositedTodayAmount ?? 0)} icon={Banknote} tone="border-slate-200 bg-white text-slate-800" />
+        <StatCard label="Today cleared" value={formatCurrency(summary?.clearedTodayAmount ?? 0)} icon={CheckCircle2} tone="border-teal-200 bg-teal-50 text-teal-800" />
       </div>
 
       {accountAudit.length > 0 && (
@@ -1132,8 +1144,10 @@ export default function ChequeCollectionsPage() {
                   onTouchEnd={(event) => {
                     const start = touchStart.current[cheque.id];
                     const delta = event.changedTouches[0].clientX - start;
-                    if (delta > 80) updateStatus(cheque, "DEPOSITED");
-                    if (delta < -80) updateStatus(cheque, "BOUNCED");
+                    const status = normalizedChequeStatus(cheque.status);
+                    if (delta > 80 && status === "COLLECTED") updateStatus(cheque, "DEPOSITED");
+                    if (delta > 80 && status === "DEPOSITED") updateStatus(cheque, "CLEARED");
+                    if (delta < -80 && status === "DEPOSITED") updateStatus(cheque, "BOUNCED");
                   }}
                   className={cn(
                     "cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition hover:border-brand-300 dark:bg-slate-900",
@@ -1186,15 +1200,26 @@ export default function ChequeCollectionsPage() {
                   {cheque.collectionNotes && <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{cheque.collectionNotes}</p>}
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
-                      Mark Deposited
-                    </button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "CLEARED"); }} className="min-h-10 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white">
-                      Cleared
-                    </button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
-                      Bounced
-                    </button>
+                    {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
+                        Mark Deposited
+                      </button>
+                    )}
+                    {normalizedChequeStatus(cheque.status) === "DEPOSITED" && (
+                      <>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "CLEARED"); }} className="min-h-10 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white">
+                          Cleared
+                        </button>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
+                          Bounced
+                        </button>
+                      </>
+                    )}
+                    {normalizedChequeStatus(cheque.status) === "BOUNCED" && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg border border-indigo-300 px-3 text-sm font-medium text-indigo-700">
+                        Re-deposit
+                      </button>
+                    )}
                     <button type="button" onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === cheque.id ? null : cheque.id); }} className="min-h-10 rounded-lg border px-3 text-sm">
                       Timeline
                     </button>

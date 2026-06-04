@@ -28,6 +28,19 @@ function activityType(status: ChequeStatus) {
   return "STATUS_CHANGED";
 }
 
+function normalizedStatus(status: ChequeStatus) {
+  return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
+}
+
+function isValidTransition(from: ChequeStatus, to: ChequeStatus) {
+  const current = normalizedStatus(from);
+  if (to === current) return true;
+  if (current === "COLLECTED") return to === "DEPOSITED" || to === "CANCELLED";
+  if (current === "DEPOSITED") return to === "CLEARED" || to === "BOUNCED";
+  if (current === "BOUNCED") return to === "DEPOSITED";
+  return false;
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -43,6 +56,12 @@ export async function PATCH(
     include: { customer: true },
   });
   if (!existing) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
+  if (!isValidTransition(existing.status, body.status)) {
+    return NextResponse.json(
+      { error: `Invalid cheque workflow: ${existing.status} cannot move to ${body.status}` },
+      { status: 400 }
+    );
+  }
   const requiresDepositAccount = ["DEPOSITED", "CLEARED"].includes(body.status);
   if (requiresDepositAccount && !body.depositedAccountId && !existing.depositedAccountId) {
     return NextResponse.json({ error: "Deposit account is required" }, { status: 400 });
@@ -58,6 +77,47 @@ export async function PATCH(
 
   const now = new Date();
   const updated = await prisma.$transaction(async (tx) => {
+    if (body.status === "CLEARED" && existing.status !== "CLEARED") {
+      const nextBalance = Math.max(0, existing.customer.outstandingBalance - existing.amount);
+      await tx.customer.update({
+        where: { id: existing.customerId },
+        data: {
+          outstandingBalance: nextBalance,
+          status: nextBalance <= 0 ? "CLEARED" : existing.customer.status === "CLEARED" ? "PENDING" : existing.customer.status,
+        },
+      });
+      await tx.paymentEntry.create({
+        data: {
+          shopId,
+          customerId: existing.customerId,
+          amount: existing.amount,
+          method: "CHEQUE",
+          notes: `Cheque cleared: ${existing.chequeNumber}`,
+          paidAt: now,
+          createdById: session.id,
+        },
+      });
+      await tx.statusHistory.create({
+        data: {
+          customerId: existing.customerId,
+          fromStatus: existing.customer.status,
+          toStatus: nextBalance <= 0 ? "CLEARED" : existing.customer.status,
+          notes: `Cheque cleared: ${existing.chequeNumber}. Balance reduced by ${existing.amount}`,
+          changedById: session.id,
+        },
+      });
+    }
+
+    if (body.status === "BOUNCED" && existing.status === "CLEARED") {
+      await tx.customer.update({
+        where: { id: existing.customerId },
+        data: {
+          outstandingBalance: existing.customer.outstandingBalance + existing.amount,
+          status: "HIGH_RISK",
+        },
+      });
+    }
+
     const cheque = await tx.cheque.update({
       where: { id },
       data: {
@@ -123,6 +183,20 @@ export async function PATCH(
           (depositAccount ? `Deposited in ${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined),
       },
     });
+
+    if (body.depositReceiptUrl) {
+      await tx.chequeActivity.create({
+        data: {
+          shopId,
+          chequeId: id,
+          userId: session.id,
+          type: "NOTE",
+          fromStatus: existing.status,
+          toStatus: body.status,
+          notes: "Deposit receipt uploaded",
+        },
+      });
+    }
 
     if (body.status === "BOUNCED") {
       await tx.customer.update({

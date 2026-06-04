@@ -10,6 +10,7 @@ import {
   FileText,
   Filter,
   IndianRupee,
+  Landmark,
   Loader2,
   PhoneCall,
   ShieldAlert,
@@ -67,6 +68,41 @@ type ReportResponse = {
   pagination: { page: number; limit: number; total: number; pages: number };
 };
 
+type ChequeReportRow = {
+  id: string;
+  chequeNumber: string;
+  bankName: string;
+  amount: number;
+  status: string;
+  collectionDateTime: string;
+  depositDateTime: string | null;
+  clearedAt: string | null;
+  bouncedAt: string | null;
+  customer: { partyName: string; contactNumber: string };
+  collectedBy: { name: string };
+  depositedAccount: { bankName: string; accountName: string; lastFourDigits: string } | null;
+};
+
+type ChequeReportResponse = {
+  items: ChequeReportRow[];
+  users: { id: string; name: string; role: string }[];
+  summary: {
+    totalCollected: number;
+    underClearingAmount: number;
+    clearedAmount: number;
+    bouncedAmount: number;
+    pendingDepositAmount: number;
+  };
+  pagination: { page: number; limit: number; total: number; pages: number };
+};
+
+type DepositAccount = {
+  id: string;
+  accountName: string;
+  bankName: string;
+  lastFourDigits: string;
+};
+
 const STATUSES = [
   "PENDING",
   "CONTACTED",
@@ -108,7 +144,10 @@ function statusLabel(value: string) {
 
 export default function FollowUpReportsPage() {
   const [data, setData] = useState<ReportResponse | null>(null);
+  const [chequeData, setChequeData] = useState<ChequeReportResponse | null>(null);
+  const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chequeLoading, setChequeLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
@@ -124,6 +163,11 @@ export default function FollowUpReportsPage() {
     promiseOnly: false,
     completedOnly: false,
     pendingOnly: false,
+  });
+  const [chequeFilters, setChequeFilters] = useState({
+    status: "",
+    accountId: "",
+    bankOrCustomer: "",
   });
 
   const params = useMemo(() => {
@@ -149,9 +193,41 @@ export default function FollowUpReportsPage() {
     }
   }, [params]);
 
+  const chequeParams = useMemo(() => {
+    const search = new URLSearchParams({ limit: "25" });
+    if (filters.from) search.set("from", filters.from);
+    if (filters.to) search.set("to", filters.to);
+    if (filters.staffId) search.set("staffId", filters.staffId);
+    if (chequeFilters.status) search.set("status", chequeFilters.status);
+    if (chequeFilters.accountId) search.set("depositedAccountId", chequeFilters.accountId);
+    if (chequeFilters.bankOrCustomer) search.set("q", chequeFilters.bankOrCustomer);
+    return search;
+  }, [chequeFilters.accountId, chequeFilters.bankOrCustomer, chequeFilters.status, filters.from, filters.staffId, filters.to]);
+
+  const loadChequeSummary = useCallback(async () => {
+    setChequeLoading(true);
+    try {
+      const [chequeRes, accountRes] = await Promise.all([
+        fetch(`/api/cheques?${chequeParams.toString()}`),
+        fetch("/api/cheque-deposit-accounts?activeOnly=false"),
+      ]);
+      if (chequeRes.ok) setChequeData((await chequeRes.json()) as ChequeReportResponse);
+      if (accountRes.ok) {
+        const payload = await accountRes.json();
+        setDepositAccounts(payload.accounts ?? []);
+      }
+    } finally {
+      setChequeLoading(false);
+    }
+  }, [chequeParams]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadChequeSummary();
+  }, [loadChequeSummary]);
 
   const summary = data?.summary ?? initialSummary;
   const maxTrend = Math.max(...(data?.trend.map((item) => item.amount) ?? [0]), 1);
@@ -165,6 +241,12 @@ export default function FollowUpReportsPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.set("format", format);
     window.open(`/api/follow-up-reports?${exportParams.toString()}`, "_blank");
+  };
+
+  const exportChequeReport = (format: "xlsx" | "csv" | "pdf") => {
+    const exportParams = new URLSearchParams(chequeParams);
+    exportParams.set("format", format);
+    window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
   };
 
   return (
@@ -286,6 +368,118 @@ export default function FollowUpReportsPage() {
               <p className="text-sm text-slate-500">No staff activity in this filter.</p>
             )}
           </div>
+        </div>
+      </section>
+
+      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="font-semibold">Cheque Summary</h2>
+            <p className="text-sm text-slate-500">All cheque collection, deposit, clearance, bounce, and under-clearing records.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <ExportButton label="Excel" icon={FileSpreadsheet} onClick={() => exportChequeReport("xlsx")} />
+            <ExportButton label="CSV" icon={Download} onClick={() => exportChequeReport("csv")} />
+            <ExportButton label="PDF" icon={FileText} onClick={() => exportChequeReport("pdf")} />
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <Metric label="Total cheques" value={chequeData?.summary.totalCollected ?? 0} icon={Landmark} />
+          <Metric label="Total deposited" value={formatCurrency((chequeData?.summary.underClearingAmount ?? 0) + (chequeData?.summary.clearedAmount ?? 0) + (chequeData?.summary.bouncedAmount ?? 0))} icon={IndianRupee} />
+          <Metric label="Total cleared" value={formatCurrency(chequeData?.summary.clearedAmount ?? 0)} icon={IndianRupee} tone="green" />
+          <Metric label="Total bounced" value={formatCurrency(chequeData?.summary.bouncedAmount ?? 0)} icon={ShieldAlert} tone="red" />
+          <Metric label="Under clearing" value={formatCurrency(chequeData?.summary.underClearingAmount ?? 0)} icon={BarChart3} tone="yellow" />
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Input
+            label="Customer / bank / cheque"
+            value={chequeFilters.bankOrCustomer}
+            onChange={(value) => setChequeFilters((current) => ({ ...current, bankOrCustomer: value }))}
+            placeholder="Name, bank, mobile, cheque no"
+          />
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Status-wise</span>
+            <select
+              value={chequeFilters.status}
+              onChange={(event) => setChequeFilters((current) => ({ ...current, status: event.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+            >
+              <option value="">All statuses</option>
+              {["COLLECTED", "DEPOSITED", "CLEARED", "BOUNCED"].map((status) => (
+                <option key={status} value={status}>
+                  {statusLabel(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Account-wise</span>
+            <select
+              value={chequeFilters.accountId}
+              onChange={(event) => setChequeFilters((current) => ({ ...current, accountId: event.target.value }))}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+            >
+              <option value="">All accounts</option>
+              {depositAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.bankName} - {account.accountName} - {account.lastFourDigits}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-end text-sm text-slate-500">
+            {chequeLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Date and staff filters above also apply here.
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-[1100px] w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
+              <tr>
+                <Th>Customer</Th>
+                <Th>Cheque No</Th>
+                <Th>Amount</Th>
+                <Th>Status</Th>
+                <Th>Collected By</Th>
+                <Th>Deposit Account</Th>
+                <Th>Collected Date</Th>
+                <Th>Deposited Date</Th>
+                <Th>Cleared Date</Th>
+                <Th>Bounced Date</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {chequeData?.items.length ? (
+                chequeData.items.map((cheque) => (
+                  <tr key={cheque.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <Td>{cheque.customer.partyName}</Td>
+                    <Td>{cheque.chequeNumber}</Td>
+                    <Td>{formatCurrency(cheque.amount)}</Td>
+                    <Td><StatusPill status={cheque.status} /></Td>
+                    <Td>{cheque.collectedBy.name}</Td>
+                    <Td>
+                      {cheque.depositedAccount
+                        ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}`
+                        : "-"}
+                    </Td>
+                    <Td>{formatDateTime(cheque.collectionDateTime)}</Td>
+                    <Td>{formatDateTime(cheque.depositDateTime)}</Td>
+                    <Td>{formatDateTime(cheque.clearedAt)}</Td>
+                    <Td>{formatDateTime(cheque.bouncedAt)}</Td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={10} className="p-8 text-center text-slate-500">
+                    No cheque rows match the selected filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 
