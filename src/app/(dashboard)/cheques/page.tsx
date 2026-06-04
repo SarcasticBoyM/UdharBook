@@ -10,13 +10,13 @@ import {
   CheckCircle2,
   History,
   ImagePlus,
+  IndianRupee,
   Landmark,
   Loader2,
   Paperclip,
   Plus,
   Search,
   Settings,
-  ShieldAlert,
   Sparkles,
   XCircle,
 } from "lucide-react";
@@ -128,6 +128,10 @@ type ChequeResponse = {
     pendingDepositAmount: number;
     depositedTodayAmount: number;
     clearedTodayAmount: number;
+    filteredChequeCount: number;
+    filteredTotalAmount: number;
+    filteredDepositedAmount: number;
+    filteredPendingAmount: number;
   };
   pagination: { page: number; limit: number; total: number; pages: number };
 };
@@ -946,11 +950,11 @@ export default function ChequeCollectionsPage() {
       </div>
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-        <StatCard label="Total collected" value={summary?.totalCollected ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
-        <StatCard label="Under clearing" value={formatCurrency(summary?.underClearingAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
+        <StatCard label="Filtered cheques" value={summary?.filteredChequeCount ?? data?.pagination.total ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
+        <StatCard label="Filtered amount" value={formatCurrency(summary?.filteredTotalAmount ?? 0)} icon={IndianRupee} tone="border-slate-200 bg-white text-slate-800" />
+        <StatCard label="Deposited amount" value={formatCurrency(summary?.filteredDepositedAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
+        <StatCard label="Pending amount" value={formatCurrency(summary?.filteredPendingAmount ?? 0)} icon={Landmark} tone="border-amber-200 bg-amber-50 text-amber-800" />
         <StatCard label="Cleared amount" value={formatCurrency(summary?.clearedAmount ?? 0)} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
-        <StatCard label="Bounced amount" value={formatCurrency(summary?.bouncedAmount ?? 0)} icon={ShieldAlert} tone="border-red-200 bg-red-50 text-red-800" />
-        <StatCard label="Pending deposit" value={formatCurrency(summary?.pendingDepositAmount ?? 0)} icon={Landmark} tone="border-amber-200 bg-amber-50 text-amber-800" />
         <StatCard label="Today deposits" value={formatCurrency(summary?.depositedTodayAmount ?? 0)} icon={Banknote} tone="border-slate-200 bg-white text-slate-800" />
         <StatCard label="Today cleared" value={formatCurrency(summary?.clearedTodayAmount ?? 0)} icon={CheckCircle2} tone="border-teal-200 bg-teal-50 text-teal-800" />
       </div>
@@ -1039,7 +1043,7 @@ export default function ChequeCollectionsPage() {
               ))}
             </div>
 
-            <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_160px_180px_140px_140px]">
+            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(220px,1fr)_160px_180px_160px_160px]">
               <label className="relative block">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                 <input
@@ -1073,18 +1077,26 @@ export default function ChequeCollectionsPage() {
                   </option>
                 ))}
               </select>
-              <input
-                type="date"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-              />
-              <input
-                type="date"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-              />
+              <label className="relative z-10 block cursor-pointer text-xs font-medium text-slate-500">
+                From Date
+                <input
+                  type="date"
+                  value={from}
+                  onChange={(e) => setFrom(e.target.value)}
+                  onClick={(e) => e.currentTarget.showPicker?.()}
+                  className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </label>
+              <label className="relative z-20 block cursor-pointer text-xs font-medium text-slate-500">
+                To Date
+                <input
+                  type="date"
+                  value={to}
+                  onChange={(e) => setTo(e.target.value)}
+                  onClick={(e) => e.currentTarget.showPicker?.()}
+                  className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </label>
             </div>
 
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1">

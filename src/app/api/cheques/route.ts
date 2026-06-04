@@ -54,6 +54,21 @@ function asDate(value: string | null, end = false) {
   return date;
 }
 
+function dateFieldForStatus(status?: ChequeStatus | null) {
+  if (status === "CLEARED") return "clearedAt";
+  if (status === "DEPOSITED") return "depositDateTime";
+  if (status === "BOUNCED") return "bouncedAt";
+  return "collectionDateTime";
+}
+
+function dateRangeCondition(
+  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt",
+  from?: Date,
+  to?: Date,
+): Prisma.ChequeWhereInput {
+  return { [field]: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } };
+}
+
 function chequeInclude() {
   return {
     customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
@@ -276,30 +291,44 @@ export async function GET(request: Request) {
   const tomorrowEnd = new Date(todayEnd);
   tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
 
-  const where: Prisma.ChequeWhereInput = {
-    shopId,
-    ...(status ? { status } : {}),
-    ...(staffId ? { collectedById: staffId } : {}),
-    ...(depositedAccountId ? { depositedAccountId } : {}),
-    ...(from || to ? { collectionDateTime: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-    ...(q
-      ? {
-          OR: [
-            { chequeNumber: { contains: q } },
-            { bankName: { contains: q } },
-            { customer: { partyName: { contains: q } } },
-            { customer: { contactNumber: { contains: q.replace(/\D/g, "") } } },
-            ...(Number.isFinite(Number(q)) ? [{ amount: Number(q) }] : []),
-          ],
-        }
-      : {}),
-    ...(quick === "today" ? { collectionDateTime: { gte: todayStart, lte: todayEnd } } : {}),
-    ...(quick === "pending" ? { status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } } : {}),
-    ...(quick === "bounced" ? { status: "BOUNCED" } : {}),
-    ...(quick === "high" ? { amount: { gte: HIGH_VALUE } } : {}),
-    ...(quick === "cleared" ? { status: "CLEARED" } : {}),
-    ...(quick === "overdue" ? { status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } } : {}),
-  };
+  const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
+
+  if (q) {
+    const phoneQuery = q.replace(/\D/g, "");
+    conditions.push({
+      OR: [
+        { chequeNumber: { contains: q, mode: "insensitive" } },
+        { bankName: { contains: q, mode: "insensitive" } },
+        { branch: { contains: q, mode: "insensitive" } },
+        { customer: { partyName: { contains: q, mode: "insensitive" } } },
+        ...(phoneQuery ? [{ customer: { contactNumber: { contains: phoneQuery } } }] : []),
+        ...(Number.isFinite(Number(q)) ? [{ amount: Number(q) }] : []),
+      ],
+    });
+  }
+
+  const quickStatus: ChequeStatus | undefined =
+    quick === "bounced" ? "BOUNCED" : quick === "cleared" ? "CLEARED" : undefined;
+  const effectiveStatus = status || quickStatus;
+  const dateField = dateFieldForStatus(effectiveStatus);
+  if (from || to) {
+    conditions.push(dateRangeCondition(dateField, from, to));
+  }
+
+  if (status === "PENDING_DEPOSIT") conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+  else if (status) conditions.push({ status });
+  if (quick === "pending") conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+  if (quickStatus) conditions.push({ status: quickStatus });
+  if (quick === "today") conditions.push({ collectionDateTime: { gte: todayStart, lte: todayEnd } });
+  if (quick === "overdue") {
+    conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+    conditions.push({ collectionDateTime: { lt: staleDate } });
+  }
+  if (quick === "high") conditions.push({ amount: { gte: HIGH_VALUE } });
+  if (depositedAccountId) conditions.push({ depositedAccountId });
+  if (staffId) conditions.push({ collectedById: staffId });
+
+  const where: Prisma.ChequeWhereInput = { AND: conditions };
 
   const include = chequeInclude();
   const [
@@ -319,6 +348,9 @@ export async function GET(request: Request) {
     pendingDepositAmount,
     depositedTodayAmount,
     clearedTodayAmount,
+    filteredTotalAmount,
+    filteredDepositedAmount,
+    filteredPendingAmount,
   ] =
     await prisma.$transaction([
       prisma.cheque.findMany({
@@ -348,6 +380,9 @@ export async function GET(request: Request) {
       prisma.cheque.aggregate({ where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { AND: [where, { status: "DEPOSITED" }] }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { AND: [where, { status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }] }, _sum: { amount: true } }),
     ]);
 
   const rows = items.map(chequeRow);
@@ -397,6 +432,10 @@ export async function GET(request: Request) {
       pendingDepositAmount: pendingDepositAmount._sum.amount ?? 0,
       depositedTodayAmount: depositedTodayAmount._sum.amount ?? 0,
       clearedTodayAmount: clearedTodayAmount._sum.amount ?? 0,
+      filteredChequeCount: total,
+      filteredTotalAmount: filteredTotalAmount._sum.amount ?? 0,
+      filteredDepositedAmount: filteredDepositedAmount._sum.amount ?? 0,
+      filteredPendingAmount: filteredPendingAmount._sum.amount ?? 0,
     },
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
   });
