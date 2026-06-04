@@ -11,7 +11,9 @@ import {
   MapPin,
   Navigation,
   PauseCircle,
+  RefreshCw,
   Search,
+  Settings,
 } from "lucide-react";
 
 type CustomerSuggestion = {
@@ -36,6 +38,7 @@ type Visit = {
 };
 
 const quickResults = ["Follow-up done", "Promise to pay", "Payment collected", "Not available", "Cheque pickup"];
+type GpsState = "idle" | "checking" | "prompt" | "active" | "denied" | "timeout" | "unsupported" | "error";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
@@ -49,6 +52,8 @@ function formatTime(value?: string | null) {
 export default function FieldStaffPage() {
   const [tracking, setTracking] = useState(false);
   const [location, setLocation] = useState<GeolocationPosition | null>(null);
+  const [gpsState, setGpsState] = useState<GpsState>("idle");
+  const [gpsError, setGpsError] = useState("");
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const [customers, setCustomers] = useState<CustomerSuggestion[]>([]);
@@ -61,7 +66,11 @@ export default function FieldStaffPage() {
   const [nextFollowupDate, setNextFollowupDate] = useState("");
   const intervalRef = useRef<number | null>(null);
 
-  const canCheckIn = Boolean(selectedCustomer && location && !activeVisit);
+  const canCheckIn = Boolean(selectedCustomer && !activeVisit && gpsState !== "checking" && gpsState !== "prompt");
+  const isSecureGpsContext =
+    typeof window === "undefined" ||
+    window.location.protocol === "https:" ||
+    window.location.hostname === "localhost";
 
   const todaySummary = useMemo(
     () => ({
@@ -85,20 +94,147 @@ export default function FieldStaffPage() {
     });
   }, []);
 
-  const captureLocation = useCallback((status = "ACTIVE") => {
+  const requestPosition = useCallback((status = "ACTIVE") => {
+    console.info("[Field GPS] request started", {
+      support: Boolean(navigator.geolocation),
+      secureContext: window.isSecureContext,
+      host: window.location.hostname,
+      protocol: window.location.protocol,
+      userAgent: navigator.userAgent,
+    });
+
     if (!navigator.geolocation) {
-      setMessage("Location is not supported on this device.");
-      return;
+      console.warn("[Field GPS] geolocation unsupported");
+      setGpsState("unsupported");
+      setGpsError("Location is not supported on this browser.");
+      return Promise.resolve<GeolocationPosition | null>(null);
     }
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        setLocation(position);
-        await sendLocation(position, status).catch(() => setMessage("Could not sync location."));
-      },
-      () => setMessage("Please allow location permission."),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
-    );
-  }, [sendLocation]);
+
+    if (!window.isSecureContext || !isSecureGpsContext) {
+      console.warn("[Field GPS] insecure context blocked geolocation", {
+        secureContext: window.isSecureContext,
+        href: window.location.href,
+      });
+      setGpsState("error");
+      setGpsError("GPS works only on secure HTTPS production app.qrvcard.in or localhost.");
+      return Promise.resolve<GeolocationPosition | null>(null);
+    }
+
+    setGpsState("checking");
+    setGpsError("");
+    setMessage("");
+
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      console.warn("[Field GPS] permission/location timeout after 10 seconds");
+      setGpsState("timeout");
+      setGpsError("GPS permission or location request timed out. Try again.");
+    }, 10000);
+
+    return new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          settled = true;
+          window.clearTimeout(timeoutId);
+          console.info("[Field GPS] location captured", {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+          });
+          setLocation(position);
+          setGpsState("active");
+          setGpsError("");
+          await sendLocation(position, status).catch((error) => {
+            console.error("[Field GPS] location sync failed", error);
+            setMessage("GPS captured, but could not sync location.");
+          });
+          resolve(position);
+        },
+        (error) => {
+          settled = true;
+          window.clearTimeout(timeoutId);
+          console.error("[Field GPS] geolocation error", {
+            code: error.code,
+            message: error.message,
+          });
+          if (error.code === error.PERMISSION_DENIED) {
+            setGpsState("denied");
+            setGpsError("Location permission blocked. Enable location permission for this site/app.");
+          } else if (error.code === error.TIMEOUT) {
+            setGpsState("timeout");
+            setGpsError("GPS timeout. Move near a window or turn on device location, then retry.");
+          } else {
+            setGpsState("error");
+            setGpsError(error.message || "Could not capture GPS location.");
+          }
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      );
+    });
+  }, [isSecureGpsContext, sendLocation]);
+
+  const captureLocation = useCallback(async (status = "ACTIVE") => {
+    if (typeof window === "undefined") return null;
+
+    if (!navigator.geolocation) {
+      console.warn("[Field GPS] browser support", { geolocation: false });
+      setGpsState("unsupported");
+      setGpsError("Location is not supported on this browser.");
+      return null;
+    }
+
+    const permissionsApi = navigator.permissions?.query;
+    if (!permissionsApi) {
+      console.info("[Field GPS] permissions API unavailable, requesting directly");
+      return requestPosition(status);
+    }
+
+    try {
+      const permission = await navigator.permissions.query({ name: "geolocation" as PermissionName });
+      console.info("[Field GPS] permission state", { state: permission.state });
+
+      if (permission.state === "granted") {
+        return requestPosition(status);
+      }
+
+      if (permission.state === "prompt") {
+        setGpsState("prompt");
+        return requestPosition(status);
+      }
+
+      setGpsState("denied");
+      setGpsError("Location permission blocked. Allow location from browser site settings.");
+      return null;
+    } catch (error) {
+      console.warn("[Field GPS] permission query failed, requesting directly", error);
+      return requestPosition(status);
+    }
+  }, [requestPosition]);
+
+  function openLocationSettings() {
+    setMessage("Android Chrome: tap the lock icon near the address bar > Permissions > Location > Allow. For installed app, long-press app icon > App info > Permissions > Location.");
+  }
+
+  function gpsBadge() {
+    if (gpsState === "active") return "bg-emerald-100 text-emerald-800 border-emerald-200";
+    if (gpsState === "denied" || gpsState === "error" || gpsState === "unsupported") return "bg-red-100 text-red-800 border-red-200";
+    if (gpsState === "checking" || gpsState === "prompt") return "bg-blue-100 text-blue-800 border-blue-200";
+    if (gpsState === "timeout") return "bg-amber-100 text-amber-800 border-amber-200";
+    return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+
+  function gpsLabel() {
+    if (gpsState === "active") return "GPS active";
+    if (gpsState === "checking") return "Checking GPS";
+    if (gpsState === "prompt") return "Allow GPS";
+    if (gpsState === "denied") return "GPS blocked";
+    if (gpsState === "timeout") return "GPS timeout";
+    if (gpsState === "unsupported") return "No GPS support";
+    if (gpsState === "error") return "GPS error";
+    return "GPS not active";
+  }
 
   const loadVisits = useCallback(async () => {
     const res = await fetch("/api/field-staff/visits");
@@ -116,7 +252,7 @@ export default function FieldStaffPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "START" }),
     });
-    captureLocation("ACTIVE");
+    await captureLocation("ACTIVE");
   }
 
   async function stopTracking() {
@@ -131,15 +267,17 @@ export default function FieldStaffPage() {
   }
 
   async function checkIn() {
-    if (!canCheckIn || !selectedCustomer || !location) return;
+    if (!selectedCustomer || activeVisit) return;
+    const currentLocation = location ?? (await captureLocation("ACTIVE"));
+    if (!currentLocation) return;
     const res = await fetch("/api/field-staff/visits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         customerId: selectedCustomer.id,
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        accuracy: location.coords.accuracy,
+        latitude: currentLocation.coords.latitude,
+        longitude: currentLocation.coords.longitude,
+        accuracy: currentLocation.coords.accuracy,
         notes,
       }),
     });
@@ -158,12 +296,7 @@ export default function FieldStaffPage() {
 
   async function checkOut() {
     if (!activeVisit) return;
-    const position = await new Promise<GeolocationPosition | null>((resolve) => {
-      navigator.geolocation?.getCurrentPosition(resolve, () => resolve(null), {
-        enableHighAccuracy: true,
-        timeout: 12000,
-      });
-    });
+    const position = await captureLocation("ACTIVE");
     const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -222,6 +355,11 @@ export default function FieldStaffPage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Field Operations</p>
           <h1 className="text-2xl font-bold md:text-3xl">Field Staff</h1>
           <p className="text-sm text-slate-500">Start tracking, check in at customers, and close visits from mobile.</p>
+          <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${gpsBadge()}`}>
+            {gpsState === "checking" || gpsState === "prompt" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
+            {gpsLabel()}
+            {location && <span className="font-normal">±{Math.round(location.coords.accuracy)}m</span>}
+          </div>
         </div>
         <div className="flex gap-2">
           <button
@@ -235,15 +373,41 @@ export default function FieldStaffPage() {
           <button
             type="button"
             onClick={() => captureLocation(activeVisit ? "ON_VISIT" : "ACTIVE")}
-            className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold"
+            disabled={gpsState === "checking" || gpsState === "prompt"}
+            className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold disabled:opacity-60"
           >
-            <LocateFixed className="h-5 w-5" />
-            GPS
+            {gpsState === "checking" || gpsState === "prompt" ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
+            {gpsState === "checking" || gpsState === "prompt" ? "GPS..." : "GPS"}
           </button>
         </div>
       </div>
 
       {message && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div>}
+      {gpsError && (
+        <div className={`rounded-lg border p-3 text-sm ${gpsState === "denied" || gpsState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+          <p className="font-semibold">{gpsError}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => captureLocation(activeVisit ? "ON_VISIT" : "ACTIVE")}
+              className="flex min-h-10 items-center gap-2 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Retry GPS
+            </button>
+            {(gpsState === "denied" || gpsState === "error") && (
+              <button
+                type="button"
+                onClick={openLocationSettings}
+                className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold"
+              >
+                <Settings className="h-4 w-4" />
+                Open Settings
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
