@@ -7,6 +7,8 @@ import {
   CalendarCheck2,
   Landmark,
   FileBarChart,
+  Map,
+  MapPinned,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -15,6 +17,7 @@ import {
   Users,
   WalletCards,
   Store,
+  UserRoundCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
@@ -24,6 +27,9 @@ const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
   { href: "/cheques", label: "Cheque Collections", icon: Landmark },
+  { href: "/field-staff", label: "Field Staff", icon: UserRoundCheck },
+  { href: "/live-tracking", label: "Live Tracking", icon: MapPinned, adminOnly: true },
+  { href: "/daily-visits", label: "Daily Visits", icon: Map },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/upload", label: "Upload Excel", icon: Upload },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },

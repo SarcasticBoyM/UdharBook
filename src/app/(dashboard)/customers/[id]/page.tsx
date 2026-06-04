@@ -71,6 +71,20 @@ type CustomerDetail = {
       user: { name: string; role: string };
     }[];
   }[];
+  staffVisits: {
+    id: string;
+    status: string;
+    checkInAt: string;
+    checkOutAt: string | null;
+    verified: boolean;
+    outsideWarning: boolean;
+    notes: string | null;
+    result: string | null;
+    recoveryAmount: number;
+    travelKm: number;
+    staff: { name: string; role: string };
+    photos: { id: string; url: string; fileType: string | null; createdAt: string }[];
+  }[];
 };
 
 export default function CustomerDetailPage() {
@@ -295,6 +309,77 @@ export default function CustomerDetailPage() {
             )}
           </ul>
         </form>
+      </div>
+
+      <div className="card mt-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Field Visit History</h2>
+            <p className="mt-1 text-sm text-slate-500">Customer visits, geo verification, recovery notes, and photos.</p>
+          </div>
+          <Link href={`/daily-visits`} className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
+            Open Daily Visits
+          </Link>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">Total visits</p>
+            <p className="mt-1 text-xl font-bold">{customer.staffVisits.length}</p>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+            <p className="text-xs">Verified</p>
+            <p className="mt-1 text-xl font-bold">{customer.staffVisits.filter((visit) => visit.verified).length}</p>
+          </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800">
+            <p className="text-xs">Recovered</p>
+            <p className="mt-1 text-xl font-bold">
+              {formatCurrency(customer.staffVisits.reduce((sum, visit) => sum + visit.recoveryAmount, 0))}
+            </p>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+            <p className="text-xs">Outside warnings</p>
+            <p className="mt-1 text-xl font-bold">{customer.staffVisits.filter((visit) => visit.outsideWarning).length}</p>
+          </div>
+        </div>
+        <ul className="mt-5 space-y-4">
+          {customer.staffVisits.length === 0 ? (
+            <li className="text-sm text-slate-500">No field visits recorded</li>
+          ) : (
+            customer.staffVisits.map((visit) => (
+              <li key={visit.id} className="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{visit.status.replace(/_/g, " ")}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {formatDate(visit.checkInAt)} by {visit.staff.name}
+                    </p>
+                  </div>
+                  <span className={cn(
+                    "rounded-full px-3 py-1 text-xs font-semibold",
+                    visit.verified ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                  )}>
+                    {visit.verified ? "Geo verified" : "Geo pending"}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                  <p><span className="text-slate-500">Checkout:</span> {formatDate(visit.checkOutAt)}</p>
+                  <p><span className="text-slate-500">Recovery:</span> {formatCurrency(visit.recoveryAmount)}</p>
+                  <p><span className="text-slate-500">Travel:</span> {visit.travelKm.toFixed(1)} km</p>
+                </div>
+                {(visit.result || visit.notes) && <p className="mt-2 text-sm">{visit.result ?? visit.notes}</p>}
+                {visit.photos.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {visit.photos.map((photo) => (
+                      <a key={photo.id} href={photo.url} target="_blank" className="rounded-lg border border-slate-200 px-3 py-2 text-xs dark:border-slate-700">
+                        Visit photo
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))
+          )}
+        </ul>
       </div>
 
       <div className="card mt-6">

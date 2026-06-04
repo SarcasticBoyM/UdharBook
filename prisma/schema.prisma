@@ -70,6 +70,24 @@ enum ChequeActivityType {
   NOTE
 }
 
+enum StaffTrackingStatus {
+  ACTIVE
+  ON_VISIT
+  IDLE
+  OFFLINE
+}
+
+enum StaffVisitStatus {
+  CHECKED_IN
+  COMPLETED
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  ACTIVE
+  COMPLETED
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -90,6 +108,11 @@ model Shop {
   cheques            Cheque[]
   chequeActivities   ChequeActivity[]
   chequeDepositAccounts ChequeDepositAccount[]
+  staffLocations     StaffLocation[]
+  staffVisits        StaffVisit[]
+  attendances        Attendance[]
+  routeHistories     RouteHistory[]
+  visitPhotos        VisitPhoto[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -118,6 +141,11 @@ model User {
   depositedCheques Cheque[] @relation("ChequeDepositedBy")
   receiptUploadedCheques Cheque[] @relation("ChequeReceiptUploadedBy")
   chequeActivities ChequeActivity[]
+  staffLocations StaffLocation[]
+  staffVisits StaffVisit[]
+  attendances Attendance[]
+  routeHistories RouteHistory[]
+  visitPhotos VisitPhoto[]
 
   @@index([shopId])
   @@index([role])
@@ -144,6 +172,10 @@ model Customer {
   comments           CustomerNote[]
   activityLogs       ActivityLog[]
   cheques            Cheque[]
+  latitude           Float?
+  longitude          Float?
+  geoAddress         String?
+  staffVisits        StaffVisit[]
 
   @@index([nextFollowupDate])
   @@index([status])
@@ -155,6 +187,117 @@ model Customer {
   @@index([shopId, nextFollowupDate])
   @@index([shopId, status])
   @@unique([shopId, contactNumber])
+}
+
+model StaffLocation {
+  id        String              @id @default(cuid())
+  shopId    String
+  shop      Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     User                @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  latitude  Float
+  longitude Float
+  accuracy  Float?
+  status    StaffTrackingStatus @default(ACTIVE)
+  battery   Float?
+  source    String?
+  createdAt DateTime            @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([staffId, createdAt])
+  @@index([shopId, staffId, createdAt])
+  @@index([shopId, status])
+}
+
+model Attendance {
+  id            String           @id @default(cuid())
+  shopId        String
+  shop          Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId       String
+  staff         User             @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  workDate      DateTime
+  startedAt     DateTime         @default(now())
+  endedAt       DateTime?
+  activeMinutes Int              @default(0)
+  idleMinutes   Int              @default(0)
+  travelKm      Float            @default(0)
+  status        AttendanceStatus @default(ACTIVE)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([staffId, workDate])
+  @@index([shopId, workDate])
+  @@index([shopId, status])
+}
+
+model StaffVisit {
+  id              String           @id @default(cuid())
+  shopId          String
+  shop            Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId         String
+  staff           User             @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status          StaffVisitStatus @default(CHECKED_IN)
+  checkInAt       DateTime         @default(now())
+  checkOutAt      DateTime?
+  checkInLat      Float
+  checkInLng      Float
+  checkOutLat     Float?
+  checkOutLng     Float?
+  accuracy        Float?
+  distanceMeters  Float?
+  verified        Boolean          @default(false)
+  outsideWarning  Boolean          @default(false)
+  notes           String?
+  result          String?
+  recoveryAmount  Float            @default(0)
+  travelKm        Float            @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  photos          VisitPhoto[]
+
+  @@index([shopId, checkInAt])
+  @@index([staffId, checkInAt])
+  @@index([customerId, checkInAt])
+  @@index([shopId, status])
+}
+
+model VisitPhoto {
+  id          String     @id @default(cuid())
+  shopId      String
+  shop        Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  visitId     String
+  visit       StaffVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy  User       @relation(fields: [uploadedById], references: [id])
+  url         String
+  fileType    String?
+  notes       String?
+  createdAt   DateTime   @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([visitId])
+}
+
+model RouteHistory {
+  id             String   @id @default(cuid())
+  shopId         String
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId        String
+  staff          User     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  routeDate      DateTime
+  totalKm        Float    @default(0)
+  totalVisits    Int      @default(0)
+  productiveHours Float   @default(0)
+  startedAt      DateTime?
+  endedAt        DateTime?
+  path           Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([staffId, routeDate])
+  @@index([shopId, routeDate])
 }
 
 model FollowUp {

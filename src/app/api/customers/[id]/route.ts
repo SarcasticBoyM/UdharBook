@@ -13,6 +13,9 @@ const updateSchema = z.object({
   outstandingBalance: z.number().min(0).optional(),
   notes: z.string().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
+  latitude: z.number().min(-90).max(90).optional().nullable(),
+  longitude: z.number().min(-180).max(180).optional().nullable(),
+  geoAddress: z.string().optional().nullable(),
   status: z
     .enum(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"])
     .optional(),
@@ -56,6 +59,14 @@ export async function GET(
             include: { user: { select: { name: true, role: true } } },
             take: 10,
           },
+        },
+      },
+      staffVisits: {
+        orderBy: { checkInAt: "desc" },
+        take: 20,
+        include: {
+          staff: { select: { name: true, role: true } },
+          photos: { orderBy: { createdAt: "desc" }, take: 4 },
         },
       },
     },

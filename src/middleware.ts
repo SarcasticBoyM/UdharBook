@@ -65,6 +65,9 @@ export async function middleware(request: NextRequest) {
     if ((pathname.startsWith("/follow-ups") || pathname.startsWith("/reports")) && role === "STAFF") {
       return secure(NextResponse.redirect(new URL("/today-follow-ups", request.url)));
     }
+    if (pathname.startsWith("/live-tracking") && role === "STAFF") {
+      return secure(NextResponse.redirect(new URL("/field-staff", request.url)));
+    }
     if (
       (pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/reports")) &&
       role === "STAFF"
