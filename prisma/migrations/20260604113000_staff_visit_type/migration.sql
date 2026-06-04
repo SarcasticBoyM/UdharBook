@@ -1,0 +1,1 @@
+ALTER TABLE "StaffVisit" ADD COLUMN IF NOT EXISTS "visitType" TEXT NOT NULL DEFAULT 'Follow-up';

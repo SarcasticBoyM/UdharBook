@@ -10,6 +10,8 @@ type CustomerSearchRow = {
   contactNumber: string;
   outstandingBalance: number;
   lastFollowupDate: Date | null;
+  nextFollowupDate: Date | null;
+  staffVisits: { checkInAt: Date }[];
 };
 
 function compact(value: string) {
@@ -41,6 +43,8 @@ function serializeCustomer(customer: CustomerSearchRow, query: string) {
     contactNumber: customer.contactNumber,
     outstandingBalance: customer.outstandingBalance,
     lastFollowupDate: customer.lastFollowupDate,
+    nextFollowupDate: customer.nextFollowupDate,
+    lastVisitDate: customer.staffVisits[0]?.checkInAt ?? null,
     matchScore: scoreCustomer(customer, query),
   };
 }
@@ -78,6 +82,12 @@ export async function GET(request: Request) {
         contactNumber: true,
         outstandingBalance: true,
         lastFollowupDate: true,
+        nextFollowupDate: true,
+        staffVisits: {
+          orderBy: { checkInAt: "desc" },
+          take: 1,
+          select: { checkInAt: true },
+        },
       },
       orderBy: query ? [{ outstandingBalance: "desc" }, { partyName: "asc" }] : [{ updatedAt: "desc" }],
       take: query ? 40 : limit,

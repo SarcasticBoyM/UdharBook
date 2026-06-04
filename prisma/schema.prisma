@@ -251,6 +251,7 @@ model StaffVisit {
   outsideWarning  Boolean          @default(false)
   notes           String?
   result          String?
+  visitType       String           @default("Follow-up")
   recoveryAmount  Float            @default(0)
   travelKm        Float            @default(0)
   createdAt       DateTime         @default(now())

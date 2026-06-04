@@ -6,12 +6,28 @@ import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, endOfDay, startOfDay, visibleStaffId } from "@/lib/field-tracking";
 
 const visitSchema = z.object({
-  customerId: z.string(),
+  customerId: z.string().optional(),
+  customerName: z.string().optional(),
+  mobileNumber: z.string().optional(),
+  address: z.string().optional(),
+  visitType: z
+    .enum(["Collection", "Follow-up", "New Lead", "Complaint", "Cheque Pickup", "Payment Reminder", "Other"])
+    .optional(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   accuracy: z.number().optional(),
   notes: z.string().optional(),
+  recoveryAmount: z.number().min(0).optional(),
+  nextFollowupDate: z.string().datetime().optional(),
 });
+
+function normalizePhone(value?: string) {
+  return value?.replace(/\D/g, "").slice(-10) || "";
+}
+
+function temporaryLeadPhone() {
+  return `LEAD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
 
 export async function GET(request: Request) {
   try {
@@ -74,19 +90,55 @@ export async function POST(request: Request) {
 
     const shopId = requireShopId(request, session);
     const body = visitSchema.parse(await request.json());
-    const customer = await prisma.customer.findFirst({
-      where: { id: body.customerId, shopId },
-      select: { id: true, latitude: true, longitude: true },
-    });
-    if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
-
-    const distance =
-      customer.latitude !== null && customer.longitude !== null
-        ? distanceMeters(body.latitude, body.longitude, customer.latitude, customer.longitude)
-        : null;
-    const verified = distance === null ? false : distance <= 200;
-
     const visit = await prisma.$transaction(async (tx) => {
+      let customer = body.customerId
+        ? await tx.customer.findFirst({
+            where: { id: body.customerId, shopId },
+            select: { id: true, latitude: true, longitude: true },
+          })
+        : null;
+
+      if (!customer) {
+        const name = body.customerName?.trim();
+        if (!name) {
+          throw new Error("CUSTOMER_OR_LEAD_REQUIRED");
+        }
+        const phone = normalizePhone(body.mobileNumber) || temporaryLeadPhone();
+        const createdCustomer = await tx.customer.upsert({
+          where: { shopId_contactNumber: { shopId, contactNumber: phone } },
+          create: {
+            shopId,
+            partyName: name,
+            contactNumber: phone,
+            outstandingBalance: 0,
+            status: "ACTIVE",
+            notes: [
+              "Temporary lead created from field visit.",
+              body.address ? `Address: ${body.address}` : "",
+              body.notes ? `Visit notes: ${body.notes}` : "",
+            ].filter(Boolean).join("\n"),
+            latitude: body.latitude,
+            longitude: body.longitude,
+            geoAddress: body.address,
+          },
+          update: {
+            partyName: name,
+            notes: body.notes ? `Field visit note: ${body.notes}` : undefined,
+            latitude: body.latitude,
+            longitude: body.longitude,
+            geoAddress: body.address,
+          },
+          select: { id: true, latitude: true, longitude: true },
+        });
+        customer = createdCustomer;
+      }
+
+      const distance =
+        customer.latitude !== null && customer.longitude !== null
+          ? distanceMeters(body.latitude, body.longitude, customer.latitude, customer.longitude)
+          : null;
+      const verified = distance === null ? false : distance <= 200;
+
       await tx.staffLocation.create({
         data: {
           shopId,
@@ -108,6 +160,8 @@ export async function POST(request: Request) {
           checkInLng: body.longitude,
           accuracy: body.accuracy,
           notes: body.notes,
+          visitType: body.visitType ?? (body.customerId ? "Follow-up" : "New Lead"),
+          recoveryAmount: body.recoveryAmount ?? 0,
           distanceMeters: distance ?? undefined,
           verified,
           outsideWarning: distance !== null && !verified,
@@ -124,12 +178,36 @@ export async function POST(request: Request) {
         update: { status: "ACTIVE" },
       });
 
+      if (body.nextFollowupDate) {
+        const nextDate = new Date(body.nextFollowupDate);
+        await tx.followUp.create({
+          data: {
+            shopId,
+            customerId: customer.id,
+            followupDate: new Date(),
+            status: "RESCHEDULED",
+            priority: "MEDIUM",
+            notes: body.notes ?? "Scheduled from field visit.",
+            nextFollowupDate: nextDate,
+            scheduledAt: nextDate,
+            createdById: session.id,
+          },
+        });
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { lastFollowupDate: new Date(), nextFollowupDate: nextDate },
+        });
+      }
+
       return created;
     });
 
     return NextResponse.json({ success: true, visit });
   } catch (error) {
     console.error("Visit check-in failed", error);
-    return NextResponse.json({ success: false, error: "Could not check in visit" }, { status: 400 });
+    return NextResponse.json(
+      { success: false, error: error instanceof Error && error.message === "CUSTOMER_OR_LEAD_REQUIRED" ? "Customer name is required for a new visit" : "Could not check in visit" },
+      { status: 400 },
+    );
   }
 }
