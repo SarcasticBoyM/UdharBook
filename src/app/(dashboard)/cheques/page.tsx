@@ -12,6 +12,7 @@ import {
   ImagePlus,
   Landmark,
   Loader2,
+  Paperclip,
   Plus,
   Search,
   Settings,
@@ -89,6 +90,10 @@ type ChequeItem = {
   depositDateTime: string | null;
   depositBankAccount: string | null;
   depositSlipUrl: string | null;
+  depositReceiptUrl: string | null;
+  depositReceiptType: string | null;
+  depositReceiptUploadedAt: string | null;
+  depositReceiptUploadedBy: UserOption | null;
   bounceReason: string | null;
   clearedAt: string | null;
   bouncedAt: string | null;
@@ -269,6 +274,15 @@ async function prepareChequeImage(file: File) {
   return canvas.toDataURL("image/jpeg", 0.76);
 }
 
+async function prepareReceiptFile(file: File) {
+  if (file.type === "application/pdf") return file;
+  if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) throw new Error("Unsupported receipt file");
+  const dataUrl = await prepareChequeImage(file);
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], file.name.replace(/\.(png|webp)$/i, ".jpg"), { type: "image/jpeg" });
+}
+
 function confidenceTone(value?: number) {
   if (!value) return "";
   if (value >= 0.75) return "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20";
@@ -384,6 +398,9 @@ export default function ChequeCollectionsPage() {
   const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
   const [selectedDepositAccountId, setSelectedDepositAccountId] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState("");
+  const [receiptUploading, setReceiptUploading] = useState(false);
   const touchStart = useRef<Record<string, number>>({});
 
   useEffect(() => {
@@ -511,6 +528,8 @@ export default function ChequeCollectionsPage() {
       setDepositAction({ cheque, status });
       setSelectedDepositAccountId(cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
       setAccountSearch("");
+      setReceiptFile(null);
+      setReceiptPreview("");
       return;
     }
     const body: Record<string, string> = { status };
@@ -541,11 +560,45 @@ export default function ChequeCollectionsPage() {
   const confirmDepositAction = async () => {
     if (!depositAction || !selectedDepositAccountId) return;
     const account = depositAccounts.find((item) => item.id === selectedDepositAccountId);
+    setReceiptUploading(true);
+    let receiptPayload: {
+      depositReceiptUrl?: string;
+      depositReceiptType?: string;
+      depositReceiptUploadedAt?: string;
+    } = {};
+    try {
+      if (receiptFile) {
+        const uploadData = new FormData();
+        uploadData.append("file", await prepareReceiptFile(receiptFile));
+        const uploadRes = await fetch(`/api/cheques/${depositAction.cheque.id}/receipt`, {
+          method: "POST",
+          body: uploadData,
+        });
+        if (!uploadRes.ok) {
+          const error = await uploadRes.json().catch(() => ({}));
+          window.alert(error.error ?? "Could not upload deposit receipt");
+          setReceiptUploading(false);
+          return;
+        }
+        const uploaded = await uploadRes.json();
+        receiptPayload = {
+          depositReceiptUrl: uploaded.url,
+          depositReceiptType: uploaded.type,
+          depositReceiptUploadedAt: uploaded.uploadedAt,
+        };
+      }
+    } catch {
+      window.alert("Could not upload deposit receipt");
+      setReceiptUploading(false);
+      return;
+    }
+
     const body = {
       status: depositAction.status,
       depositedAccountId: selectedDepositAccountId,
       depositBankAccount: account ? `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}` : undefined,
       depositDateTime: new Date().toISOString(),
+      ...receiptPayload,
     };
 
     setData((current) =>
@@ -569,12 +622,15 @@ export default function ChequeCollectionsPage() {
     if (res.ok) {
       setDepositAction(null);
       setSelectedDepositAccountId("");
+      setReceiptFile(null);
+      setReceiptPreview("");
       loadCheques();
       loadDepositAccounts();
     } else {
       const error = await res.json().catch(() => ({}));
       window.alert(error.error ?? "Could not update deposit account");
     }
+    setReceiptUploading(false);
   };
 
   const submitCheque = async (event: React.FormEvent) => {
@@ -668,6 +724,23 @@ export default function ChequeCollectionsPage() {
       body: JSON.stringify({ isActive: !account.isActive }),
     });
     if (res.ok) loadDepositAccounts();
+  };
+
+  const chooseReceiptFile = async (file: File) => {
+    if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
+      window.alert("Only JPG, PNG, WEBP, or PDF receipts allowed");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      window.alert("Receipt must be under 8 MB");
+      return;
+    }
+    setReceiptFile(file);
+    if (file.type === "application/pdf") {
+      setReceiptPreview("");
+    } else {
+      setReceiptPreview(await fileToDataUrl(file));
+    }
   };
 
   const searchCustomers = async (search: string) => {
@@ -1172,7 +1245,33 @@ export default function ChequeCollectionsPage() {
                     <dt className="text-slate-500">Deposit staff</dt>
                     <dd className="text-right">{selectedCheque.depositedBy?.name ?? "-"}</dd>
                   </div>
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-slate-500">Deposit timestamp</dt>
+                    <dd className="text-right">{formatDate(selectedCheque.depositDateTime)}</dd>
+                  </div>
                 </dl>
+                <div className="mt-5 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                  <p className="font-semibold">Deposit Receipt</p>
+                  {selectedCheque.depositReceiptUrl ? (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-slate-500">
+                        Uploaded by {selectedCheque.depositReceiptUploadedBy?.name ?? "-"} on{" "}
+                        {formatDate(selectedCheque.depositReceiptUploadedAt)}
+                      </p>
+                      <a
+                        href={`/api/cheques/${selectedCheque.id}/receipt`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                        View / Download
+                      </a>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-slate-500">No receipt uploaded</p>
+                  )}
+                </div>
                 <div className="mt-5">
                   <Timeline activities={selectedCheque.activities} />
                 </div>
@@ -1456,6 +1555,73 @@ export default function ChequeCollectionsPage() {
                 </p>
               )}
             </div>
+            <div className="mt-5 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+              <p className="text-sm font-semibold">Deposit Receipt (Optional)</p>
+              <p className="mt-1 text-xs text-slate-500">Upload bank deposit slip photo or PDF for audit proof.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white">
+                  <Camera className="h-4 w-4" />
+                  Camera
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    capture="environment"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      if (file) await chooseReceiptFile(file);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
+                  <ImagePlus className="h-4 w-4" />
+                  Gallery / PDF
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      if (file) await chooseReceiptFile(file);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              {receiptFile && (
+                <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                  {receiptPreview ? (
+                    <Image
+                      src={receiptPreview}
+                      alt="Deposit receipt preview"
+                      width={800}
+                      height={420}
+                      unoptimized
+                      className="max-h-44 w-full rounded-lg object-contain"
+                    />
+                  ) : (
+                    <div className="flex min-h-20 items-center justify-center gap-2 rounded-lg bg-slate-100 dark:bg-slate-800">
+                      <Paperclip className="h-5 w-5" />
+                      PDF receipt selected
+                    </div>
+                  )}
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="truncate text-xs text-slate-500">{receiptFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReceiptFile(null);
+                        setReceiptPreview("");
+                      }}
+                      className="rounded-md border px-2 py-1 text-xs font-semibold"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="mt-5 flex gap-3">
               <button type="button" onClick={() => setDepositAction(null)} className="min-h-12 flex-1 rounded-lg border text-sm font-semibold">
                 Cancel
@@ -1463,10 +1629,10 @@ export default function ChequeCollectionsPage() {
               <button
                 type="button"
                 onClick={confirmDepositAction}
-                disabled={!selectedDepositAccountId}
+                disabled={!selectedDepositAccountId || receiptUploading}
                 className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950"
               >
-                Confirm {formatStatus(depositAction.status)}
+                {receiptUploading ? "Saving..." : `Confirm ${formatStatus(depositAction.status)}`}
               </button>
             </div>
           </div>

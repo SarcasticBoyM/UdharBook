@@ -116,6 +116,7 @@ model User {
   passwordResetTokens PasswordResetToken[]
   collectedCheques Cheque[] @relation("ChequeCollectedBy")
   depositedCheques Cheque[] @relation("ChequeDepositedBy")
+  receiptUploadedCheques Cheque[] @relation("ChequeReceiptUploadedBy")
   chequeActivities ChequeActivity[]
 
   @@index([shopId])
@@ -250,6 +251,11 @@ model Cheque {
   depositDateTime    DateTime?
   depositBankAccount String?
   depositSlipUrl     String?
+  depositReceiptUrl  String?
+  depositReceiptType String?
+  depositReceiptUploadedAt DateTime?
+  depositReceiptUploadedById String?
+  depositReceiptUploadedBy User? @relation("ChequeReceiptUploadedBy", fields: [depositReceiptUploadedById], references: [id])
   depositedById      String?
   depositedBy        User?        @relation("ChequeDepositedBy", fields: [depositedById], references: [id])
   depositedAccountId String?
@@ -270,6 +276,7 @@ model Cheque {
   @@index([shopId, collectionDateTime])
   @@index([shopId, depositDateTime])
   @@index([shopId, depositedAccountId])
+  @@index([depositReceiptUploadedById])
   @@index([customerId, createdAt])
   @@index([collectedById, collectionDateTime])
 }

@@ -13,6 +13,9 @@ const updateSchema = z.object({
   depositedAccountId: z.string().optional(),
   depositBankAccount: z.string().optional(),
   depositSlipUrl: z.string().optional(),
+  depositReceiptUrl: z.string().optional().nullable(),
+  depositReceiptType: z.string().optional().nullable(),
+  depositReceiptUploadedAt: z.string().datetime().optional().nullable(),
   bounceReason: z.string().optional(),
 });
 
@@ -70,6 +73,22 @@ export async function PATCH(
         depositBankAccount: body.depositBankAccount ?? existing.depositBankAccount,
         depositedAccountId: body.depositedAccountId ?? existing.depositedAccountId,
         depositSlipUrl: body.depositSlipUrl ?? existing.depositSlipUrl,
+        depositReceiptUrl:
+          body.depositReceiptUrl === null ? null : body.depositReceiptUrl ?? existing.depositReceiptUrl,
+        depositReceiptType:
+          body.depositReceiptType === null ? null : body.depositReceiptType ?? existing.depositReceiptType,
+        depositReceiptUploadedAt:
+          body.depositReceiptUploadedAt === null
+            ? null
+            : body.depositReceiptUploadedAt
+              ? new Date(body.depositReceiptUploadedAt)
+              : existing.depositReceiptUploadedAt,
+        depositReceiptUploadedById:
+          body.depositReceiptUrl === null
+            ? null
+            : body.depositReceiptUrl
+              ? session.id
+              : existing.depositReceiptUploadedById,
         depositedById: ["DEPOSITED", "CLEARED"].includes(body.status) ? session.id : existing.depositedById,
         bounceReason: body.status === "BOUNCED" ? body.bounceReason ?? body.notes : existing.bounceReason,
         bouncedAt: body.status === "BOUNCED" ? now : existing.bouncedAt,
@@ -80,6 +99,7 @@ export async function PATCH(
         customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
         collectedBy: { select: { id: true, name: true, role: true } },
         depositedBy: { select: { id: true, name: true, role: true } },
+        depositReceiptUploadedBy: { select: { id: true, name: true, role: true } },
         depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
         activities: {
           orderBy: { createdAt: "desc" },
