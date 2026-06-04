@@ -14,6 +14,7 @@ import {
   Loader2,
   Plus,
   Search,
+  Settings,
   ShieldAlert,
   Sparkles,
   XCircle,
@@ -46,6 +47,27 @@ type ChequeActivity = {
   user: { name: string; role: string };
 };
 
+type DepositAccount = {
+  id: string;
+  accountName: string;
+  bankName: string;
+  lastFourDigits: string;
+  isActive: boolean;
+};
+
+type AccountAudit = {
+  accountId: string;
+  label: string;
+  totalDeposited: number;
+  totalDepositedCount: number;
+  totalCleared: number;
+  totalClearedCount: number;
+  totalBounced: number;
+  totalBouncedCount: number;
+  pendingUnderClearing: number;
+  pendingUnderClearingCount: number;
+};
+
 type ChequeItem = {
   id: string;
   chequeNumber: string;
@@ -73,6 +95,7 @@ type ChequeItem = {
   customer: CustomerOption;
   collectedBy: UserOption;
   depositedBy: UserOption | null;
+  depositedAccount: DepositAccount | null;
   activities: ChequeActivity[];
 };
 
@@ -332,6 +355,7 @@ export default function ChequeCollectionsPage() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [staffId, setStaffId] = useState("");
+  const [accountFilter, setAccountFilter] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [data, setData] = useState<ChequeResponse | null>(null);
@@ -351,6 +375,15 @@ export default function ChequeCollectionsPage() {
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [currentRole, setCurrentRole] = useState("");
+  const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
+  const [accountAudit, setAccountAudit] = useState<AccountAudit[]>([]);
+  const [accountPanelOpen, setAccountPanelOpen] = useState(false);
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountForm, setAccountForm] = useState({ accountName: "", bankName: "", lastFourDigits: "" });
+  const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
+  const [selectedDepositAccountId, setSelectedDepositAccountId] = useState("");
+  const [accountSearch, setAccountSearch] = useState("");
   const touchStart = useRef<Record<string, number>>({});
 
   useEffect(() => {
@@ -364,11 +397,12 @@ export default function ChequeCollectionsPage() {
     if (quick) search.set("quick", quick);
     if (debouncedQuery) search.set("q", debouncedQuery);
     if (staffId) search.set("staffId", staffId);
+    if (accountFilter) search.set("depositedAccountId", accountFilter);
     if (from) search.set("from", from);
     if (to) search.set("to", to);
     search.set("limit", "40");
     return search;
-  }, [activeStatus, debouncedQuery, from, quick, staffId, to]);
+  }, [accountFilter, activeStatus, debouncedQuery, from, quick, staffId, to]);
 
   const loadCheques = useCallback(async () => {
     setLoading(true);
@@ -386,6 +420,34 @@ export default function ChequeCollectionsPage() {
   useEffect(() => {
     loadCheques();
   }, [loadCheques]);
+
+  const loadDepositAccounts = useCallback(async () => {
+    const search = new URLSearchParams();
+    search.set("activeOnly", currentRole === "STAFF" ? "true" : "false");
+    if (from) search.set("from", from);
+    if (to) search.set("to", to);
+    if (staffId) search.set("staffId", staffId);
+    if (quick === "cleared") search.set("status", "CLEARED");
+    if (quick === "bounced") search.set("status", "BOUNCED");
+    if (quick === "pending") search.set("status", "DEPOSITED");
+    const res = await fetch(`/api/cheque-deposit-accounts?${search.toString()}`);
+    if (res.ok) {
+      const payload = await res.json();
+      setDepositAccounts(payload.accounts ?? []);
+      setAccountAudit(payload.audit ?? []);
+    }
+  }, [currentRole, from, quick, staffId, to]);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => setCurrentRole(payload?.user?.role ?? ""))
+      .catch(() => setCurrentRole(""));
+  }, []);
+
+  useEffect(() => {
+    loadDepositAccounts();
+  }, [loadDepositAccounts]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -445,13 +507,13 @@ export default function ChequeCollectionsPage() {
   );
 
   const updateStatus = async (cheque: ChequeItem, status: ChequeStatus) => {
-    const body: Record<string, string> = { status };
-    if (status === "DEPOSITED") {
-      const account = window.prompt("Deposit bank account used?", cheque.depositBankAccount ?? "");
-      if (account === null) return;
-      body.depositBankAccount = account;
-      body.depositDateTime = new Date().toISOString();
+    if (["DEPOSITED", "CLEARED"].includes(status)) {
+      setDepositAction({ cheque, status });
+      setSelectedDepositAccountId(cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
+      setAccountSearch("");
+      return;
     }
+    const body: Record<string, string> = { status };
     if (status === "BOUNCED") {
       const reason = window.prompt("Bounce reason or remark?", cheque.bounceReason ?? "");
       if (reason === null) return;
@@ -474,6 +536,45 @@ export default function ChequeCollectionsPage() {
       body: JSON.stringify(body),
     });
     if (res.ok) loadCheques();
+  };
+
+  const confirmDepositAction = async () => {
+    if (!depositAction || !selectedDepositAccountId) return;
+    const account = depositAccounts.find((item) => item.id === selectedDepositAccountId);
+    const body = {
+      status: depositAction.status,
+      depositedAccountId: selectedDepositAccountId,
+      depositBankAccount: account ? `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}` : undefined,
+      depositDateTime: new Date().toISOString(),
+    };
+
+    setData((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((item) =>
+              item.id === depositAction.cheque.id
+                ? { ...item, status: depositAction.status, depositedAccount: account ?? item.depositedAccount }
+                : item
+            ),
+          }
+        : current
+    );
+
+    const res = await fetch(`/api/cheques/${depositAction.cheque.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      setDepositAction(null);
+      setSelectedDepositAccountId("");
+      loadCheques();
+      loadDepositAccounts();
+    } else {
+      const error = await res.json().catch(() => ({}));
+      window.alert(error.error ?? "Could not update deposit account");
+    }
   };
 
   const submitCheque = async (event: React.FormEvent) => {
@@ -540,6 +641,33 @@ export default function ChequeCollectionsPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.set("format", format);
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
+  };
+
+  const saveDepositAccount = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAccountSaving(true);
+    const res = await fetch("/api/cheque-deposit-accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(accountForm),
+    });
+    setAccountSaving(false);
+    if (res.ok) {
+      setAccountForm({ accountName: "", bankName: "", lastFourDigits: "" });
+      loadDepositAccounts();
+    } else {
+      const error = await res.json().catch(() => ({}));
+      window.alert(error.error ?? "Could not save account");
+    }
+  };
+
+  const toggleDepositAccount = async (account: DepositAccount) => {
+    const res = await fetch(`/api/cheque-deposit-accounts/${account.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isActive: !account.isActive }),
+    });
+    if (res.ok) loadDepositAccounts();
   };
 
   const searchCustomers = async (search: string) => {
@@ -720,6 +848,16 @@ export default function ChequeCollectionsPage() {
             <Plus className="h-4 w-4" />
             Add Cheque
           </button>
+          {currentRole !== "STAFF" && (
+            <button
+              type="button"
+              onClick={() => setAccountPanelOpen((open) => !open)}
+              className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700"
+            >
+              <Settings className="h-4 w-4" />
+              Manage Deposit Accounts
+            </button>
+          )}
         </div>
       </div>
 
@@ -731,6 +869,60 @@ export default function ChequeCollectionsPage() {
         <StatCard label="Bounce Alerts" value={summary?.bounced ?? 0} icon={ShieldAlert} tone="border-red-200 bg-red-50 text-red-800" />
         <StatCard label="High Value" value={summary?.highValue ?? 0} icon={AlertTriangle} tone="border-purple-200 bg-purple-50 text-purple-800" />
       </div>
+
+      {accountAudit.length > 0 && (
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          {accountAudit.map((audit) => (
+            <div key={audit.accountId} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <p className="text-sm font-bold">{audit.label}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p className="text-xs text-slate-500">Deposited</p>
+                  <p className="font-semibold">{formatCurrency(audit.totalDeposited)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Cleared</p>
+                  <p className="font-semibold text-emerald-700">{formatCurrency(audit.totalCleared)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Bounced</p>
+                  <p className="font-semibold text-red-700">{formatCurrency(audit.totalBounced)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Under clearing</p>
+                  <p className="font-semibold text-indigo-700">{formatCurrency(audit.pendingUnderClearing)}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {accountPanelOpen && currentRole !== "STAFF" && (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <h2 className="font-bold">Manage Deposit Accounts</h2>
+          <form onSubmit={saveDepositAccount} className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_160px_auto]">
+            <input value={accountForm.accountName} onChange={(e) => setAccountForm((f) => ({ ...f, accountName: e.target.value }))} placeholder="Account name" className="min-h-11 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950" required />
+            <input value={accountForm.bankName} onChange={(e) => setAccountForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="Bank name" className="min-h-11 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950" required />
+            <input value={accountForm.lastFourDigits} onChange={(e) => setAccountForm((f) => ({ ...f, lastFourDigits: e.target.value.replace(/\D/g, "").slice(0, 4) }))} placeholder="Last 4 digits" className="min-h-11 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950" required />
+            <button disabled={accountSaving} className="min-h-11 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white disabled:opacity-60 dark:bg-white dark:text-slate-950">
+              {accountSaving ? "Saving" : "Add"}
+            </button>
+          </form>
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            {depositAccounts.map((account) => (
+              <div key={account.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                <span>
+                  <strong>{account.bankName}</strong> - {account.accountName} - {account.lastFourDigits}
+                </span>
+                <button type="button" onClick={() => toggleDepositAccount(account)} className="rounded-md border px-2 py-1 text-xs font-semibold">
+                  {account.isActive ? "Active" : "Inactive"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {alerts && (alerts.stale > 0 || alerts.chequeDateTomorrow > 0 || alerts.bounced > 0) && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -762,7 +954,7 @@ export default function ChequeCollectionsPage() {
               ))}
             </div>
 
-            <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_160px_140px_140px]">
+            <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_160px_180px_140px_140px]">
               <label className="relative block">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                 <input
@@ -781,6 +973,18 @@ export default function ChequeCollectionsPage() {
                 {data?.users.map((user) => (
                   <option key={user.id} value={user.id}>
                     {user.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={accountFilter}
+                onChange={(e) => setAccountFilter(e.target.value)}
+                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              >
+                <option value="">All accounts</option>
+                {depositAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.bankName} - {account.accountName} - {account.lastFourDigits}
                   </option>
                 ))}
               </select>
@@ -894,6 +1098,11 @@ export default function ChequeCollectionsPage() {
                     <div>
                       <p className="text-xs text-slate-500">Deposit</p>
                       <p className="font-medium">{formatDate(cheque.depositDateTime)}</p>
+                      {cheque.depositedAccount && (
+                        <p className="text-xs text-slate-500">
+                          {cheque.depositedAccount.bankName} - {cheque.depositedAccount.accountName} - {cheque.depositedAccount.lastFourDigits}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <p className="text-xs text-slate-500">Balance</p>
@@ -953,7 +1162,15 @@ export default function ChequeCollectionsPage() {
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-slate-500">Deposit account</dt>
-                    <dd className="text-right">{selectedCheque.depositBankAccount || "-"}</dd>
+                    <dd className="text-right">
+                      {selectedCheque.depositedAccount
+                        ? `${selectedCheque.depositedAccount.bankName} - ${selectedCheque.depositedAccount.accountName} - ${selectedCheque.depositedAccount.lastFourDigits}`
+                        : selectedCheque.depositBankAccount || "-"}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <dt className="text-slate-500">Deposit staff</dt>
+                    <dd className="text-right">{selectedCheque.depositedBy?.name ?? "-"}</dd>
                   </div>
                 </dl>
                 <div className="mt-5">
@@ -1185,6 +1402,74 @@ export default function ChequeCollectionsPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {depositAction && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 sm:items-center sm:p-6">
+          <div className="w-full rounded-t-2xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:mx-auto sm:max-w-lg sm:rounded-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold">Deposit Into Account</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {depositAction.cheque.customer.partyName} | {formatCurrency(depositAction.cheque.amount)}
+                </p>
+              </div>
+              <button type="button" onClick={() => setDepositAction(null)} className="rounded-lg border p-2">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <input
+              value={accountSearch}
+              onChange={(e) => setAccountSearch(e.target.value)}
+              placeholder="Search account"
+              className="mt-4 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+            />
+            <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+              {depositAccounts
+                .filter((account) =>
+                  `${account.bankName} ${account.accountName} ${account.lastFourDigits}`
+                    .toLowerCase()
+                    .includes(accountSearch.toLowerCase())
+                )
+                .map((account) => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => setSelectedDepositAccountId(account.id)}
+                    className={cn(
+                      "flex min-h-14 w-full items-center justify-between rounded-lg border px-3 text-left text-sm",
+                      selectedDepositAccountId === account.id
+                        ? "border-brand-600 bg-brand-50 text-brand-800"
+                        : "border-slate-200 dark:border-slate-700"
+                    )}
+                  >
+                    <span>
+                      <strong>{account.bankName}</strong> - {account.accountName}
+                    </span>
+                    <span className="font-semibold">{account.lastFourDigits}</span>
+                  </button>
+                ))}
+              {depositAccounts.length === 0 && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  No active deposit accounts. Ask admin to add one in Manage Deposit Accounts.
+                </p>
+              )}
+            </div>
+            <div className="mt-5 flex gap-3">
+              <button type="button" onClick={() => setDepositAction(null)} className="min-h-12 flex-1 rounded-lg border text-sm font-semibold">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDepositAction}
+                disabled={!selectedDepositAccountId}
+                className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950"
+              >
+                Confirm {formatStatus(depositAction.status)}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

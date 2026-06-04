@@ -89,6 +89,7 @@ model Shop {
   activityLogs       ActivityLog[]
   cheques            Cheque[]
   chequeActivities   ChequeActivity[]
+  chequeDepositAccounts ChequeDepositAccount[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -251,6 +252,8 @@ model Cheque {
   depositSlipUrl     String?
   depositedById      String?
   depositedBy        User?        @relation("ChequeDepositedBy", fields: [depositedById], references: [id])
+  depositedAccountId String?
+  depositedAccount   ChequeDepositAccount? @relation(fields: [depositedAccountId], references: [id])
   status             ChequeStatus @default(COLLECTED)
   bounceReason       String?
   bouncedAt          DateTime?
@@ -266,8 +269,25 @@ model Cheque {
   @@index([shopId, chequeDate])
   @@index([shopId, collectionDateTime])
   @@index([shopId, depositDateTime])
+  @@index([shopId, depositedAccountId])
   @@index([customerId, createdAt])
   @@index([collectedById, collectionDateTime])
+}
+
+model ChequeDepositAccount {
+  id             String   @id @default(cuid())
+  shopId         String
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  accountName    String
+  bankName       String
+  lastFourDigits String
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  cheques        Cheque[]
+
+  @@index([shopId, isActive])
+  @@index([shopId, bankName])
 }
 
 model ChequeActivity {

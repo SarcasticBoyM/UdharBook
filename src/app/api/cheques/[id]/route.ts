@@ -10,6 +10,7 @@ const updateSchema = z.object({
   status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "CANCELLED"]),
   notes: z.string().optional(),
   depositDateTime: z.string().datetime().optional().nullable(),
+  depositedAccountId: z.string().optional(),
   depositBankAccount: z.string().optional(),
   depositSlipUrl: z.string().optional(),
   bounceReason: z.string().optional(),
@@ -39,6 +40,18 @@ export async function PATCH(
     include: { customer: true },
   });
   if (!existing) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
+  const requiresDepositAccount = ["DEPOSITED", "CLEARED"].includes(body.status);
+  if (requiresDepositAccount && !body.depositedAccountId && !existing.depositedAccountId) {
+    return NextResponse.json({ error: "Deposit account is required" }, { status: 400 });
+  }
+  const depositAccount = body.depositedAccountId
+    ? await prisma.chequeDepositAccount.findFirst({
+        where: { id: body.depositedAccountId, shopId, isActive: true },
+      })
+    : null;
+  if (body.depositedAccountId && !depositAccount) {
+    return NextResponse.json({ error: "Deposit account not found" }, { status: 404 });
+  }
 
   const now = new Date();
   const updated = await prisma.$transaction(async (tx) => {
@@ -47,16 +60,17 @@ export async function PATCH(
       data: {
         status: body.status,
         depositDateTime:
-          body.status === "DEPOSITED"
+          ["DEPOSITED", "CLEARED"].includes(body.status)
             ? body.depositDateTime
               ? new Date(body.depositDateTime)
-              : now
+              : existing.depositDateTime ?? now
             : body.depositDateTime
               ? new Date(body.depositDateTime)
               : existing.depositDateTime,
         depositBankAccount: body.depositBankAccount ?? existing.depositBankAccount,
+        depositedAccountId: body.depositedAccountId ?? existing.depositedAccountId,
         depositSlipUrl: body.depositSlipUrl ?? existing.depositSlipUrl,
-        depositedById: body.status === "DEPOSITED" ? session.id : existing.depositedById,
+        depositedById: ["DEPOSITED", "CLEARED"].includes(body.status) ? session.id : existing.depositedById,
         bounceReason: body.status === "BOUNCED" ? body.bounceReason ?? body.notes : existing.bounceReason,
         bouncedAt: body.status === "BOUNCED" ? now : existing.bouncedAt,
         clearedAt: body.status === "CLEARED" ? now : existing.clearedAt,
@@ -66,6 +80,7 @@ export async function PATCH(
         customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
         collectedBy: { select: { id: true, name: true, role: true } },
         depositedBy: { select: { id: true, name: true, role: true } },
+        depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
         activities: {
           orderBy: { createdAt: "desc" },
           include: { user: { select: { name: true, role: true } } },
@@ -82,7 +97,10 @@ export async function PATCH(
         type: activityType(body.status),
         fromStatus: existing.status,
         toStatus: body.status,
-        notes: body.notes ?? body.bounceReason,
+        notes:
+          body.notes ??
+          body.bounceReason ??
+          (depositAccount ? `Deposited in ${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined),
       },
     });
 

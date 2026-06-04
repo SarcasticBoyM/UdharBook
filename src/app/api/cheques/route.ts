@@ -55,6 +55,7 @@ function chequeInclude() {
     customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
     collectedBy: { select: { id: true, name: true, role: true } },
     depositedBy: { select: { id: true, name: true, role: true } },
+    depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
     activities: {
       orderBy: { createdAt: "desc" as const },
       include: { user: { select: { name: true, role: true } } },
@@ -79,6 +80,9 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     collectionNotes: cheque.collectionNotes ?? "",
     collectedBy: cheque.collectedBy.name,
     depositedBy: cheque.depositedBy?.name ?? "",
+    depositedAccount: cheque.depositedAccount
+      ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}`
+      : "",
     depositDateTime: cheque.depositDateTime,
     depositBankAccount: cheque.depositBankAccount ?? "",
     micrCode: cheque.micrCode ?? "",
@@ -107,6 +111,7 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
     { header: "Collected By", key: "collectedBy", width: 18 },
     { header: "Collection Date", key: "collectionDateTime", width: 24 },
     { header: "Deposited By", key: "depositedBy", width: 18 },
+    { header: "Deposited Account", key: "depositedAccount", width: 28 },
     { header: "Deposit Date", key: "depositDateTime", width: 24 },
     { header: "Deposit Account", key: "depositBankAccount", width: 22 },
     { header: "MICR", key: "micrCode", width: 16 },
@@ -163,6 +168,7 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       row.collectedBy,
       row.collectionDateTime.toISOString(),
       row.depositedBy,
+      row.depositedAccount,
       row.depositDateTime?.toISOString() ?? "",
       row.depositBankAccount,
       row.micrCode,
@@ -201,6 +207,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status") as ChequeStatus | null;
   const q = searchParams.get("q")?.trim();
   const staffId = searchParams.get("staffId") || undefined;
+  const depositedAccountId = searchParams.get("depositedAccountId") || undefined;
   const from = asDate(searchParams.get("from"));
   const to = asDate(searchParams.get("to"), true);
   const quick = searchParams.get("quick");
@@ -221,6 +228,7 @@ export async function GET(request: Request) {
     shopId,
     ...(status ? { status } : {}),
     ...(staffId ? { collectedById: staffId } : {}),
+    ...(depositedAccountId ? { depositedAccountId } : {}),
     ...(from || to ? { collectionDateTime: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
     ...(q
       ? {
