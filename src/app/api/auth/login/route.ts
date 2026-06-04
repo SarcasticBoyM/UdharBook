@@ -25,7 +25,16 @@ export async function POST(request: Request) {
     }
     await createSession(user);
     return NextResponse.json({ user: { name: user.name, email: user.email, role: user.role } });
-  } catch {
-    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Enter a valid email and password." }, { status: 400 });
+    }
+    logger.error("login_request_failed", {
+      error: error instanceof Error ? error.message : "Unknown login error",
+    });
+    return NextResponse.json(
+      { error: "Unable to sign in right now. Please contact admin." },
+      { status: 500 },
+    );
   }
 }

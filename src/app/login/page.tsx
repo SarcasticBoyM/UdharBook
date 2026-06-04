@@ -23,7 +23,8 @@ export default function LoginPage() {
     });
     setLoading(false);
     if (!res.ok) {
-      setError("Invalid email or password");
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      setError(data?.error ?? "Invalid email or password");
       return;
     }
     router.push("/");
