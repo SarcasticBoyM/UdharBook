@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Camera,
@@ -37,8 +37,9 @@ type Visit = {
   customer: { partyName: string; contactNumber: string; outstandingBalance: number };
 };
 
+type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
+
 const quickResults = ["Follow-up done", "Promise to pay", "Payment collected", "Not available", "Cheque pickup"];
-type GpsState = "idle" | "checking" | "prompt" | "active" | "denied" | "timeout" | "unsupported" | "error";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
@@ -64,15 +65,9 @@ export default function FieldStaffPage() {
   const [result, setResult] = useState(quickResults[0]);
   const [recoveryAmount, setRecoveryAmount] = useState("");
   const [nextFollowupDate, setNextFollowupDate] = useState("");
-  const intervalRef = useRef<number | null>(null);
 
-  const canCheckIn = Boolean(selectedCustomer && !activeVisit && gpsState !== "checking" && gpsState !== "prompt");
-  const isSecureGpsContext =
-    typeof window === "undefined" ||
-    window.location.protocol === "https:" ||
-    window.location.hostname === "localhost";
-
-  const todaySummary = useMemo(
+  const canCheckIn = Boolean(selectedCustomer && !activeVisit && gpsState !== "checking");
+  const summary = useMemo(
     () => ({
       visits: visits.length,
       completed: visits.filter((visit) => visit.status === "COMPLETED").length,
@@ -94,148 +89,6 @@ export default function FieldStaffPage() {
     });
   }, []);
 
-  const requestPosition = useCallback((status = "ACTIVE") => {
-    console.info("[Field GPS] request started", {
-      support: Boolean(navigator.geolocation),
-      secureContext: window.isSecureContext,
-      host: window.location.hostname,
-      protocol: window.location.protocol,
-      userAgent: navigator.userAgent,
-    });
-
-    if (!navigator.geolocation) {
-      console.warn("[Field GPS] geolocation unsupported");
-      setGpsState("unsupported");
-      setGpsError("Location is not supported on this browser.");
-      return Promise.resolve<GeolocationPosition | null>(null);
-    }
-
-    if (!window.isSecureContext || !isSecureGpsContext) {
-      console.warn("[Field GPS] insecure context blocked geolocation", {
-        secureContext: window.isSecureContext,
-        href: window.location.href,
-      });
-      setGpsState("error");
-      setGpsError("GPS works only on secure HTTPS production app.qrvcard.in or localhost.");
-      return Promise.resolve<GeolocationPosition | null>(null);
-    }
-
-    setGpsState("checking");
-    setGpsError("");
-    setMessage("");
-
-    let settled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (settled) return;
-      console.warn("[Field GPS] permission/location timeout after 10 seconds");
-      setGpsState("timeout");
-      setGpsError("GPS permission or location request timed out. Try again.");
-    }, 10000);
-
-    return new Promise<GeolocationPosition | null>((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          settled = true;
-          window.clearTimeout(timeoutId);
-          console.info("[Field GPS] location captured", {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-          });
-          setLocation(position);
-          setGpsState("active");
-          setGpsError("");
-          await sendLocation(position, status).catch((error) => {
-            console.error("[Field GPS] location sync failed", error);
-            setMessage("GPS captured, but could not sync location.");
-          });
-          resolve(position);
-        },
-        (error) => {
-          settled = true;
-          window.clearTimeout(timeoutId);
-          console.error("[Field GPS] geolocation error", {
-            code: error.code,
-            message: error.message,
-          });
-          if (error.code === error.PERMISSION_DENIED) {
-            setGpsState("denied");
-            setGpsError("Location permission blocked. Enable location permission for this site/app.");
-          } else if (error.code === error.TIMEOUT) {
-            setGpsState("timeout");
-            setGpsError("GPS timeout. Move near a window or turn on device location, then retry.");
-          } else {
-            setGpsState("error");
-            setGpsError(error.message || "Could not capture GPS location.");
-          }
-          resolve(null);
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
-      );
-    });
-  }, [isSecureGpsContext, sendLocation]);
-
-  const captureLocation = useCallback(async (status = "ACTIVE") => {
-    if (typeof window === "undefined") return null;
-
-    if (!navigator.geolocation) {
-      console.warn("[Field GPS] browser support", { geolocation: false });
-      setGpsState("unsupported");
-      setGpsError("Location is not supported on this browser.");
-      return null;
-    }
-
-    const permissionsApi = navigator.permissions?.query;
-    if (!permissionsApi) {
-      console.info("[Field GPS] permissions API unavailable, requesting directly");
-      return requestPosition(status);
-    }
-
-    try {
-      const permission = await navigator.permissions.query({ name: "geolocation" as PermissionName });
-      console.info("[Field GPS] permission state", { state: permission.state });
-
-      if (permission.state === "granted") {
-        return requestPosition(status);
-      }
-
-      if (permission.state === "prompt") {
-        setGpsState("prompt");
-        return requestPosition(status);
-      }
-
-      setGpsState("denied");
-      setGpsError("Location permission blocked. Allow location from browser site settings.");
-      return null;
-    } catch (error) {
-      console.warn("[Field GPS] permission query failed, requesting directly", error);
-      return requestPosition(status);
-    }
-  }, [requestPosition]);
-
-  function openLocationSettings() {
-    setMessage("Android Chrome: tap the lock icon near the address bar > Permissions > Location > Allow. For installed app, long-press app icon > App info > Permissions > Location.");
-  }
-
-  function gpsBadge() {
-    if (gpsState === "active") return "bg-emerald-100 text-emerald-800 border-emerald-200";
-    if (gpsState === "denied" || gpsState === "error" || gpsState === "unsupported") return "bg-red-100 text-red-800 border-red-200";
-    if (gpsState === "checking" || gpsState === "prompt") return "bg-blue-100 text-blue-800 border-blue-200";
-    if (gpsState === "timeout") return "bg-amber-100 text-amber-800 border-amber-200";
-    return "bg-slate-100 text-slate-700 border-slate-200";
-  }
-
-  function gpsLabel() {
-    if (gpsState === "active") return "GPS active";
-    if (gpsState === "checking") return "Checking GPS";
-    if (gpsState === "prompt") return "Allow GPS";
-    if (gpsState === "denied") return "GPS blocked";
-    if (gpsState === "timeout") return "GPS timeout";
-    if (gpsState === "unsupported") return "No GPS support";
-    if (gpsState === "error") return "GPS error";
-    return "GPS not active";
-  }
-
   const loadVisits = useCallback(async () => {
     const res = await fetch("/api/field-staff/visits");
     const data = await res.json();
@@ -245,6 +98,119 @@ export default function FieldStaffPage() {
     }
   }, []);
 
+  function isPwaMode() {
+    return (
+      window.matchMedia?.("(display-mode: standalone)").matches ||
+      ("standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone))
+    );
+  }
+
+  function runDirectGpsRequest(options?: {
+    status?: string;
+    onSuccess?: (position: GeolocationPosition) => void | Promise<void>;
+  }) {
+    console.log("[Field GPS] click triggered");
+    console.log("[Field GPS] geolocation supported", Boolean(navigator.geolocation));
+    console.log("[Field GPS] PWA mode", isPwaMode());
+    console.log("[Field GPS] secure context", {
+      isSecureContext: window.isSecureContext,
+      protocol: window.location.protocol,
+      host: window.location.hostname,
+    });
+
+    if (!navigator.geolocation) {
+      console.error("[Field GPS] geolocation not supported");
+      setGpsState("unsupported");
+      setGpsError("Geolocation not supported");
+      alert("Geolocation not supported");
+      return;
+    }
+
+    if (!window.isSecureContext) {
+      console.error("[Field GPS] not secure context", window.location.href);
+      setGpsState("error");
+      setGpsError("GPS works only on HTTPS. Open https://app.qrvcard.in");
+      return;
+    }
+
+    setGpsState("checking");
+    setGpsError("");
+    setMessage("");
+    console.log("[Field GPS] request started");
+
+    const timeoutId = window.setTimeout(() => {
+      console.warn("[Field GPS] GPS timeout");
+      setGpsState("timeout");
+      setGpsError("GPS request timed out. Keep phone location ON and tap Force Request GPS.");
+    }, 15000);
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        window.clearTimeout(timeoutId);
+        console.log("[Field GPS] GPS success", position);
+        setLocation(position);
+        setGpsState("active");
+        setGpsError("");
+        await sendLocation(position, options?.status ?? "ACTIVE").catch((error) => {
+          console.error("[Field GPS] location sync failed", error);
+          setMessage("GPS captured, but could not sync location.");
+        });
+        await options?.onSuccess?.(position);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        console.error("[Field GPS] GPS error", error);
+        if (error.code === 1) {
+          console.error("[Field GPS] permission denied");
+          setGpsState("denied");
+          setGpsError("Location permission blocked. Chrome -> lock icon -> Site settings -> Location -> Allow.");
+        } else if (error.code === 3) {
+          console.error("[Field GPS] timeout");
+          setGpsState("timeout");
+          setGpsError("GPS timeout. Turn on phone location, move near a window, then retry.");
+        } else {
+          setGpsState("error");
+          setGpsError(error.message || "Could not capture GPS location.");
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      },
+    );
+  }
+
+  const requestGPS = () => runDirectGpsRequest({ status: activeVisit ? "ON_VISIT" : "ACTIVE" });
+  const forceRequestGPS = () => {
+    console.log("[Field GPS] force request button triggered");
+    runDirectGpsRequest({ status: activeVisit ? "ON_VISIT" : "ACTIVE" });
+  };
+
+  function openLocationSettings() {
+    setMessage(
+      "Chrome Android: tap the lock icon near the address bar -> Site settings -> Location -> Allow. Installed PWA: long-press app icon -> App info -> Permissions -> Location -> Allow.",
+    );
+  }
+
+  function gpsBadge() {
+    if (gpsState === "active") return "bg-emerald-100 text-emerald-800 border-emerald-200";
+    if (gpsState === "denied" || gpsState === "error" || gpsState === "unsupported") return "bg-red-100 text-red-800 border-red-200";
+    if (gpsState === "checking") return "bg-blue-100 text-blue-800 border-blue-200";
+    if (gpsState === "timeout") return "bg-amber-100 text-amber-800 border-amber-200";
+    return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+
+  function gpsLabel() {
+    if (gpsState === "active") return "GPS active";
+    if (gpsState === "checking") return "Requesting GPS";
+    if (gpsState === "denied") return "GPS blocked";
+    if (gpsState === "timeout") return "GPS timeout";
+    if (gpsState === "unsupported") return "No GPS support";
+    if (gpsState === "error") return "GPS error";
+    return "GPS not active";
+  }
+
   async function startTracking() {
     setTracking(true);
     await fetch("/api/field-staff/attendance", {
@@ -252,12 +218,10 @@ export default function FieldStaffPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "START" }),
     });
-    await captureLocation("ACTIVE");
   }
 
   async function stopTracking() {
     setTracking(false);
-    if (intervalRef.current) window.clearInterval(intervalRef.current);
     await fetch("/api/field-staff/attendance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -266,18 +230,16 @@ export default function FieldStaffPage() {
     setMessage("Field tracking stopped.");
   }
 
-  async function checkIn() {
+  async function saveCheckIn(position: GeolocationPosition) {
     if (!selectedCustomer || activeVisit) return;
-    const currentLocation = location ?? (await captureLocation("ACTIVE"));
-    if (!currentLocation) return;
     const res = await fetch("/api/field-staff/visits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         customerId: selectedCustomer.id,
-        latitude: currentLocation.coords.latitude,
-        longitude: currentLocation.coords.longitude,
-        accuracy: currentLocation.coords.accuracy,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
         notes,
       }),
     });
@@ -294,46 +256,49 @@ export default function FieldStaffPage() {
     await loadVisits();
   }
 
-  async function checkOut() {
+  function checkIn() {
+    if (!selectedCustomer || activeVisit) return;
+    console.log("[Field GPS] check-in click triggered");
+    runDirectGpsRequest({ status: "ON_VISIT", onSuccess: saveCheckIn });
+  }
+
+  function checkOut() {
     if (!activeVisit) return;
-    const position = await captureLocation("ACTIVE");
-    const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "CHECK_OUT",
-        latitude: position?.coords.latitude,
-        longitude: position?.coords.longitude,
-        notes,
-        result,
-        recoveryAmount: Number(recoveryAmount || 0),
-        nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-        followupNotes: notes,
-      }),
+    console.log("[Field GPS] check-out click triggered");
+    runDirectGpsRequest({
+      status: "ACTIVE",
+      onSuccess: async (position) => {
+        const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "CHECK_OUT",
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            notes,
+            result,
+            recoveryAmount: Number(recoveryAmount || 0),
+            nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+            followupNotes: notes,
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setMessage(data.error ?? "Could not check out.");
+          return;
+        }
+        setActiveVisit(null);
+        setNotes("");
+        setRecoveryAmount("");
+        setNextFollowupDate("");
+        await loadVisits();
+      },
     });
-    const data = await res.json();
-    if (!data.success) {
-      setMessage(data.error ?? "Could not check out.");
-      return;
-    }
-    setActiveVisit(null);
-    setNotes("");
-    setRecoveryAmount("");
-    setNextFollowupDate("");
-    await loadVisits();
   }
 
   useEffect(() => {
     loadVisits();
   }, [loadVisits]);
-
-  useEffect(() => {
-    if (!tracking) return;
-    intervalRef.current = window.setInterval(() => captureLocation(activeVisit ? "ON_VISIT" : "ACTIVE"), 180000);
-    return () => {
-      if (intervalRef.current) window.clearInterval(intervalRef.current);
-    };
-  }, [tracking, activeVisit, captureLocation]);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -356,12 +321,12 @@ export default function FieldStaffPage() {
           <h1 className="text-2xl font-bold md:text-3xl">Field Staff</h1>
           <p className="text-sm text-slate-500">Start tracking, check in at customers, and close visits from mobile.</p>
           <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${gpsBadge()}`}>
-            {gpsState === "checking" || gpsState === "prompt" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
+            {gpsState === "checking" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
             {gpsLabel()}
-            {location && <span className="font-normal">±{Math.round(location.coords.accuracy)}m</span>}
+            {location && <span className="font-normal">+/-{Math.round(location.coords.accuracy)}m</span>}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={tracking ? stopTracking : startTracking}
@@ -372,12 +337,19 @@ export default function FieldStaffPage() {
           </button>
           <button
             type="button"
-            onClick={() => captureLocation(activeVisit ? "ON_VISIT" : "ACTIVE")}
-            disabled={gpsState === "checking" || gpsState === "prompt"}
+            onClick={requestGPS}
+            disabled={gpsState === "checking"}
             className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold disabled:opacity-60"
           >
-            {gpsState === "checking" || gpsState === "prompt" ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
-            {gpsState === "checking" || gpsState === "prompt" ? "GPS..." : "GPS"}
+            {gpsState === "checking" ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
+            {gpsState === "checking" ? "GPS..." : "GPS"}
+          </button>
+          <button
+            type="button"
+            onClick={forceRequestGPS}
+            className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-brand-300 px-4 py-3 text-sm font-semibold text-brand-700"
+          >
+            Force Request GPS
           </button>
         </div>
       </div>
@@ -387,20 +359,12 @@ export default function FieldStaffPage() {
         <div className={`rounded-lg border p-3 text-sm ${gpsState === "denied" || gpsState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
           <p className="font-semibold">{gpsError}</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => captureLocation(activeVisit ? "ON_VISIT" : "ACTIVE")}
-              className="flex min-h-10 items-center gap-2 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white"
-            >
+            <button type="button" onClick={forceRequestGPS} className="flex min-h-10 items-center gap-2 rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white">
               <RefreshCw className="h-4 w-4" />
               Retry GPS
             </button>
             {(gpsState === "denied" || gpsState === "error") && (
-              <button
-                type="button"
-                onClick={openLocationSettings}
-                className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold"
-              >
+              <button type="button" onClick={openLocationSettings} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold">
                 <Settings className="h-4 w-4" />
                 Open Settings
               </button>
@@ -410,18 +374,9 @@ export default function FieldStaffPage() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <p className="text-xs text-slate-500">Visits today</p>
-          <p className="mt-2 text-2xl font-bold">{todaySummary.visits}</p>
-        </div>
-        <div className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <p className="text-xs text-slate-500">Completed</p>
-          <p className="mt-2 text-2xl font-bold">{todaySummary.completed}</p>
-        </div>
-        <div className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <p className="text-xs text-slate-500">Recovered</p>
-          <p className="mt-2 text-2xl font-bold">{money(todaySummary.recovered)}</p>
-        </div>
+        <Stat label="Visits today" value={summary.visits} />
+        <Stat label="Completed" value={summary.completed} />
+        <Stat label="Recovered" value={money(summary.recovered)} />
       </div>
 
       {activeVisit ? (
@@ -430,14 +385,12 @@ export default function FieldStaffPage() {
             <div>
               <p className="text-xs font-semibold text-emerald-700">ACTIVE VISIT</p>
               <h2 className="mt-1 text-xl font-bold">{activeVisit.customer.partyName}</h2>
-              <p className="text-sm text-slate-600">{activeVisit.customer.contactNumber} · {money(activeVisit.customer.outstandingBalance)}</p>
+              <p className="text-sm text-slate-600">{activeVisit.customer.contactNumber} - {money(activeVisit.customer.outstandingBalance)}</p>
               <p className="mt-1 text-xs text-slate-500">Checked in {formatTime(activeVisit.checkInAt)}</p>
             </div>
-            {activeVisit.verified ? (
-              <span className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">Verified</span>
-            ) : (
-              <span className="rounded-full bg-amber-500 px-3 py-1 text-xs font-semibold text-white">Verify</span>
-            )}
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white ${activeVisit.verified ? "bg-emerald-600" : "bg-amber-500"}`}>
+              {activeVisit.verified ? "Verified" : "Verify"}
+            </span>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <select value={result} onChange={(e) => setResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -451,7 +404,7 @@ export default function FieldStaffPage() {
             </button>
           </div>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-24 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
-          <button type="button" onClick={checkOut} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-semibold text-white">
+          <button type="button" onClick={checkOut} disabled={gpsState === "checking"} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-semibold text-white disabled:opacity-60">
             <CheckCircle2 className="h-5 w-5" />
             Check Out & Save Visit
           </button>
@@ -506,6 +459,15 @@ export default function FieldStaffPage() {
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-2 text-2xl font-bold">{value}</p>
     </div>
   );
 }
