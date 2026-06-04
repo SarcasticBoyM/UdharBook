@@ -20,6 +20,10 @@ const createSchema = z.object({
   accountHolderName: z.string().min(1),
   collectionDateTime: z.string().datetime(),
   collectionNotes: z.string().optional(),
+  staffVisitId: z.string().optional(),
+  collectionLatitude: z.number().min(-90).max(90).optional(),
+  collectionLongitude: z.number().min(-180).max(180).optional(),
+  collectionAccuracy: z.number().optional(),
   frontImageUrl: z.string().optional(),
   micrCode: z.string().optional(),
   ifscCode: z.string().optional(),
@@ -57,6 +61,20 @@ function chequeInclude() {
     depositedBy: { select: { id: true, name: true, role: true } },
     depositReceiptUploadedBy: { select: { id: true, name: true, role: true } },
     depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
+    staffVisit: {
+      select: {
+        id: true,
+        checkInAt: true,
+        checkOutAt: true,
+        checkInLat: true,
+        checkInLng: true,
+        notes: true,
+        result: true,
+        visitType: true,
+        verified: true,
+        staff: { select: { name: true, role: true } },
+      },
+    },
     activities: {
       orderBy: { createdAt: "desc" as const },
       include: { user: { select: { name: true, role: true } } },
@@ -78,7 +96,15 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     accountHolderName: cheque.accountHolderName,
     status: cheque.status,
     collectionDateTime: cheque.collectionDateTime,
+    collectionLatitude: cheque.collectionLatitude,
+    collectionLongitude: cheque.collectionLongitude,
+    collectionAccuracy: cheque.collectionAccuracy,
     collectionNotes: cheque.collectionNotes ?? "",
+    staffVisitId: cheque.staffVisitId ?? "",
+    visitNotes: cheque.staffVisit?.notes ?? "",
+    visitResult: cheque.staffVisit?.result ?? "",
+    visitType: cheque.staffVisit?.visitType ?? "",
+    visitGps: cheque.staffVisit ? `${cheque.staffVisit.checkInLat},${cheque.staffVisit.checkInLng}` : "",
     collectedBy: cheque.collectedBy.name,
     depositedBy: cheque.depositedBy?.name ?? "",
     depositedAccount: cheque.depositedAccount
@@ -93,6 +119,7 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     micrCode: cheque.micrCode ?? "",
     ifscCode: cheque.ifscCode ?? "",
     ocrConfidence: cheque.ocrConfidence ?? 0,
+    frontImageUrl: cheque.frontImageUrl ?? "",
     bounceReason: cheque.bounceReason ?? "",
     clearedAt: cheque.clearedAt,
     bouncedAt: cheque.bouncedAt,
@@ -115,6 +142,10 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
     { header: "Status", key: "status", width: 18 },
     { header: "Collected By", key: "collectedBy", width: 18 },
     { header: "Collection Date", key: "collectionDateTime", width: 24 },
+    { header: "Visit Type", key: "visitType", width: 18 },
+    { header: "Visit Notes", key: "visitNotes", width: 32 },
+    { header: "Visit GPS", key: "visitGps", width: 24 },
+    { header: "Cheque Image", key: "frontImageUrl", width: 28 },
     { header: "Deposited By", key: "depositedBy", width: 18 },
     { header: "Deposited Account", key: "depositedAccount", width: 28 },
     { header: "Deposit Date", key: "depositDateTime", width: 24 },
@@ -133,6 +164,10 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
       ...row,
       chequeDate: row.chequeDate.toISOString(),
       collectionDateTime: row.collectionDateTime.toISOString(),
+      visitType: row.visitType,
+      visitNotes: row.visitNotes,
+      visitGps: row.visitGps,
+      frontImageUrl: row.frontImageUrl,
       depositDateTime: row.depositDateTime?.toISOString() ?? "",
     })
   );
@@ -153,6 +188,10 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       "Status",
       "Collected By",
       "Collection Date",
+      "Visit Type",
+      "Visit Notes",
+      "Visit GPS",
+      "Cheque Image",
       "Deposited By",
       "Deposit Date",
       "Deposit Account",
@@ -174,6 +213,10 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       row.status,
       row.collectedBy,
       row.collectionDateTime.toISOString(),
+      row.visitType,
+      row.visitNotes,
+      row.visitGps,
+      row.frontImageUrl,
       row.depositedBy,
       row.depositedAccount,
       row.depositDateTime?.toISOString() ?? "",
@@ -368,6 +411,15 @@ export async function POST(request: Request) {
     const body = createSchema.parse(await request.json());
     const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+    const linkedVisit = body.staffVisitId
+      ? await prisma.staffVisit.findFirst({
+          where: { id: body.staffVisitId, shopId, customerId: body.customerId },
+          select: { id: true, staffId: true, notes: true, result: true },
+        })
+      : null;
+    if (body.staffVisitId && !linkedVisit) {
+      return NextResponse.json({ error: "Linked visit not found for this customer" }, { status: 404 });
+    }
 
     const cheque = await prisma.$transaction(async (tx) => {
       const created = await tx.cheque.create({
@@ -381,6 +433,10 @@ export async function POST(request: Request) {
           amount: body.amount,
           accountHolderName: body.accountHolderName,
           collectedById: session.id,
+          staffVisitId: body.staffVisitId,
+          collectionLatitude: body.collectionLatitude,
+          collectionLongitude: body.collectionLongitude,
+          collectionAccuracy: body.collectionAccuracy,
           collectionDateTime: new Date(body.collectionDateTime),
           collectionNotes: body.collectionNotes,
           frontImageUrl: body.frontImageUrl,
@@ -404,6 +460,19 @@ export async function POST(request: Request) {
           notes: body.collectionNotes ?? "Cheque collected",
         },
       });
+      if (linkedVisit) {
+        await tx.staffVisit.update({
+          where: { id: linkedVisit.id },
+          data: {
+            visitType: "Cheque Pickup",
+            result: "Cheque collected",
+            notes: [
+              linkedVisit.notes,
+              `Cheque collected: ${body.chequeNumber} | ${body.bankName} | ${body.amount}`,
+            ].filter(Boolean).join("\n"),
+          },
+        });
+      }
       return created;
     });
 

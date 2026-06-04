@@ -62,6 +62,19 @@ export async function GET(request: Request) {
           },
         },
         photos: { orderBy: { createdAt: "desc" }, take: 6 },
+        cheques: {
+          orderBy: { createdAt: "desc" },
+          take: 6,
+          select: {
+            id: true,
+            chequeNumber: true,
+            bankName: true,
+            amount: true,
+            status: true,
+            collectionDateTime: true,
+            frontImageUrl: true,
+          },
+        },
       },
       orderBy: { checkInAt: "desc" },
       take: 200,
@@ -167,8 +180,9 @@ export async function POST(request: Request) {
           outsideWarning: distance !== null && !verified,
         },
         include: {
-          customer: { select: { partyName: true, contactNumber: true, outstandingBalance: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
           staff: { select: { name: true, role: true } },
+          cheques: true,
         },
       });
 

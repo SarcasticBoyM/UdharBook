@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import {
   Activity,
   Camera,
@@ -33,6 +34,9 @@ type Visit = {
   status: "CHECKED_IN" | "COMPLETED" | "CANCELLED";
   checkInAt: string;
   checkOutAt: string | null;
+  checkInLat?: number;
+  checkInLng?: number;
+  accuracy?: number | null;
   verified: boolean;
   outsideWarning: boolean;
   notes: string | null;
@@ -40,7 +44,16 @@ type Visit = {
   recoveryAmount: number;
   visitType?: string;
   staff?: { name: string; role: string };
-  customer: { partyName: string; contactNumber: string; outstandingBalance: number };
+  customer: { id?: string; partyName: string; contactNumber: string; outstandingBalance: number };
+  cheques?: {
+    id: string;
+    chequeNumber: string;
+    bankName: string;
+    amount: number;
+    status: string;
+    collectionDateTime: string;
+    frontImageUrl: string | null;
+  }[];
 };
 
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
@@ -78,6 +91,7 @@ export default function FieldStaffPage() {
   const [result, setResult] = useState(quickResults[0]);
   const [recoveryAmount, setRecoveryAmount] = useState("");
   const [nextFollowupDate, setNextFollowupDate] = useState("");
+  const [showChequeFlow, setShowChequeFlow] = useState(false);
 
   const canCheckIn = Boolean((selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
@@ -108,7 +122,9 @@ export default function FieldStaffPage() {
     const data = await res.json();
     if (data.success) {
       setVisits(data.visits);
-      setActiveVisit(data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null);
+      const openVisit = data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null;
+      setActiveVisit(openVisit);
+      setShowChequeFlow(openVisit?.visitType === "Cheque Pickup" || openVisit?.result === "Cheque collected");
     }
   }, []);
 
@@ -380,6 +396,9 @@ export default function FieldStaffPage() {
           onRecovery={setRecoveryAmount}
           onNextFollowup={setNextFollowupDate}
           onCheckOut={checkOut}
+          showChequeFlow={showChequeFlow}
+          onToggleChequeFlow={setShowChequeFlow}
+          onSavedCheque={loadVisits}
         />
       ) : (
         <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
@@ -509,6 +528,9 @@ function ActiveVisitCard({
   onRecovery,
   onNextFollowup,
   onCheckOut,
+  showChequeFlow,
+  onToggleChequeFlow,
+  onSavedCheque,
 }: {
   visit: Visit;
   notes: string;
@@ -521,7 +543,11 @@ function ActiveVisitCard({
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
   onCheckOut: () => void;
+  showChequeFlow: boolean;
+  onToggleChequeFlow: (value: boolean) => void;
+  onSavedCheque: () => void;
 }) {
+  const latestCheque = visit.cheques?.[0];
   return (
     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
       <div className="flex items-start justify-between gap-3">
@@ -545,11 +571,250 @@ function ActiveVisitCard({
           <Camera className="h-5 w-5" /> Add photo
         </button>
       </div>
+      {latestCheque && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-white p-3 text-sm shadow-sm dark:border-emerald-900 dark:bg-slate-900">
+          <p className="text-xs font-semibold uppercase text-emerald-700">Collected Cheque</p>
+          <div className="mt-2 flex items-start justify-between gap-3">
+            <div>
+              <p className="font-bold">{latestCheque.chequeNumber} · {latestCheque.bankName}</p>
+              <p className="text-xs text-slate-500">{formatDateTime(latestCheque.collectionDateTime)}</p>
+            </div>
+            <div className="text-right">
+              <p className="font-bold">{money(latestCheque.amount)}</p>
+              <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">{latestCheque.status}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {(result === "Cheque pickup" || result === "Cheque pickup" || result === "Cheque Pickup" || visit.visitType === "Cheque Pickup") && (
+        <button
+          type="button"
+          onClick={() => onToggleChequeFlow(!showChequeFlow)}
+          className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white"
+        >
+          {showChequeFlow ? "Hide Cheque Collection" : "Open Cheque Collection"}
+        </button>
+      )}
+      {showChequeFlow && (
+        <VisitChequeCollection
+          visit={visit}
+          onSaved={onSavedCheque}
+        />
+      )}
       <textarea value={notes} onChange={(e) => onNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-24 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
       <button type="button" onClick={onCheckOut} disabled={gpsChecking} className="mt-3 flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-semibold text-white disabled:opacity-60">
         <CheckCircle2 className="h-5 w-5" /> Check Out & Save Visit
       </button>
     </section>
+  );
+}
+
+function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () => void }) {
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [confidence, setConfidence] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    chequeNumber: "",
+    amount: "",
+    bankName: "",
+    branch: "",
+    chequeDate: "",
+    accountHolderName: visit.customer.partyName,
+    notes: "",
+    micrCode: "",
+    ifscCode: "",
+    ocrRawText: "",
+  });
+
+  const canSave =
+    Boolean(visit.customer.id) &&
+    form.chequeNumber.trim() &&
+    Number(form.amount) > 0 &&
+    form.bankName.trim() &&
+    form.chequeDate &&
+    form.accountHolderName.trim();
+
+  function setField(field: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function handleImage(file?: File) {
+    if (!file) return;
+    setError("");
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const value = String(reader.result || "");
+      setImageDataUrl(value);
+      await scan(value);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function normalizeDate(value?: string) {
+    if (!value) return "";
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+    const match = value.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+    if (!match) return "";
+    const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+    return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+  }
+
+  async function scan(image: string) {
+    setScanning(true);
+    const res = await fetch("/api/cheques/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageDataUrl: image }),
+    });
+    const result = await res.json();
+    setScanning(false);
+    setConfidence(result.confidence ?? 0);
+    if (!result.ok) {
+      setError(result.warning ?? "Could not detect all cheque details. Please verify manually.");
+    }
+    setForm((current) => ({
+      ...current,
+      chequeNumber: result.fields?.chequeNumber ?? current.chequeNumber,
+      amount: result.fields?.amount ? String(result.fields.amount) : current.amount,
+      bankName: result.fields?.bankName ?? current.bankName,
+      branch: result.fields?.branch ?? current.branch,
+      chequeDate: normalizeDate(result.fields?.chequeDate) || current.chequeDate,
+      accountHolderName: result.fields?.accountHolderName ?? current.accountHolderName,
+      micrCode: result.fields?.micrCode ?? current.micrCode,
+      ifscCode: result.fields?.ifscCode ?? current.ifscCode,
+      ocrRawText: result.rawText ?? current.ocrRawText,
+    }));
+  }
+
+  async function saveCheque() {
+    if (!canSave || !visit.customer.id) {
+      setError("Please complete cheque number, amount, bank, date, and account holder.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const res = await fetch("/api/cheques", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customerId: visit.customer.id,
+        staffVisitId: visit.id,
+        chequeNumber: form.chequeNumber.trim(),
+        bankName: form.bankName.trim(),
+        branch: form.branch || undefined,
+        chequeDate: new Date(`${form.chequeDate}T00:00:00`).toISOString(),
+        amount: Number(form.amount),
+        accountHolderName: form.accountHolderName.trim(),
+        collectionDateTime: new Date().toISOString(),
+        collectionNotes: form.notes || `Collected during field visit ${visit.id}`,
+        frontImageUrl: imageDataUrl || undefined,
+        micrCode: form.micrCode || undefined,
+        ifscCode: form.ifscCode || undefined,
+        ocrRawText: form.ocrRawText || undefined,
+        ocrConfidence: confidence ?? undefined,
+        collectionLatitude: visit.checkInLat,
+        collectionLongitude: visit.checkInLng,
+        collectionAccuracy: visit.accuracy ?? undefined,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setSaving(false);
+    if (!res.ok) {
+      setError(data.error ?? "Could not save cheque.");
+      return;
+    }
+    setForm({
+      chequeNumber: "",
+      amount: "",
+      bankName: "",
+      branch: "",
+      chequeDate: "",
+      accountHolderName: visit.customer.partyName,
+      notes: "",
+      micrCode: "",
+      ifscCode: "",
+      ocrRawText: "",
+    });
+    setImageDataUrl("");
+    onSaved();
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-brand-600">Cheque Collection</p>
+          <h3 className="font-bold">{visit.customer.partyName}</h3>
+          <p className="text-xs text-slate-500">{visit.customer.contactNumber} · Balance {money(visit.customer.outstandingBalance)}</p>
+        </div>
+        {confidence !== null && <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">OCR {Math.round(confidence * 100)}%</span>}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white">
+          <Camera className="h-4 w-4" /> Camera
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(event) => handleImage(event.target.files?.[0])} />
+        </label>
+        <label className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold">
+          Upload from Gallery
+          <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => handleImage(event.target.files?.[0])} />
+        </label>
+      </div>
+      {imageDataUrl && (
+        <div className="relative mt-3 h-52 w-full overflow-hidden rounded-lg border bg-slate-50 dark:border-slate-700 dark:bg-slate-950">
+          <Image src={imageDataUrl} alt="Cheque preview" fill unoptimized className="object-contain" />
+        </div>
+      )}
+      {scanning && <p className="mt-2 text-sm text-blue-700">Scanning cheque...</p>}
+      {error && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">{error}</p>}
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Input label="Cheque number" value={form.chequeNumber} onChange={(value) => setField("chequeNumber", value)} required />
+        <Input label="Amount" value={form.amount} onChange={(value) => setField("amount", value)} inputMode="decimal" required />
+        <Input label="Bank" value={form.bankName} onChange={(value) => setField("bankName", value)} required />
+        <Input label="Branch" value={form.branch} onChange={(value) => setField("branch", value)} />
+        <Input label="Cheque date" type="date" value={form.chequeDate} onChange={(value) => setField("chequeDate", value)} required />
+        <Input label="Account holder" value={form.accountHolderName} onChange={(value) => setField("accountHolderName", value)} required />
+        <Input label="MICR" value={form.micrCode} onChange={(value) => setField("micrCode", value)} />
+        <Input label="IFSC" value={form.ifscCode} onChange={(value) => setField("ifscCode", value)} />
+      </div>
+      <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} placeholder="Cheque notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+      <button type="button" onClick={saveCheque} disabled={saving || !canSave} className="mt-3 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+        {saving ? "Saving cheque..." : "Save Cheque to Recovery Desk"}
+      </button>
+    </div>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+  required,
+  type = "text",
+  inputMode,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  type?: string;
+  inputMode?: "decimal" | "numeric" | "tel";
+}) {
+  return (
+    <label className="text-sm">
+      <span className="mb-1 block font-medium">{label}{required ? " *" : ""}</span>
+      <input
+        type={type}
+        inputMode={inputMode}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-12 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900"
+      />
+    </label>
   );
 }
 

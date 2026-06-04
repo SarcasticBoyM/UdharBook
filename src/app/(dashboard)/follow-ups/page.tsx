@@ -78,6 +78,19 @@ type ChequeReportRow = {
   depositDateTime: string | null;
   clearedAt: string | null;
   bouncedAt: string | null;
+  frontImageUrl?: string | null;
+  depositReceiptUrl?: string | null;
+  collectionLatitude?: number | null;
+  collectionLongitude?: number | null;
+  staffVisit?: {
+    id: string;
+    notes: string | null;
+    result: string | null;
+    visitType: string;
+    checkInLat: number;
+    checkInLng: number;
+    verified: boolean;
+  } | null;
   customer: { partyName: string; contactNumber: string };
   collectedBy: { name: string };
   depositedAccount: { bankName: string; accountName: string; lastFourDigits: string } | null;
@@ -436,7 +449,7 @@ export default function FollowUpReportsPage() {
         </div>
 
         <div className="mt-4 overflow-x-auto">
-          <table className="min-w-[1100px] w-full text-left text-sm">
+          <table className="min-w-[1500px] w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
               <tr>
                 <Th>Customer</Th>
@@ -445,6 +458,10 @@ export default function FollowUpReportsPage() {
                 <Th>Status</Th>
                 <Th>Collected By</Th>
                 <Th>Deposit Account</Th>
+                <Th>Cheque Image</Th>
+                <Th>Receipt</Th>
+                <Th>Visit Notes</Th>
+                <Th>GPS</Th>
                 <Th>Collected Date</Th>
                 <Th>Deposited Date</Th>
                 <Th>Cleared Date</Th>
@@ -465,6 +482,32 @@ export default function FollowUpReportsPage() {
                         ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}`
                         : "-"}
                     </Td>
+                    <Td>
+                      {cheque.frontImageUrl ? (
+                        <a href={cheque.frontImageUrl} target="_blank" className="text-brand-600 hover:underline">View</a>
+                      ) : "-"}
+                    </Td>
+                    <Td>
+                      {cheque.depositReceiptUrl ? (
+                        <a href={cheque.depositReceiptUrl} target="_blank" className="text-brand-600 hover:underline">View</a>
+                      ) : "-"}
+                    </Td>
+                    <Td>
+                      <span className="block max-w-xs truncate">{cheque.staffVisit?.result ?? cheque.staffVisit?.notes ?? "-"}</span>
+                    </Td>
+                    <Td>
+                      {cheque.staffVisit ? (
+                        <a
+                          href={`https://www.google.com/maps?q=${cheque.staffVisit.checkInLat},${cheque.staffVisit.checkInLng}`}
+                          target="_blank"
+                          className="text-brand-600 hover:underline"
+                        >
+                          Map
+                        </a>
+                      ) : cheque.collectionLatitude && cheque.collectionLongitude ? (
+                        <a href={`https://www.google.com/maps?q=${cheque.collectionLatitude},${cheque.collectionLongitude}`} target="_blank" className="text-brand-600 hover:underline">Map</a>
+                      ) : "-"}
+                    </Td>
                     <Td>{formatDateTime(cheque.collectionDateTime)}</Td>
                     <Td>{formatDateTime(cheque.depositDateTime)}</Td>
                     <Td>{formatDateTime(cheque.clearedAt)}</Td>
@@ -473,7 +516,7 @@ export default function FollowUpReportsPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={10} className="p-8 text-center text-slate-500">
+                  <td colSpan={14} className="p-8 text-center text-slate-500">
                     No cheque rows match the selected filters.
                   </td>
                 </tr>

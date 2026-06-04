@@ -257,6 +257,7 @@ model StaffVisit {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   photos          VisitPhoto[]
+  cheques         Cheque[]
 
   @@index([shopId, checkInAt])
   @@index([staffId, checkInAt])
@@ -382,6 +383,11 @@ model Cheque {
   accountHolderName  String
   collectedById      String
   collectedBy        User         @relation("ChequeCollectedBy", fields: [collectedById], references: [id])
+  staffVisitId       String?
+  staffVisit         StaffVisit?  @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
+  collectionLatitude Float?
+  collectionLongitude Float?
+  collectionAccuracy Float?
   collectionDateTime DateTime
   collectionNotes    String?
   frontImageUrl      String?
@@ -420,6 +426,7 @@ model Cheque {
   @@index([shopId, collectionDateTime])
   @@index([shopId, depositDateTime])
   @@index([shopId, depositedAccountId])
+  @@index([staffVisitId])
   @@index([depositReceiptUploadedById])
   @@index([customerId, createdAt])
   @@index([collectedById, collectionDateTime])
