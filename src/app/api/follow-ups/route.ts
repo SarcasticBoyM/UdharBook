@@ -8,6 +8,8 @@ import { logActivity } from "@/lib/activity";
 const schema = z.object({
   customerId: z.string(),
   status: z.enum([
+    "CALLBACK",
+    "FOLLOW_UP_REQUIRED",
     "CONTACTED",
     "PAYMENT_PROMISED",
     "PARTIAL_PAID",
@@ -23,6 +25,9 @@ const schema = z.object({
   notes: z.string().optional(),
   reminderNotes: z.string().optional(),
   customerResponse: z.string().optional(),
+  manualReminder: z.boolean().optional(),
+  reminderEnabled: z.boolean().optional(),
+  nextFollowUpDateTime: z.string().datetime().optional().nullable(),
   scheduledAt: z.string().datetime().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
   paidAmount: z.number().min(0).optional(),
@@ -32,7 +37,7 @@ function customerStatusFromFollowUp(status: z.infer<typeof schema>["status"], ba
   if (status === "PAID" || balance === 0) return "CLEARED";
   if (status === "COMPLETED") return balance === 0 ? "CLEARED" : "ACTIVE";
   if (status === "MISSED") return "HIGH_RISK";
-  if (status === "RESCHEDULED") return "PENDING";
+  if (status === "RESCHEDULED" || status === "CALLBACK" || status === "FOLLOW_UP_REQUIRED") return "PENDING";
   if (status === "NOT_REACHABLE" || status === "WRONG_NUMBER") return "HIGH_RISK";
   if (status === "CONTACTED" || status === "PAYMENT_PROMISED" || status === "PARTIAL_PAID") return "ACTIVE";
   return "PENDING";
@@ -48,7 +53,11 @@ export async function POST(request: Request) {
     const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
-    const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+    const requestedReminderAt = body.nextFollowUpDateTime ?? body.scheduledAt ?? body.nextFollowupDate;
+    const reminderDateTime = requestedReminderAt ? new Date(requestedReminderAt) : null;
+    const reminderStatusAllowed = body.status === "CALLBACK" || body.status === "FOLLOW_UP_REQUIRED";
+    const reminderEnabled = Boolean(body.manualReminder && body.reminderEnabled !== false && reminderDateTime && reminderStatusAllowed);
+    const scheduledAt = reminderEnabled ? reminderDateTime : null;
     const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : scheduledAt;
     const now = new Date();
     const isCompleteAction = body.status === "COMPLETED" || body.status === "PAID";
@@ -71,6 +80,9 @@ export async function POST(request: Request) {
           notes: body.notes,
           reminderNotes: body.reminderNotes,
           customerResponse: body.customerResponse,
+          manualReminder: reminderEnabled,
+          reminderEnabled,
+          nextFollowUpDateTime: reminderEnabled ? reminderDateTime : null,
           scheduledAt,
           completedAt: isCompleteAction ? now : null,
           rescheduledAt: isRescheduledAction ? now : null,

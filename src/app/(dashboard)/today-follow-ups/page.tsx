@@ -25,6 +25,8 @@ import { displayPhone, telHref } from "@/lib/phone";
 import { paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
 
 type QueueStatus =
+  | "CALLBACK"
+  | "FOLLOW_UP_REQUIRED"
   | "CONTACTED"
   | "NOT_REACHABLE"
   | "PAYMENT_PROMISED"
@@ -157,6 +159,8 @@ const FILTERS: { value: FilterKey; label: string }[] = [
 ];
 
 const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
+  { value: "CALLBACK", label: "Call Back", tone: "border-indigo-200 bg-indigo-50 text-indigo-800" },
+  { value: "FOLLOW_UP_REQUIRED", label: "Follow-up required", tone: "border-blue-200 bg-blue-50 text-blue-800" },
   { value: "CONTACTED", label: "Called", tone: "border-sky-200 bg-sky-50 text-sky-800" },
   { value: "NOT_REACHABLE", label: "Not reachable", tone: "border-amber-200 bg-amber-50 text-amber-800" },
   { value: "PAYMENT_PROMISED", label: "Payment promised", tone: "border-violet-200 bg-violet-50 text-violet-800" },
@@ -370,17 +374,12 @@ export default function TodayFollowUpsPage() {
   }, [soundEnabled]);
 
   useEffect(() => {
-    if (!("Notification" in window)) return;
-    if (Notification.permission === "default") Notification.requestPermission().catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
     const checkDue = async () => {
       if (!("Notification" in window) || Notification.permission !== "granted") return;
       const res = await fetch("/api/notifications/due");
       if (!res.ok) return;
       const data = (await res.json()) as {
-        reminders: { id: string; customerId: string; partyName: string; scheduledAt: string | null; missed: boolean }[];
+        reminders: { id: string; customerId: string; partyName: string; amount: number; scheduledAt: string | null; callbackNote?: string | null; missed: boolean }[];
       };
       const now = Date.now();
       for (const reminder of data.reminders) {
@@ -389,7 +388,7 @@ export default function TodayFollowUpsPage() {
         notifiedIds.current.add(reminder.id);
         playAlert();
         const notification = new Notification(`Follow-up due: ${reminder.partyName}`, {
-          body: reminder.missed ? "This follow-up is overdue." : "It is time to call this customer.",
+          body: `${reminder.missed ? "Missed callback." : "Callback time."} Balance ${formatCurrency(reminder.amount)}${reminder.callbackNote ? `. ${reminder.callbackNote}` : ""}`,
           icon: "/icon.svg",
         });
         notification.onclick = () => {
@@ -923,6 +922,7 @@ function ActionPanel({
   const [nextDate, setNextDate] = useState("");
   const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
   const [paidAmount, setPaidAmount] = useState("");
+  const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -931,6 +931,7 @@ function ActionPanel({
     setNotes("");
     setCustomerResponse("");
     setPaidAmount("");
+    setSetReminder(false);
     setPriority(derivedPriority(customer));
     setNextDate(customer.nextFollowupDate ? new Date(customer.nextFollowupDate).toISOString().slice(0, 16) : "");
   }, [customer]);
@@ -959,9 +960,12 @@ function ActionPanel({
           status,
           priority,
           notes: notes || undefined,
-          reminderNotes: nextDate ? `Reminder set for ${formatDateTime(scheduledAt)}` : undefined,
+          reminderNotes: setReminder && nextDate ? `Callback reminder set for ${formatDateTime(scheduledAt)}` : undefined,
           customerResponse: customerResponse || undefined,
-          scheduledAt,
+          manualReminder: setReminder,
+          reminderEnabled: setReminder,
+          nextFollowUpDateTime: setReminder && scheduledAt ? scheduledAt : null,
+          scheduledAt: setReminder ? scheduledAt : null,
           nextFollowupDate: scheduledAt,
           paidAmount: amount,
         }),
@@ -1114,6 +1118,26 @@ function ActionPanel({
                 </button>
               ))}
             </div>
+
+            <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+              <input
+                type="checkbox"
+                checked={setReminder}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setSetReminder(checked);
+                  if (checked && "Notification" in window && Notification.permission === "default") {
+                    Notification.requestPermission().catch(() => undefined);
+                  }
+                  if (checked && status !== "CALLBACK" && status !== "FOLLOW_UP_REQUIRED") setStatus("CALLBACK");
+                }}
+                className="mt-1 h-4 w-4"
+              />
+              <span>
+                <span className="block font-semibold">Set Reminder Notification</span>
+                <span className="text-xs text-slate-500">Notification will send once at the selected callback time only.</span>
+              </span>
+            </label>
 
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
               <div className="flex items-center gap-2">

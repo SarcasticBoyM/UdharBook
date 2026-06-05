@@ -9,19 +9,33 @@ export async function GET(request: Request) {
 
   const shopId = requireShopId(request, session);
   const now = new Date();
-  const inOneHour = new Date(now.getTime() + 60 * 60 * 1000);
 
-  const reminders = await prisma.followUp.findMany({
-    where: {
-      shopId,
-      status: { in: ["PENDING", "RESCHEDULED"] },
-      scheduledAt: { lte: inOneHour },
-    },
-    include: {
-      customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
-    },
-    orderBy: { scheduledAt: "asc" },
-    take: 50,
+  const reminders = await prisma.$transaction(async (tx) => {
+    const due = await tx.followUp.findMany({
+      where: {
+        shopId,
+        createdById: session.id,
+        manualReminder: true,
+        reminderEnabled: true,
+        reminderSentAt: null,
+        status: { in: ["CALLBACK", "FOLLOW_UP_REQUIRED"] },
+        nextFollowUpDateTime: { lte: now },
+      },
+      include: {
+        customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
+      },
+      orderBy: { nextFollowUpDateTime: "asc" },
+      take: 20,
+    });
+
+    if (due.length > 0) {
+      await tx.followUp.updateMany({
+        where: { id: { in: due.map((item) => item.id) } },
+        data: { reminderSentAt: now, remindedAt: now },
+      });
+    }
+
+    return due;
   });
 
   const payload = reminders.map((item) => ({
@@ -29,9 +43,11 @@ export async function GET(request: Request) {
     customerId: item.customerId,
     partyName: item.customer.partyName,
     amount: item.customer.outstandingBalance,
-    scheduledAt: item.scheduledAt,
+    scheduledAt: item.nextFollowUpDateTime,
+    dueTime: item.nextFollowUpDateTime,
+    callbackNote: item.reminderNotes ?? item.notes,
     priority: item.priority,
-    missed: item.scheduledAt ? item.scheduledAt < now : false,
+    missed: item.nextFollowUpDateTime ? item.nextFollowUpDateTime < now : false,
   }));
 
   return NextResponse.json({ reminders: payload, checkedAt: now.toISOString() });

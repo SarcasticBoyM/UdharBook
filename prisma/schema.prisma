@@ -23,6 +23,8 @@ enum CustomerStatus {
 
 enum FollowUpStatus {
   PENDING
+  CALLBACK
+  FOLLOW_UP_REQUIRED
   CONTACTED
   PAYMENT_PROMISED
   PARTIAL_PAID
@@ -315,10 +317,14 @@ model FollowUp {
   reminderNotes    String?
   customerResponse String?
   nextFollowupDate DateTime?
+  nextFollowUpDateTime DateTime?
   scheduledAt      DateTime?
   completedAt      DateTime?
   rescheduledAt    DateTime?
   remindedAt       DateTime?
+  reminderEnabled  Boolean        @default(false)
+  manualReminder   Boolean        @default(false)
+  reminderSentAt   DateTime?
   actionLoggedAt   DateTime       @default(now())
   queueRank        Int?
   createdById      String
@@ -328,6 +334,8 @@ model FollowUp {
   @@index([customerId, followupDate])
   @@index([nextFollowupDate])
   @@index([scheduledAt])
+  @@index([nextFollowUpDateTime])
+  @@index([shopId, manualReminder, reminderEnabled, reminderSentAt])
   @@index([rescheduledAt])
   @@index([priority])
   @@index([queueRank])

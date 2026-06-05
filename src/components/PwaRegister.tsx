@@ -24,13 +24,6 @@ export function PwaRegister() {
 
   useEffect(() => {
     if (!("Notification" in window)) return;
-    if (Notification.permission === "default") {
-      Notification.requestPermission().catch(() => undefined);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!("Notification" in window)) return;
 
     const check = async () => {
       if (Notification.permission !== "granted") return;
@@ -47,7 +40,7 @@ export function PwaRegister() {
             style: "currency",
             currency: "INR",
             maximumFractionDigits: 0,
-          }).format(reminder.amount)} pending payment.`;
+          }).format(reminder.amount)} balance.${reminder.callbackNote ? ` Note: ${reminder.callbackNote}` : ""}`;
           if (navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({
               type: "UDHARBOOK_NOTIFY",

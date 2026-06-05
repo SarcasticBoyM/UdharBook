@@ -5,6 +5,8 @@ import type { FollowUpPriority, FollowUpStatus } from "@prisma/client";
 
 const STATUSES: { value: FollowUpStatus; label: string }[] = [
   { value: "PENDING", label: "Pending" },
+  { value: "CALLBACK", label: "Call Back" },
+  { value: "FOLLOW_UP_REQUIRED", label: "Follow-up Required" },
   { value: "CONTACTED", label: "Contacted" },
   { value: "PAYMENT_PROMISED", label: "Payment Promised" },
   { value: "PAID", label: "Paid" },
@@ -26,6 +28,7 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
   const [reminderNotes, setReminderNotes] = useState("");
   const [customerResponse, setCustomerResponse] = useState("");
   const [nextDate, setNextDate] = useState("");
+  const [setReminder, setSetReminder] = useState(false);
   const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -45,7 +48,10 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
           notes: notes || undefined,
           reminderNotes: reminderNotes || undefined,
           customerResponse: customerResponse || undefined,
-          scheduledAt: nextDate ? new Date(nextDate).toISOString() : null,
+          manualReminder: setReminder,
+          reminderEnabled: setReminder,
+          nextFollowUpDateTime: setReminder && nextDate ? new Date(nextDate).toISOString() : null,
+          scheduledAt: setReminder && nextDate ? new Date(nextDate).toISOString() : null,
           nextFollowupDate: nextDate ? new Date(nextDate).toISOString() : null,
         }),
       });
@@ -102,6 +108,26 @@ export function FollowUpModal({ customerId, onClose, onSaved }: Props) {
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
               />
             </div>
+
+            <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
+              <input
+                type="checkbox"
+                checked={setReminder}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setSetReminder(checked);
+                  if (checked && "Notification" in window && Notification.permission === "default") {
+                    Notification.requestPermission().catch(() => undefined);
+                  }
+                  if (checked && status !== "CALLBACK" && status !== "FOLLOW_UP_REQUIRED") setStatus("CALLBACK");
+                }}
+                className="mt-1 h-4 w-4"
+              />
+              <span>
+                <span className="block font-semibold">Set Reminder Notification</span>
+                <span className="text-xs text-slate-500">Only callback reminders with date and time will send a notification.</span>
+              </span>
+            </label>
 
             <div>
               <label className="text-sm font-medium">Reminder notes</label>

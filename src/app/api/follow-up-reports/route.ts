@@ -49,7 +49,11 @@ function rowFromFollowUp(row: Prisma.FollowUpGetPayload<{
     mobileNumber: row.customer.contactNumber,
     outstandingAmount: row.customer.outstandingBalance,
     followUpDateTime: row.followupDate,
-    reminderStatus: row.remindedAt ? "Reminder sent" : row.scheduledAt ? "Reminder scheduled" : "No reminder",
+    reminderStatus: row.reminderSentAt
+      ? "Manual reminder sent"
+      : row.manualReminder && row.reminderEnabled && row.nextFollowUpDateTime
+        ? "Manual reminder scheduled"
+        : "No reminder",
     lastFollowUp: row.customer.lastFollowupDate ?? row.followupDate,
     nextFollowUp: row.nextFollowupDate ?? row.customer.nextFollowupDate,
     staffId: row.createdById,
