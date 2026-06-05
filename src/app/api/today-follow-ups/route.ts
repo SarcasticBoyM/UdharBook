@@ -159,6 +159,64 @@ function matchesFilter(filter: string, customer: QueueCustomer, todayStart: Date
   return true;
 }
 
+function databaseFilter(filter: string, todayStart: Date, todayEnd: Date): Prisma.CustomerWhereInput {
+  if (filter === "overdue") return { nextFollowupDate: { lt: todayStart } };
+  if (filter === "today") return { nextFollowupDate: { gte: todayStart, lte: todayEnd } };
+  if (filter === "high_amount") return { outstandingBalance: { gte: HIGH_AMOUNT } };
+  if (filter === "no_followup") return { followUps: { none: {} }, lastFollowupDate: null };
+  if (filter === "promise") return { followUps: { some: { status: "PAYMENT_PROMISED" } } };
+  if (filter === "not_answering") return { followUps: { some: { status: "NOT_REACHABLE" } } };
+  if (filter === "urgent") {
+    return {
+      OR: [
+        { status: "HIGH_RISK" },
+        { nextFollowupDate: { lt: todayStart } },
+        { outstandingBalance: { gte: HIGH_AMOUNT } },
+        { followUps: { some: { priority: "URGENT" } } },
+      ],
+    };
+  }
+  return {};
+}
+
+function databaseSearch(search: string): Prisma.CustomerWhereInput {
+  if (!search) return {};
+  const amount = Number(search.replace(/,/g, ""));
+  return {
+    OR: [
+      { partyName: { contains: search, mode: "insensitive" } },
+      { contactNumber: { contains: search.replace(/\D/g, "") || search } },
+      { notes: { contains: search, mode: "insensitive" } },
+      ...(Number.isFinite(amount) ? [{ outstandingBalance: amount }] : []),
+      { followUps: { some: { notes: { contains: search, mode: "insensitive" } } } },
+      { followUps: { some: { customerResponse: { contains: search, mode: "insensitive" } } } },
+    ],
+  };
+}
+
+function databaseOrder(sort: SortKey): Prisma.CustomerOrderByWithRelationInput[] {
+  switch (sort) {
+    case "amount_desc":
+      return [{ outstandingBalance: "desc" }, { nextFollowupDate: "asc" }];
+    case "amount_asc":
+      return [{ outstandingBalance: "asc" }, { nextFollowupDate: "asc" }];
+    case "overdue_desc":
+    case "oldest_followup":
+      return [{ nextFollowupDate: "asc" }, { outstandingBalance: "desc" }];
+    case "newest_followup":
+    case "last_contacted":
+      return [{ lastFollowupDate: "desc" }, { outstandingBalance: "desc" }];
+    case "never_contacted":
+      return [{ lastFollowupDate: "asc" }, { outstandingBalance: "desc" }];
+    case "az":
+      return [{ partyName: "asc" }];
+    case "za":
+      return [{ partyName: "desc" }];
+    default:
+      return [{ nextFollowupDate: "asc" }, { outstandingBalance: "desc" }];
+  }
+}
+
 async function seedMissingFollowUps(shopId: string, userId: string) {
   const today = new Date();
   const missing = await prisma.customer.findMany({
@@ -233,11 +291,6 @@ export async function GET(request: Request) {
     },
   };
 
-  const where: Prisma.CustomerWhereInput = {
-    shopId,
-    outstandingBalance: { gt: 0 },
-  };
-
   const realActionTodayWhere: Prisma.FollowUpWhereInput = {
     status: { not: "PENDING" },
     OR: [
@@ -247,16 +300,28 @@ export async function GET(request: Request) {
     ],
   };
 
-  const [customers, doneCustomers, todayRecovery, staffActivity] = await prisma.$transaction([
+  const pendingWhere: Prisma.CustomerWhereInput = {
+    AND: [
+      { shopId, outstandingBalance: { gt: 0 } },
+      databaseFilter(filter, todayStart, todayEnd),
+      databaseSearch(search),
+    ],
+  };
+  const pageWindow = skip + Math.min(take * 3, 300);
+
+  const [customers, pendingTotal, pendingAmount, doneCustomers, todayRecovery, staffActivity, overdueCount] = await prisma.$transaction([
     prisma.customer.findMany({
-      where,
+      where: pendingWhere,
       include,
-      orderBy: [{ nextFollowupDate: "asc" }, { outstandingBalance: "desc" }],
-      take: 1000,
+      orderBy: databaseOrder(sort),
+      take: pageWindow,
     }),
+    prisma.customer.count({ where: pendingWhere }),
+    prisma.customer.aggregate({ where: pendingWhere, _sum: { outstandingBalance: true } }),
     prisma.customer.findMany({
       where: {
         shopId,
+        ...databaseSearch(search),
         followUps: {
           some: realActionTodayWhere,
         },
@@ -275,6 +340,7 @@ export async function GET(request: Request) {
       orderBy: { createdById: "asc" },
       _count: { _all: true },
     }),
+    prisma.customer.count({ where: { shopId, outstandingBalance: { gt: 0 }, nextFollowupDate: { lt: todayStart } } }),
   ]);
 
   const doneIds = new Set(doneCustomers.map((customer) => customer.id));
@@ -300,20 +366,7 @@ export async function GET(request: Request) {
     return item;
   });
 
-  const searched = enriched.filter((customer) => {
-    if (!search) return true;
-    const latest = customer.followUps[0];
-    return (
-      customer.partyName.toLowerCase().includes(search) ||
-      customer.contactNumber.includes(search) ||
-      String(customer.outstandingBalance).includes(search) ||
-      (customer.notes ?? "").toLowerCase().includes(search) ||
-      (latest?.notes ?? "").toLowerCase().includes(search) ||
-      (latest?.customerResponse ?? "").toLowerCase().includes(search)
-    );
-  });
-
-  const pendingPool = searched.filter((customer) => !doneIds.has(customer.id));
+  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id));
   const filteredPool =
     filter === "done" ? [] : pendingPool.filter((customer) => matchesFilter(filter, customer, todayStart, todayEnd));
   const sorted = filteredPool.sort((a, b) => compareBy(sort, a, b) || b.queueScore - a.queueScore);
@@ -358,15 +411,15 @@ export async function GET(request: Request) {
     done,
     summary: {
       totalCustomers: enriched.length,
-      totalPendingCustomers: pendingPool.length,
-      totalPendingAmount: pendingPool.reduce((sum, customer) => sum + customer.outstandingBalance, 0),
-      totalToday: filteredPool.length + done.length,
-      pending: filteredPool.length,
+      totalPendingCustomers: pendingTotal,
+      totalPendingAmount: pendingAmount._sum.outstandingBalance ?? 0,
+      totalToday: pendingTotal + done.length,
+      pending: pendingTotal,
       completed: done.length,
       actionedToday: done.length,
       callsCompleted,
       recoveryToday: todayRecovery._sum.amount ?? 0,
-      overdue: enriched.filter((customer) => customer.nextFollowupDate && customer.nextFollowupDate < todayStart).length,
+      overdue: overdueCount,
       autoCreated,
       staffPerformance: staffActivity.map((item) => ({
         staffId: item.createdById,
@@ -383,8 +436,8 @@ export async function GET(request: Request) {
     pagination: {
       skip,
       take,
-      total: filteredPool.length,
-      hasMore: skip + pending.length < filteredPool.length,
+      total: pendingTotal,
+      hasMore: skip + pending.length < pendingTotal,
     },
   });
 }

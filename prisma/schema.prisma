@@ -187,6 +187,10 @@ model Customer {
   @@index([shopId, partyName])
   @@index([shopId, contactNumber])
   @@index([shopId, nextFollowupDate])
+  @@index([shopId, outstandingBalance])
+  @@index([shopId, outstandingBalance, nextFollowupDate])
+  @@index([shopId, lastFollowupDate])
+  @@index([shopId, updatedAt])
   @@index([shopId, status])
   @@unique([shopId, contactNumber])
 }
@@ -265,6 +269,8 @@ model StaffVisit {
   @@index([staffId, checkInAt])
   @@index([customerId, checkInAt])
   @@index([shopId, status])
+  @@index([shopId, staffId, status, checkInAt])
+  @@index([shopId, customerId, checkInAt])
 }
 
 model VisitPhoto {
@@ -336,6 +342,10 @@ model FollowUp {
   @@index([scheduledAt])
   @@index([nextFollowUpDateTime])
   @@index([shopId, manualReminder, reminderEnabled, reminderSentAt])
+  @@index([shopId, manualReminder, reminderEnabled, reminderSentAt, nextFollowUpDateTime], map: "FollowUp_manual_reminder_due_idx")
+  @@index([shopId, createdById, followupDate])
+  @@index([shopId, customerId, followupDate])
+  @@index([shopId, status, followupDate])
   @@index([rescheduledAt])
   @@index([priority])
   @@index([queueRank])
@@ -355,6 +365,7 @@ model StatusHistory {
   createdAt   DateTime        @default(now())
 
   @@index([customerId, createdAt])
+  @@index([changedById, createdAt])
 }
 
 model PaymentEntry {
@@ -437,6 +448,11 @@ model Cheque {
   @@index([staffVisitId])
   @@index([depositReceiptUploadedById])
   @@index([customerId, createdAt])
+  @@index([shopId, status, amount])
+  @@index([shopId, status, collectionDateTime])
+  @@index([shopId, status, depositDateTime])
+  @@index([shopId, depositedAccountId, status])
+  @@index([shopId, collectedById, collectionDateTime])
   @@index([collectedById, collectionDateTime])
 }
 
@@ -504,6 +520,7 @@ model ActivityLog {
 
   @@index([createdAt])
   @@index([shopId, createdAt])
+  @@index([shopId, action, createdAt])
   @@index([userId])
   @@index([customerId])
 }

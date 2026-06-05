@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { ChequeStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
@@ -34,36 +35,57 @@ export async function GET(request: Request) {
     orderBy: [{ isActive: "desc" }, { bankName: "asc" }, { accountName: "asc" }],
   });
 
-  const audit = await Promise.all(
-    accounts.map(async (account) => {
-      const where = {
-        shopId,
-        depositedAccountId: account.id,
-        ...(from || to ? { depositDateTime: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-        ...(staffId ? { depositedById: staffId } : {}),
-        ...(status ? { status: status as never } : {}),
-      };
-      const [totalDeposited, totalCleared, totalBounced, pendingUnderClearing] = await Promise.all([
-        prisma.cheque.aggregate({ where, _sum: { amount: true }, _count: { id: true } }),
-        prisma.cheque.aggregate({ where: { ...where, status: "CLEARED" }, _sum: { amount: true }, _count: { id: true } }),
-        prisma.cheque.aggregate({ where: { ...where, status: "BOUNCED" }, _sum: { amount: true }, _count: { id: true } }),
-        prisma.cheque.aggregate({ where: { ...where, status: "DEPOSITED" }, _sum: { amount: true }, _count: { id: true } }),
-      ]);
+  const accountIds = accounts.map((account) => account.id);
+  const auditWhere: Prisma.ChequeWhereInput = {
+    shopId,
+    depositedAccountId: { in: accountIds },
+    ...(from || to ? { depositDateTime: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    ...(staffId ? { depositedById: staffId } : {}),
+    ...(status ? { status: status as ChequeStatus } : {}),
+  };
+  const grouped = accountIds.length
+    ? await prisma.cheque.groupBy({
+        by: ["depositedAccountId", "status"],
+        where: auditWhere,
+        _sum: { amount: true },
+        _count: { id: true },
+      })
+    : [];
+  const bucket = new Map<string, { amount: number; count: number }>();
+  for (const row of grouped) {
+    if (!row.depositedAccountId) continue;
+    bucket.set(`${row.depositedAccountId}:${row.status}`, {
+      amount: row._sum.amount ?? 0,
+      count: row._count.id,
+    });
+  }
 
+  const audit = accounts.map((account) => {
+      const statuses: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "CANCELLED"];
+      const total = statuses.reduce(
+        (sum, item) => {
+          const value = bucket.get(`${account.id}:${item}`);
+          return { amount: sum.amount + (value?.amount ?? 0), count: sum.count + (value?.count ?? 0) };
+        },
+        { amount: 0, count: 0 },
+      );
+      const cleared = bucket.get(`${account.id}:CLEARED`);
+      const bounced = bucket.get(`${account.id}:BOUNCED`);
+      const deposited = bucket.get(`${account.id}:DEPOSITED`);
       return {
         accountId: account.id,
         label: accountLabel(account),
-        totalDeposited: totalDeposited._sum.amount ?? 0,
-        totalDepositedCount: totalDeposited._count.id,
-        totalCleared: totalCleared._sum.amount ?? 0,
-        totalClearedCount: totalCleared._count.id,
-        totalBounced: totalBounced._sum.amount ?? 0,
-        totalBouncedCount: totalBounced._count.id,
-        pendingUnderClearing: pendingUnderClearing._sum.amount ?? 0,
-        pendingUnderClearingCount: pendingUnderClearing._count.id,
+        totalDeposited: total.amount,
+        totalDepositedCount: total.count,
+        totalCleared: cleared?.amount ?? 0,
+        totalClearedCount: cleared?.count ?? 0,
+        totalBounced: bounced?.amount ?? 0,
+        totalBouncedCount: bounced?.count ?? 0,
+        pendingUnderClearing: deposited?.amount ?? 0,
+        pendingUnderClearingCount: deposited?.count ?? 0,
       };
     })
-  );
+  ;
 
   return NextResponse.json({ accounts, audit });
 }
