@@ -14,6 +14,24 @@ const locationSchema = z.object({
   source: z.string().optional(),
 });
 
+function googleMapsUrl(latitude: number, longitude: number) {
+  return `https://www.google.com/maps?q=${latitude},${longitude}`;
+}
+
+function googleMapsEmbedUrl(latitude: number, longitude: number) {
+  return `https://www.google.com/maps?q=${latitude},${longitude}&z=16&output=embed`;
+}
+
+function locationHealth(location?: { createdAt: Date; accuracy: number | null } | null) {
+  if (!location) return { stale: true, lowAccuracy: false, ageMinutes: null };
+  const ageMinutes = Math.max(0, Math.round((Date.now() - location.createdAt.getTime()) / 60000));
+  return {
+    stale: ageMinutes > 10,
+    lowAccuracy: typeof location.accuracy === "number" && location.accuracy > 100,
+    ageMinutes,
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const session = await getSession();
@@ -58,9 +76,17 @@ export async function GET(request: Request) {
       staff: staff.map((person) => {
         const latest = latestByStaff.get(person.id);
         const openVisit = openVisitByStaff.get(person.id);
+        const health = locationHealth(latest);
         return {
           ...person,
-          latestLocation: latest,
+          latestLocation: latest
+            ? {
+                ...latest,
+                googleMapsUrl: googleMapsUrl(latest.latitude, latest.longitude),
+                googleMapsEmbedUrl: googleMapsEmbedUrl(latest.latitude, latest.longitude),
+                ...health,
+              }
+            : null,
           status: freshnessStatus(latest?.createdAt, Boolean(openVisit)),
           openVisit,
           attendance: attendanceByStaff.get(person.id) ?? null,
@@ -82,6 +108,14 @@ export async function POST(request: Request) {
     const shopId = requireShopId(request, session);
     const body = locationSchema.parse(await request.json());
     const today = workDate();
+    console.log("[Field GPS API] save requested", {
+      staffId: session.id,
+      shopId,
+      latitude: body.latitude,
+      longitude: body.longitude,
+      accuracy: body.accuracy,
+      status: body.status ?? "ACTIVE",
+    });
 
     const location = await prisma.$transaction(async (tx) => {
       await tx.attendance.upsert({
@@ -120,6 +154,15 @@ export async function POST(request: Request) {
       return created;
     });
 
+    console.log("[Field GPS API] coordinates saved", {
+      locationId: location.id,
+      staffId: location.staffId,
+      shopId: location.shopId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracy: location.accuracy,
+      createdAt: location.createdAt,
+    });
     return NextResponse.json({ success: true, location });
   } catch (error) {
     console.error("Field staff location update failed", error);

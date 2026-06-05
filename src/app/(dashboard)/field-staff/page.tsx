@@ -127,7 +127,13 @@ export default function FieldStaffPage() {
   );
 
   const sendLocation = useCallback(async (position: GeolocationPosition, status = "ACTIVE") => {
-    await fetch("/api/field-staff/locations", {
+    console.log("[Field GPS] coordinates received", {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      status,
+    });
+    const res = await fetch("/api/field-staff/locations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -135,7 +141,15 @@ export default function FieldStaffPage() {
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
         status,
+        source: "watchPosition",
       }),
+    });
+    if (!res.ok) throw new Error("Location save failed");
+    console.log("[Field GPS] coordinates saved", {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      status,
     });
     setLastGpsSyncAt(new Date().toISOString());
   }, []);
@@ -173,6 +187,7 @@ export default function FieldStaffPage() {
     setGpsError("");
     watchIdRef.current = navigator.geolocation.watchPosition(
       async (position) => {
+        console.log("[Field GPS] watchPosition success");
         setLocation(position);
         setGpsState("active");
         setGpsError("");
@@ -190,6 +205,9 @@ export default function FieldStaffPage() {
           setGpsError("Location permission blocked. Chrome -> lock icon -> Site settings -> Location -> Allow.");
           return;
         }
+        if (!navigator.onLine) {
+          console.warn("[Field GPS] device offline; watcher will retry when online");
+        }
         setGpsState(error.code === 3 ? "timeout" : "error");
         if (retryTimerRef.current === null) {
           retryTimerRef.current = window.setTimeout(() => {
@@ -202,9 +220,9 @@ export default function FieldStaffPage() {
         }
       },
       {
-        enableHighAccuracy: false,
-        maximumAge: 120000,
-        timeout: 20000,
+        enableHighAccuracy: true,
+        maximumAge: 60000,
+        timeout: 30000,
       },
     );
   }, [sendLocation, stopGpsWatcher]);
@@ -256,6 +274,7 @@ export default function FieldStaffPage() {
       async (position) => {
         window.clearTimeout(timeoutId);
         console.log("[Field GPS] GPS success", position);
+        console.log("[Field GPS] GPS granted");
         setLocation(position);
         setGpsState("active");
         setGpsError("");
