@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import type { Prisma } from "@prisma/client";
+import type { ChequeStatus, FollowUpStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canViewReports } from "@/lib/permissions";
@@ -8,6 +8,38 @@ import { requireShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 
 const PAGE_SIZE_MAX = 100;
+const ACTIVITY_LIMIT = 2000;
+
+type StatusTone = "green" | "yellow" | "red" | "blue" | "slate";
+
+type TimelineItem = {
+  at: Date;
+  type: string;
+  summary: string;
+  by: string;
+  status: string;
+};
+
+type ReportRow = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  mobileNumber: string;
+  currentBalance: number;
+  summary: string;
+  nextAction: string;
+  nextActionAt: Date | null;
+  status: string;
+  statusTone: StatusTone;
+  createdBy: string;
+  staffId: string;
+  latestActivityAt: Date;
+  relativeActivityTime: string;
+  isOverdue: boolean;
+  isPromise: boolean;
+  notes: string;
+  timeline: TimelineItem[];
+};
 
 function startOfToday() {
   const date = new Date();
@@ -34,147 +66,179 @@ function formatDateTime(date: Date | null | undefined) {
   return date ? date.toISOString() : "";
 }
 
-function rowFromFollowUp(row: Prisma.FollowUpGetPayload<{
-  include: {
-    customer: { include: { payments: true } };
-    createdBy: { select: { id: true; name: true; role: true } };
-  };
-}>) {
-  const lastPayment = row.customer.payments[0];
-  const recoveryAmount = row.status === "PAID" ? row.customer.outstandingBalance : (lastPayment?.amount ?? 0);
-  return {
-    id: row.id,
-    customerId: row.customerId,
-    customerName: row.customer.partyName,
-    mobileNumber: row.customer.contactNumber,
-    outstandingAmount: row.customer.outstandingBalance,
-    followUpDateTime: row.followupDate,
-    reminderStatus: row.reminderSentAt
-      ? "Manual reminder sent"
-      : row.manualReminder && row.reminderEnabled && row.nextFollowUpDateTime
-        ? "Manual reminder scheduled"
-        : "No reminder",
-    lastFollowUp: row.customer.lastFollowupDate ?? row.followupDate,
-    nextFollowUp: row.nextFollowupDate ?? row.customer.nextFollowupDate,
-    staffId: row.createdById,
-    staffName: row.createdBy.name,
-    userRole: row.createdBy.role,
-    followUpStatus: row.status,
-    promiseDate: row.status === "PAYMENT_PROMISED" ? row.nextFollowupDate : null,
-    recoveryAmount,
-    paymentStatus: row.customer.outstandingBalance <= 0 ? "Recovered" : recoveryAmount > 0 ? "Partial" : "Pending",
-    notes: row.notes ?? row.customerResponse ?? "",
-    completionStatus: row.completedAt ? "Completed" : row.status === "PAID" || row.status === "COMPLETED" ? "Completed" : "Open",
-    createdAt: row.createdAt,
-    lastActivityTimestamp: row.actionLoggedAt ?? row.followupDate,
-  };
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
-async function rowsToExcel(rows: ReturnType<typeof rowFromFollowUp>[]) {
+function formatShortDate(date: Date | null | undefined) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+  }).format(date);
+}
+
+function relativeTime(date: Date) {
+  const diffMs = Date.now() - date.getTime();
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return "Just now";
+  if (diffMs < hour) return `${Math.max(1, Math.floor(diffMs / minute))}m ago`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
+  if (diffMs < 2 * day) return "Yesterday";
+  return `${Math.floor(diffMs / day)}d ago`;
+}
+
+function cleanText(value?: string | null) {
+  return value?.replace(/\s+/g, " ").trim() || "";
+}
+
+function humanStatus(value: string) {
+  return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function toneForStatus(status: string): StatusTone {
+  if (["Paid", "Completed", "Recovered", "Cleared"].includes(status)) return "green";
+  if (["Promise To Pay", "Rescheduled", "Callback", "Cheque Collected", "Deposited"].includes(status)) return "blue";
+  if (["Pending", "Partial Paid", "Follow Up Required", "Collected"].includes(status)) return "yellow";
+  if (["Not Reachable", "Wrong Number", "Missed", "Bounced", "Overdue"].includes(status)) return "red";
+  return "slate";
+}
+
+function nextActionFor(customer: { nextFollowupDate: Date | null }, activityNext?: Date | null) {
+  const next = activityNext ?? customer.nextFollowupDate;
+  if (!next) return { text: "No next action set", at: null };
+  return { text: `Follow up ${formatShortDate(next)}`, at: next };
+}
+
+function followUpSummary(input: {
+  status: FollowUpStatus;
+  actor: string;
+  notes: string;
+  response: string;
+  nextDate: Date | null;
+  unreachableCount: number;
+}) {
+  const notes = input.notes || input.response;
+  if (input.status === "PAYMENT_PROMISED") {
+    return `${input.actor} recorded promise to pay${input.nextDate ? ` on ${formatShortDate(input.nextDate)}` : ""}`;
+  }
+  if (input.status === "NOT_REACHABLE") {
+    return `Not responding since ${Math.max(1, input.unreachableCount)} follow-up${input.unreachableCount === 1 ? "" : "s"}`;
+  }
+  if (input.status === "CALLBACK" || input.status === "RESCHEDULED") {
+    return notes || `Customer requested callback${input.nextDate ? ` ${formatShortDate(input.nextDate)}` : ""}`;
+  }
+  if (input.status === "PAID" || input.status === "COMPLETED") {
+    return notes || `Follow-up completed by ${input.actor}`;
+  }
+  if (input.status === "PARTIAL_PAID") {
+    return notes || `Partial payment discussed by ${input.actor}`;
+  }
+  if (notes) return notes;
+  return `Follow-up ${humanStatus(input.status).toLowerCase()} by ${input.actor}`;
+}
+
+function chequeActivityDate(cheque: {
+  status: ChequeStatus;
+  collectionDateTime: Date;
+  depositDateTime: Date | null;
+  clearedAt: Date | null;
+  bouncedAt: Date | null;
+}) {
+  if (cheque.status === "BOUNCED" && cheque.bouncedAt) return cheque.bouncedAt;
+  if (cheque.status === "CLEARED" && cheque.clearedAt) return cheque.clearedAt;
+  if (cheque.status === "DEPOSITED" && cheque.depositDateTime) return cheque.depositDateTime;
+  return cheque.collectionDateTime;
+}
+
+function chequeSummary(cheque: {
+  status: ChequeStatus;
+  amount: number;
+  bankName: string;
+  depositedAccount: { bankName: string; accountName: string } | null;
+  bounceReason: string | null;
+  collectedBy: { name: string };
+}) {
+  if (cheque.status === "BOUNCED") {
+    return `Cheque bounced${cheque.bounceReason ? `: ${cheque.bounceReason}` : ", customer informed"}`;
+  }
+  if (cheque.status === "CLEARED") return `Cheque cleared ${formatMoney(cheque.amount)}`;
+  if (cheque.status === "DEPOSITED") {
+    const bank = cheque.depositedAccount?.bankName ?? cheque.bankName;
+    return `Cheque deposited in ${bank}`;
+  }
+  return `Visited by ${cheque.collectedBy.name}, cheque collected ${formatMoney(cheque.amount)}`;
+}
+
+function rowsToCsv(rows: ReportRow[]) {
+  return reportToCsv(
+    ["Customer", "Mobile", "Current Balance", "Summary", "Next Action", "Status", "Created By", "Activity Time", "Notes"],
+    rows.map((row) => [
+      row.customerName,
+      row.mobileNumber,
+      String(row.currentBalance),
+      row.summary,
+      row.nextAction,
+      row.status,
+      row.createdBy,
+      row.relativeActivityTime,
+      row.notes,
+    ]),
+  );
+}
+
+async function rowsToExcel(rows: ReportRow[]) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Follow-up Reports");
   sheet.columns = [
-    { header: "Customer Name", key: "customerName", width: 28 },
-    { header: "Mobile Number", key: "mobileNumber", width: 16 },
-    { header: "Outstanding Amount", key: "outstandingAmount", width: 18 },
-    { header: "Follow-up Date & Time", key: "followUpDateTime", width: 24 },
-    { header: "Reminder Status", key: "reminderStatus", width: 20 },
-    { header: "Last Follow-up", key: "lastFollowUp", width: 24 },
-    { header: "Next Follow-up", key: "nextFollowUp", width: 24 },
-    { header: "Created By", key: "staffName", width: 18 },
-    { header: "User Role", key: "userRole", width: 16 },
-    { header: "Follow-up Status", key: "followUpStatus", width: 18 },
-    { header: "Promise Date", key: "promiseDate", width: 24 },
-    { header: "Recovery Amount", key: "recoveryAmount", width: 18 },
-    { header: "Payment Status", key: "paymentStatus", width: 16 },
-    { header: "Notes/Remarks", key: "notes", width: 42 },
-    { header: "Completion Status", key: "completionStatus", width: 18 },
-    { header: "Created At", key: "createdAt", width: 24 },
-    { header: "Last Activity Timestamp", key: "lastActivityTimestamp", width: 28 },
+    { header: "Customer", key: "customerName", width: 28 },
+    { header: "Mobile", key: "mobileNumber", width: 16 },
+    { header: "Current Balance", key: "currentBalance", width: 18 },
+    { header: "Summary", key: "summary", width: 52 },
+    { header: "Next Action", key: "nextAction", width: 24 },
+    { header: "Status", key: "status", width: 18 },
+    { header: "Created By", key: "createdBy", width: 18 },
+    { header: "Activity Time", key: "relativeActivityTime", width: 18 },
+    { header: "Latest Activity At", key: "latestActivityAt", width: 24 },
+    { header: "Notes", key: "notes", width: 44 },
   ];
   sheet.getRow(1).font = { bold: true };
   rows.forEach((row) =>
     sheet.addRow({
       ...row,
-      followUpDateTime: formatDateTime(row.followUpDateTime),
-      lastFollowUp: formatDateTime(row.lastFollowUp),
-      nextFollowUp: formatDateTime(row.nextFollowUp),
-      promiseDate: formatDateTime(row.promiseDate),
-      createdAt: formatDateTime(row.createdAt),
-      lastActivityTimestamp: formatDateTime(row.lastActivityTimestamp),
-    })
+      latestActivityAt: formatDateTime(row.latestActivityAt),
+    }),
   );
   return workbook.xlsx.writeBuffer();
 }
 
-function rowsToCsv(rows: ReturnType<typeof rowFromFollowUp>[]) {
-  return reportToCsv(
-    [
-      "Customer Name",
-      "Mobile Number",
-      "Outstanding Amount",
-      "Follow-up Date & Time",
-      "Reminder Status",
-      "Last Follow-up",
-      "Next Follow-up",
-      "Created By",
-      "User Role",
-      "Follow-up Status",
-      "Promise Date",
-      "Recovery Amount",
-      "Payment Status",
-      "Notes/Remarks",
-      "Completion Status",
-      "Created At",
-      "Last Activity Timestamp",
-    ],
-    rows.map((row) => [
-      row.customerName,
-      row.mobileNumber,
-      String(row.outstandingAmount),
-      formatDateTime(row.followUpDateTime),
-      row.reminderStatus,
-      formatDateTime(row.lastFollowUp),
-      formatDateTime(row.nextFollowUp),
-      row.staffName,
-      row.userRole,
-      row.followUpStatus,
-      formatDateTime(row.promiseDate),
-      String(row.recoveryAmount),
-      row.paymentStatus,
-      row.notes,
-      row.completionStatus,
-      formatDateTime(row.createdAt),
-      formatDateTime(row.lastActivityTimestamp),
-    ])
-  );
-}
-
-function rowsToPrintableHtml(rows: ReturnType<typeof rowFromFollowUp>[]) {
+function rowsToPrintableHtml(rows: ReportRow[]) {
   const escape = (value: string) =>
     value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   return `<!doctype html><html><head><meta charset="utf-8"><title>Follow-up Reports</title><style>
-body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #d1d5db;padding:6px;text-align:left;vertical-align:top}th{background:#f3f4f6}h1{font-size:20px}
+body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left;vertical-align:top}th{background:#f3f4f6}h1{font-size:20px}
 @media print{@page{size:landscape;margin:12mm}}
 </style></head><body><h1>Follow-up Reports</h1><table><thead><tr>${[
     "Customer",
     "Mobile",
-    "Outstanding",
-    "Last Follow-up",
-    "Next Follow-up",
-    "Staff",
+    "Balance",
+    "Summary",
+    "Next Action",
     "Status",
-    "Promise Date",
-    "Recovery",
-    "Payment",
-    "Notes",
-    "Last Activity",
+    "Created By",
+    "Activity",
   ]
     .map((header) => `<th>${header}</th>`)
     .join("")}</tr></thead><tbody>${rows
     .map(
       (row) =>
-        `<tr><td>${escape(row.customerName)}</td><td>${escape(row.mobileNumber)}</td><td>${row.outstandingAmount}</td><td>${formatDateTime(row.lastFollowUp)}</td><td>${formatDateTime(row.nextFollowUp)}</td><td>${escape(row.staffName)}</td><td>${escape(row.followUpStatus)}</td><td>${formatDateTime(row.promiseDate)}</td><td>${row.recoveryAmount}</td><td>${escape(row.paymentStatus)}</td><td>${escape(row.notes)}</td><td>${formatDateTime(row.lastActivityTimestamp)}</td></tr>`
+        `<tr><td>${escape(row.customerName)}</td><td>${escape(row.mobileNumber)}</td><td>${row.currentBalance}</td><td>${escape(row.summary)}</td><td>${escape(row.nextAction)}</td><td>${escape(row.status)}</td><td>${escape(row.createdBy)}</td><td>${escape(row.relativeActivityTime)}</td></tr>`,
     )
     .join("")}</tbody></table><script>window.print()</script></body></html>`;
 }
@@ -188,7 +252,6 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
   const limit = Math.min(PAGE_SIZE_MAX, Math.max(1, Number(searchParams.get("limit") ?? 25)));
-  const skip = (page - 1) * limit;
   const format = searchParams.get("format");
   const from = asDate(searchParams.get("from"));
   const to = asDate(searchParams.get("to"), true);
@@ -204,60 +267,108 @@ export async function GET(request: Request) {
   const pendingOnly = searchParams.get("pendingOnly") === "true";
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
+  const activityFrom = todayOnly ? todayStart : from;
+  const activityTo = todayOnly ? todayEnd : to;
 
-  const where: Prisma.FollowUpWhereInput = {
+  const customerWhere: Prisma.CustomerWhereInput = {
     shopId,
-    ...(todayOnly
-      ? { followupDate: { gte: todayStart, lte: todayEnd } }
-      : from || to
-        ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
-        : {}),
+    ...(customer
+      ? {
+          OR: [
+            { partyName: { contains: customer, mode: "insensitive" } },
+            { contactNumber: { contains: customer.replace(/\D/g, "") } },
+          ],
+        }
+      : {}),
+    ...(Number.isFinite(minAmount) ? { outstandingBalance: { gte: minAmount } } : {}),
+    ...(Number.isFinite(maxAmount)
+      ? { outstandingBalance: { ...(Number.isFinite(minAmount) ? { gte: minAmount } : {}), lte: maxAmount } }
+      : {}),
+  };
+
+  const followUpWhere: Prisma.FollowUpWhereInput = {
+    shopId,
+    ...(activityFrom || activityTo
+      ? { followupDate: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
+      : {}),
     ...(staffId ? { createdById: staffId } : {}),
     ...(status ? { status: status as Prisma.EnumFollowUpStatusFilter["equals"] } : {}),
     ...(promiseOnly ? { status: "PAYMENT_PROMISED" } : {}),
     ...(completedOnly ? { status: { in: ["PAID", "COMPLETED"] } } : {}),
     ...(pendingOnly ? { status: { in: ["PENDING", "RESCHEDULED", "NOT_REACHABLE", "PAYMENT_PROMISED"] } } : {}),
     ...(overdueOnly ? { nextFollowupDate: { lt: todayStart } } : {}),
-    customer: {
-      shopId,
-      ...(customer
-        ? {
-            OR: [
-              { partyName: { contains: customer } },
-              { contactNumber: { contains: customer.replace(/\D/g, "") } },
-            ],
-          }
-        : {}),
-      ...(Number.isFinite(minAmount) ? { outstandingBalance: { gte: minAmount } } : {}),
-      ...(Number.isFinite(maxAmount)
-        ? { outstandingBalance: { ...(Number.isFinite(minAmount) ? { gte: minAmount } : {}), lte: maxAmount } }
-        : {}),
-    },
+    customer: customerWhere,
   };
 
-  const include = {
-    customer: {
-      include: {
-        payments: { orderBy: { paidAt: "desc" as const }, take: 1 },
-      },
-    },
-    createdBy: { select: { id: true, name: true, role: true } },
+  const visitWhere: Prisma.StaffVisitWhereInput = {
+    shopId,
+    status: "COMPLETED",
+    ...(activityFrom || activityTo
+      ? { checkOutAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
+      : {}),
+    ...(staffId ? { staffId } : {}),
+    customer: customerWhere,
   };
 
-  const [followUps, total, users, paymentsToday, outstanding, allToday, staffGroups, trendRows] =
+  const paymentWhere: Prisma.PaymentEntryWhereInput = {
+    shopId,
+    ...(activityFrom || activityTo
+      ? { paidAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
+      : {}),
+    ...(staffId ? { createdById: staffId } : {}),
+    customer: customerWhere,
+  };
+
+  const chequeWhere: Prisma.ChequeWhereInput = {
+    shopId,
+    ...(activityFrom || activityTo
+      ? { collectionDateTime: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
+      : {}),
+    ...(staffId ? { collectedById: staffId } : {}),
+    customer: customerWhere,
+    OR: [{ staffVisitId: null }, { staffVisit: { status: "COMPLETED" } }],
+  };
+
+  const [followUps, completedVisits, payments, cheques, users, paymentsToday, outstanding, allToday, staffGroups, trendRows] =
     await prisma.$transaction([
       prisma.followUp.findMany({
-        where,
-        include,
-        orderBy: [
-          { nextFollowupDate: { sort: "asc", nulls: "last" } },
-          { scheduledAt: { sort: "asc", nulls: "last" } },
-          { followupDate: "asc" },
-        ],
-        skip: format ? 0 : skip,
-        take: format ? 1000 : limit,
+        where: followUpWhere,
+        include: {
+          customer: { include: { payments: { orderBy: { paidAt: "desc" }, take: 3 } } },
+          createdBy: { select: { id: true, name: true, role: true } },
+        },
+        orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }],
+        take: ACTIVITY_LIMIT,
       }),
-      prisma.followUp.count({ where }),
+      prisma.staffVisit.findMany({
+        where: visitWhere,
+        include: {
+          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          staff: { select: { id: true, name: true, role: true } },
+          cheques: { orderBy: { createdAt: "desc" }, take: 3 },
+        },
+        orderBy: [{ checkOutAt: "desc" }, { updatedAt: "desc" }],
+        take: ACTIVITY_LIMIT,
+      }),
+      prisma.paymentEntry.findMany({
+        where: paymentWhere,
+        include: {
+          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          createdBy: { select: { id: true, name: true, role: true } },
+        },
+        orderBy: { paidAt: "desc" },
+        take: ACTIVITY_LIMIT,
+      }),
+      prisma.cheque.findMany({
+        where: chequeWhere,
+        include: {
+          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          collectedBy: { select: { id: true, name: true, role: true } },
+          depositedAccount: { select: { bankName: true, accountName: true } },
+        },
+        orderBy: [{ collectionDateTime: "desc" }, { createdAt: "desc" }],
+        take: ACTIVITY_LIMIT,
+      }),
       prisma.user.findMany({ where: { shopId }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
       prisma.paymentEntry.aggregate({
         where: { shopId, paidAt: { gte: todayStart, lte: todayEnd } },
@@ -283,7 +394,160 @@ export async function GET(request: Request) {
       }),
     ]);
 
-  const rows = followUps.map(rowFromFollowUp);
+  const notReachableCounts = new Map<string, number>();
+  followUps.forEach((followUp) => {
+    if (followUp.status === "NOT_REACHABLE") {
+      notReachableCounts.set(followUp.customerId, (notReachableCounts.get(followUp.customerId) ?? 0) + 1);
+    }
+  });
+
+  const activityRows: ReportRow[] = [];
+  const pushActivity = (row: ReportRow) => activityRows.push(row);
+
+  followUps.forEach((followUp) => {
+    const next = nextActionFor(followUp.customer, followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt);
+    const actor = followUp.createdBy.name;
+    const notes = cleanText(followUp.notes) || cleanText(followUp.customerResponse);
+    const statusLabel = humanStatus(followUp.status);
+    const latestActivityAt = followUp.actionLoggedAt ?? followUp.followupDate;
+    const summary = followUpSummary({
+      status: followUp.status,
+      actor,
+      notes: cleanText(followUp.notes),
+      response: cleanText(followUp.customerResponse),
+      nextDate: followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? null,
+      unreachableCount: notReachableCounts.get(followUp.customerId) ?? 0,
+    });
+    pushActivity({
+      id: `followup-${followUp.id}`,
+      customerId: followUp.customerId,
+      customerName: followUp.customer.partyName,
+      mobileNumber: followUp.customer.contactNumber,
+      currentBalance: followUp.customer.outstandingBalance,
+      summary,
+      nextAction: followUp.reminderEnabled && followUp.nextFollowUpDateTime
+        ? `Reminder ${formatShortDate(followUp.nextFollowUpDateTime)}`
+        : next.text,
+      nextActionAt: followUp.nextFollowUpDateTime ?? next.at,
+      status: statusLabel,
+      statusTone: toneForStatus(statusLabel),
+      createdBy: actor,
+      staffId: followUp.createdById,
+      latestActivityAt,
+      relativeActivityTime: relativeTime(latestActivityAt),
+      isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < todayStart),
+      isPromise: followUp.status === "PAYMENT_PROMISED",
+      notes,
+      timeline: [{ at: latestActivityAt, type: "Follow-up", summary, by: actor, status: statusLabel }],
+    });
+  });
+
+  completedVisits.forEach((visit) => {
+    const cheque = visit.cheques[0];
+    const actor = visit.staff.name;
+    const latestActivityAt = visit.checkOutAt ?? visit.updatedAt;
+    const summary = cheque
+      ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
+      : visit.recoveryAmount > 0
+        ? `Visited by ${actor}, recovered ${formatMoney(visit.recoveryAmount)}`
+        : cleanText(visit.result) || cleanText(visit.notes) || `Visited by ${actor}, ${visit.visitType.toLowerCase()} completed`;
+    const statusLabel = visit.recoveryAmount > 0 ? "Recovered" : "Completed";
+    const next = nextActionFor(visit.customer);
+    pushActivity({
+      id: `visit-${visit.id}`,
+      customerId: visit.customerId,
+      customerName: visit.customer.partyName,
+      mobileNumber: visit.customer.contactNumber,
+      currentBalance: visit.customer.outstandingBalance,
+      summary,
+      nextAction: next.text,
+      nextActionAt: next.at,
+      status: cheque ? "Cheque Collected" : statusLabel,
+      statusTone: cheque ? "blue" : toneForStatus(statusLabel),
+      createdBy: actor,
+      staffId: visit.staffId,
+      latestActivityAt,
+      relativeActivityTime: relativeTime(latestActivityAt),
+      isOverdue: Boolean(next.at && next.at < todayStart),
+      isPromise: false,
+      notes: cleanText(visit.result) || cleanText(visit.notes),
+      timeline: [{ at: latestActivityAt, type: "Visit", summary, by: actor, status: visit.status }],
+    });
+  });
+
+  payments.forEach((payment) => {
+    const actor = payment.createdBy.name;
+    const next = nextActionFor(payment.customer);
+    pushActivity({
+      id: `payment-${payment.id}`,
+      customerId: payment.customerId,
+      customerName: payment.customer.partyName,
+      mobileNumber: payment.customer.contactNumber,
+      currentBalance: payment.customer.outstandingBalance,
+      summary: `Payment recovered ${formatMoney(payment.amount)}`,
+      nextAction: next.text,
+      nextActionAt: next.at,
+      status: "Recovered",
+      statusTone: "green",
+      createdBy: actor,
+      staffId: payment.createdById,
+      latestActivityAt: payment.paidAt,
+      relativeActivityTime: relativeTime(payment.paidAt),
+      isOverdue: Boolean(next.at && next.at < todayStart),
+      isPromise: false,
+      notes: cleanText(payment.notes),
+      timeline: [{ at: payment.paidAt, type: "Payment", summary: `Recovered ${formatMoney(payment.amount)}`, by: actor, status: "Recovered" }],
+    });
+  });
+
+  cheques.forEach((cheque) => {
+    const actor = cheque.collectedBy.name;
+    const latestActivityAt = chequeActivityDate(cheque);
+    const next = nextActionFor(cheque.customer);
+    const statusLabel = cheque.status === "PENDING_DEPOSIT" ? "Pending Deposit" : humanStatus(cheque.status);
+    const summary = chequeSummary(cheque);
+    pushActivity({
+      id: `cheque-${cheque.id}`,
+      customerId: cheque.customerId,
+      customerName: cheque.customer.partyName,
+      mobileNumber: cheque.customer.contactNumber,
+      currentBalance: cheque.customer.outstandingBalance,
+      summary,
+      nextAction: next.text,
+      nextActionAt: next.at,
+      status: statusLabel,
+      statusTone: toneForStatus(statusLabel),
+      createdBy: actor,
+      staffId: cheque.collectedById,
+      latestActivityAt,
+      relativeActivityTime: relativeTime(latestActivityAt),
+      isOverdue: Boolean(next.at && next.at < todayStart),
+      isPromise: false,
+      notes: cleanText(cheque.collectionNotes) || cleanText(cheque.bounceReason),
+      timeline: [{ at: latestActivityAt, type: "Cheque", summary, by: actor, status: statusLabel }],
+    });
+  });
+
+  const byCustomer = new Map<string, ReportRow>();
+  activityRows
+    .sort((a, b) => b.latestActivityAt.getTime() - a.latestActivityAt.getTime())
+    .forEach((row) => {
+      const existing = byCustomer.get(row.customerId);
+      if (!existing) {
+        byCustomer.set(row.customerId, row);
+        return;
+      }
+      existing.timeline.push(...row.timeline);
+      existing.timeline.sort((a, b) => b.at.getTime() - a.at.getTime());
+    });
+
+  const mergedRows = Array.from(byCustomer.values())
+    .map((row) => ({ ...row, timeline: row.timeline.slice(0, 8) }))
+    .sort((a, b) => b.latestActivityAt.getTime() - a.latestActivityAt.getTime());
+
+  const total = mergedRows.length;
+  const rows = format ? mergedRows.slice(0, 1000) : mergedRows.slice((page - 1) * limit, page * limit);
+
   if (format === "xlsx") {
     const buffer = await rowsToExcel(rows);
     return new NextResponse(buffer, {
@@ -316,12 +580,12 @@ export async function GET(request: Request) {
       staffId: group.createdById,
       staffName: userMap.get(group.createdById) ?? "Staff",
       callsCompleted: typeof group._count === "object" ? group._count._all ?? 0 : 0,
-      recoveriesCompleted: rows.filter((row) => row.staffId === group.createdById && row.paymentStatus !== "Pending").length,
-      recoveryAmount: rows
-        .filter((row) => row.staffId === group.createdById)
-        .reduce((sum, row) => sum + row.recoveryAmount, 0),
-      pendingCases: rows.filter((row) => row.staffId === group.createdById && row.paymentStatus === "Pending").length,
-      promisesCollected: rows.filter((row) => row.staffId === group.createdById && row.followUpStatus === "PAYMENT_PROMISED").length,
+      recoveriesCompleted: mergedRows.filter((row) => row.staffId === group.createdById && row.status === "Recovered").length,
+      recoveryAmount: payments
+        .filter((payment) => payment.createdById === group.createdById)
+        .reduce((sum, payment) => sum + payment.amount, 0),
+      pendingCases: mergedRows.filter((row) => row.staffId === group.createdById && row.statusTone === "yellow").length,
+      promisesCollected: mergedRows.filter((row) => row.staffId === group.createdById && row.isPromise).length,
       averageFollowUpTime: "Same day",
     }))
     .sort((a, b) => b.recoveryAmount - a.recoveryAmount || b.callsCompleted - a.callsCompleted);
@@ -340,10 +604,10 @@ export async function GET(request: Request) {
       recoveryToday: paymentsToday._sum.amount ?? 0,
       pendingAmount: outstanding._sum.outstandingBalance ?? 0,
       pendingCustomers: outstanding._count.id,
-      promises: rows.filter((row) => row.followUpStatus === "PAYMENT_PROMISED").length,
-      notResponding: rows.filter((row) => row.followUpStatus === "NOT_REACHABLE").length,
-      overdue: rows.filter((row) => row.nextFollowUp && row.nextFollowUp < todayStart).length,
-      completed: rows.filter((row) => ["PAID", "COMPLETED"].includes(row.followUpStatus)).length,
+      promises: mergedRows.filter((row) => row.isPromise).length,
+      notResponding: mergedRows.filter((row) => row.status === "Not Reachable").length,
+      overdue: mergedRows.filter((row) => row.isOverdue).length,
+      completed: mergedRows.filter((row) => row.statusTone === "green").length,
     },
     staffPerformance,
     trend: Array.from(trendMap.entries()).map(([date, amount]) => ({ date, amount })),

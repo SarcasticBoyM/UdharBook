@@ -24,21 +24,25 @@ type ReportRow = {
   customerId: string;
   customerName: string;
   mobileNumber: string;
-  outstandingAmount: number;
-  followUpDateTime: string | null;
-  reminderStatus: string;
-  lastFollowUp: string | null;
-  nextFollowUp: string | null;
-  staffName: string;
-  userRole: string;
-  followUpStatus: string;
-  promiseDate: string | null;
-  recoveryAmount: number;
-  paymentStatus: string;
+  currentBalance: number;
+  summary: string;
+  nextAction: string;
+  nextActionAt: string | null;
+  status: string;
+  statusTone: "green" | "yellow" | "red" | "blue" | "slate";
+  createdBy: string;
+  latestActivityAt: string;
+  relativeActivityTime: string;
+  isOverdue: boolean;
+  isPromise: boolean;
   notes: string;
-  completionStatus: string;
-  createdAt: string;
-  lastActivityTimestamp: string;
+  timeline: {
+    at: string;
+    type: string;
+    summary: string;
+    by: string;
+    status: string;
+  }[];
 };
 
 type ReportResponse = {
@@ -587,78 +591,72 @@ export default function FollowUpReportsPage() {
           </div>
           {loading && <Loader2 className="h-5 w-5 animate-spin text-brand-600" />}
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-[1200px] w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
-              <tr>
-                <Th />
-                <Th>Customer Name</Th>
-                <Th>Mobile Number</Th>
-                <Th>Balance Amount</Th>
-                <Th>Follow-up Date & Time</Th>
-                <Th>Reminder Status</Th>
-                <Th>Next Follow-up</Th>
-                <Th>Created By</Th>
-                <Th>User Role</Th>
-                <Th>Status</Th>
-                <Th>Promise Date</Th>
-                <Th>Recovery Amount</Th>
-                <Th>Payment Status</Th>
-                <Th>Completion</Th>
-                <Th>Created At</Th>
-                <Th>Last Activity</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {reportData.rows.length ? (
-                reportData.rows.map((row) => (
-                  <Fragment key={row.id}>
-                    <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
-                      <Td>
-                        <button type="button" onClick={() => setExpanded(expanded === row.id ? null : row.id)} className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-800">
-                          {expanded === row.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                        </button>
-                      </Td>
-                      <Td>{row.customerName}</Td>
-                      <Td>{row.mobileNumber}</Td>
-                      <Td>{formatCurrency(row.outstandingAmount)}</Td>
-                      <Td>{formatDateTime(row.followUpDateTime)}</Td>
-                      <Td>{row.reminderStatus}</Td>
-                      <Td>{formatDateTime(row.nextFollowUp)}</Td>
-                      <Td>{row.staffName}</Td>
-                      <Td>{statusLabel(row.userRole)}</Td>
-                      <Td><StatusPill status={row.followUpStatus} /></Td>
-                      <Td>{formatDateTime(row.promiseDate)}</Td>
-                      <Td>{formatCurrency(row.recoveryAmount)}</Td>
-                      <Td>{row.paymentStatus}</Td>
-                      <Td>{row.completionStatus}</Td>
-                      <Td>{formatDateTime(row.createdAt)}</Td>
-                      <Td>{formatDateTime(row.lastActivityTimestamp)}</Td>
-                    </tr>
-                    {expanded === row.id && (
-                      <tr className="border-t border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
-                        <td colSpan={15} className="p-4">
-                          <div className="border-l-2 border-brand-300 pl-4">
-                            <p className="font-semibold">Activity Timeline</p>
-                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{row.notes || "No notes recorded."}</p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {statusLabel(row.followUpStatus)} by {row.staffName} ({statusLabel(row.userRole)}) at {formatDateTime(row.lastActivityTimestamp)}
-                            </p>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={15} className="p-8 text-center text-slate-500">
-                    No report rows match the selected filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          {reportData.rows.length ? (
+            reportData.rows.map((row) => (
+              <Fragment key={row.id}>
+                <div className={cn("grid gap-3 p-4 text-sm lg:grid-cols-[220px_130px_minmax(260px,1fr)_210px_140px_150px_90px] lg:items-center", row.isOverdue && "bg-red-50/60 dark:bg-red-950/20", row.isPromise && !row.isOverdue && "bg-blue-50/60 dark:bg-blue-950/20")}>
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">{row.customerName}</p>
+                    <p className="text-xs text-slate-500">{row.mobileNumber}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 lg:hidden">Current balance</p>
+                    <p className="font-semibold">{formatCurrency(row.currentBalance)}</p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="line-clamp-1 font-medium text-slate-900 dark:text-slate-100">{row.summary}</p>
+                    {row.notes && <p className="mt-1 line-clamp-1 text-xs text-slate-500">{row.notes}</p>}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500">Next action</p>
+                    <p className={cn("truncate font-medium", row.isOverdue && "text-red-700 dark:text-red-300", row.isPromise && "text-blue-700 dark:text-blue-300")}>{row.nextAction}</p>
+                  </div>
+                  <BusinessStatusBadge status={row.status} tone={row.statusTone} />
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500">Created by</p>
+                    <p className="truncate font-medium">{row.createdBy}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(expanded === row.id ? null : row.id)}
+                    className="inline-flex min-h-10 items-center justify-between gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700 lg:justify-center"
+                  >
+                    <span>{row.relativeActivityTime}</span>
+                    {expanded === row.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </button>
+                </div>
+                {expanded === row.id && (
+                  <div className="bg-slate-50 px-4 py-4 dark:bg-slate-950">
+                    <div className="border-l-2 border-brand-300 pl-4">
+                      <p className="font-semibold">Activity Timeline</p>
+                      <div className="mt-3 space-y-3">
+                        {row.timeline.length ? (
+                          row.timeline.map((item, index) => (
+                            <div key={`${row.id}-${item.type}-${item.at}-${index}`} className="text-sm">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-semibold">{item.type}</span>
+                                <StatusPill status={item.status} />
+                                <span className="text-xs text-slate-500">{formatDateTime(item.at)}</span>
+                              </div>
+                              <p className="mt-1 text-slate-700 dark:text-slate-300">{item.summary}</p>
+                              <p className="mt-1 text-xs text-slate-500">By {item.by}</p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-slate-500">No timeline details available.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </Fragment>
+            ))
+          ) : (
+            <div className="p-8 text-center text-sm text-slate-500">
+              No report rows match the selected filters.
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between border-t border-slate-200 p-4 text-sm dark:border-slate-800">
           <span className="text-slate-500">
@@ -771,9 +769,25 @@ function ExportButton({ label, icon: Icon, onClick }: { label: string; icon: Rea
   );
 }
 
+function BusinessStatusBadge({ status, tone }: { status: string; tone: ReportRow["statusTone"] }) {
+  const toneClass = {
+    green: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+    yellow: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+    red: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
+    blue: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+    slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+  }[tone];
+  return (
+    <span className={cn("inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold", toneClass)}>
+      {status}
+    </span>
+  );
+}
+
 function StatusPill({ status }: { status: string }) {
-  const isGood = status === "PAID" || status === "COMPLETED";
-  const isRisk = status === "NOT_REACHABLE" || status === "MISSED" || status === "WRONG_NUMBER";
+  const normalized = status.toUpperCase().replace(/\s+/g, "_");
+  const isGood = normalized === "PAID" || normalized === "COMPLETED" || normalized === "RECOVERED" || normalized === "CLEARED";
+  const isRisk = normalized === "NOT_REACHABLE" || normalized === "MISSED" || normalized === "WRONG_NUMBER" || normalized === "BOUNCED";
   return (
     <span
       className={cn(
