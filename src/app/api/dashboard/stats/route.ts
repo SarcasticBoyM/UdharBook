@@ -4,12 +4,61 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { agingBucket } from "@/lib/aging";
 import type { DashboardStats } from "@/types";
-import { requireShopId } from "@/lib/tenant";
+import { requestedShopId, isSuperAdmin } from "@/lib/tenant";
+import { logger } from "@/lib/logger";
+
+const emptyStats: DashboardStats = {
+  totalCustomers: 0,
+  totalOutstanding: 0,
+  pendingFollowup: 0,
+  todayFollowups: 0,
+  overdueFollowups: 0,
+  highOutstanding: 0,
+  recoveryAmount: 0,
+  staffActivity: [],
+  statusDistribution: [],
+  collectionProgress: [],
+  outstandingSummary: [
+    { label: "0-30", amount: 0 },
+    { label: "31-60", amount: 0 },
+    { label: "61-90", amount: 0 },
+    { label: "90+", amount: 0 },
+  ],
+};
+
+async function resolveDashboardShopId(request: Request, session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
+  if (!isSuperAdmin(session)) return session.shopId;
+
+  const requested = requestedShopId(request, session);
+  const requestedShop = requested && requested !== "default-shop"
+    ? await prisma.shop.findUnique({ where: { id: requested }, select: { id: true } })
+    : null;
+  if (requestedShop) return requestedShop.id;
+
+  if (requested) {
+    logger.warn("dashboard_stats_requested_shop_missing", {
+      userId: session.id,
+      role: session.role,
+      requestedShopId: requested,
+    });
+  }
+
+  const fallback = await prisma.shop.findFirst({
+    where: { id: { not: "platform-shop" } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  return fallback?.id ?? session.shopId;
+}
 
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const shopId = requireShopId(request, session);
+  const shopId = await resolveDashboardShopId(request, session);
+  if (!shopId) {
+    logger.warn("dashboard_stats_no_shop", { userId: session.id, role: session.role });
+    return NextResponse.json(emptyStats);
+  }
 
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
@@ -93,6 +142,18 @@ export async function GET(request: Request) {
       amount,
     })),
   };
+
+  logger.info("dashboard_stats_loaded", {
+    userId: session.id,
+    role: session.role,
+    shopId,
+    customerCount: customers.length,
+    activeCustomerCount: active.length,
+    paymentCount: payments.length,
+    followupDueCount: pendingFollowup,
+    totalOutstanding,
+    recoveryAmount: stats.recoveryAmount,
+  });
 
   return NextResponse.json(stats);
 }

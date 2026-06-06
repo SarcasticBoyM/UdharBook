@@ -10,6 +10,8 @@ import { DashboardCharts } from "@/components/dashboard/Charts";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
 import { agingBucket } from "@/lib/aging";
+import { isSuperAdmin } from "@/lib/tenant";
+import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -42,11 +44,27 @@ type RecentActivityItem = Prisma.ActivityLogGetPayload<{
 async function selectedShopId() {
   try {
     const session = await getSession();
+    if (!session) return "";
+    if (!isSuperAdmin(session)) return session.shopId;
+
     const cookieStore = await cookies();
-    const explicit = cookieStore.get("udharbook_shop")?.value ?? session?.shopId;
-    if (explicit) return explicit;
-    const firstShop = await prisma.shop.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
-    return firstShop?.id ?? "";
+    const explicit = cookieStore.get("udharbook_shop")?.value;
+    if (explicit && explicit !== "default-shop") {
+      const shop = await prisma.shop.findUnique({ where: { id: explicit }, select: { id: true } });
+      if (shop) return shop.id;
+      logger.warn("dashboard_page_stale_shop_cookie", {
+        userId: session.id,
+        role: session.role,
+        requestedShopId: explicit,
+      });
+    }
+
+    const fallback = await prisma.shop.findFirst({
+      where: { id: { not: "platform-shop" } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    return fallback?.id ?? session.shopId ?? "";
   } catch (error) {
     console.error("Dashboard shop lookup failed", error);
     return "";
@@ -95,7 +113,7 @@ async function getStats(shopId: string): Promise<DashboardStats> {
   });
   const userMap = new Map(users.map((user) => [user.id, user.name]));
 
-  return {
+  const stats = {
     totalCustomers: customers.length,
     totalOutstanding: active.reduce((s, c) => s + c.outstandingBalance, 0),
     pendingFollowup: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate <= todayEnd).length,
@@ -112,7 +130,19 @@ async function getStats(shopId: string): Promise<DashboardStats> {
     statusDistribution: statusGroups.map((g) => ({ status: g.status, count: g._count.status })),
     collectionProgress: Array.from(monthMap.entries()).map(([month, collected]) => ({ month, collected })),
     outstandingSummary: Object.entries(agingMap).map(([label, amount]) => ({ label, amount })),
-  };
+  } satisfies DashboardStats;
+
+  logger.info("dashboard_page_stats_loaded", {
+    shopId,
+    customerCount: customers.length,
+    activeCustomerCount: active.length,
+    paymentCount: payments.length,
+    totalOutstanding: stats.totalOutstanding,
+    todayFollowups: stats.todayFollowups,
+    overdueFollowups: stats.overdueFollowups,
+  });
+
+  return stats;
 }
 
 export default async function DashboardPage() {

@@ -4,6 +4,8 @@ import { canImport } from "@/lib/permissions";
 import { importCustomersFromExcel } from "@/lib/excel/import";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
+import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -45,6 +47,16 @@ export async function POST(request: Request) {
     }
 
     const shopId = requireShopId(request, session);
+    const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true } });
+    if (!shop) {
+      logger.warn("customer_import_shop_missing", {
+        userId: session.id,
+        role: session.role,
+        shopId,
+        fileName: file.name,
+      });
+      return NextResponse.json({ error: "Selected shop no longer exists. Please switch to the correct shop and retry import." }, { status: 400 });
+    }
     const buffer = Buffer.from(await file.arrayBuffer());
     const summary = await importCustomersFromExcel(buffer, shopId);
     await logActivity({

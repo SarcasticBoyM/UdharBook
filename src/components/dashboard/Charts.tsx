@@ -23,33 +23,43 @@ export function DashboardCharts({ stats }: { stats: DashboardStats }) {
     name: formatStatus(s.status as Parameters<typeof formatStatus>[0]),
     value: s.count,
   }));
+  const hasAgingData = stats.outstandingSummary.some((item) => item.amount > 0);
+  const hasStatusData = statusData.some((item) => item.value > 0);
 
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-2">
       <div className="card">
         <h3 className="mb-4 font-semibold">Outstanding by Aging</h3>
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={stats.outstandingSummary}>
-            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} />
-            <Tooltip formatter={(v: number) => formatCurrency(v)} />
-            <Bar dataKey="amount" fill="#2563eb" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {hasAgingData ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={stats.outstandingSummary}>
+              <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip formatter={(v: number) => formatCurrency(v)} />
+              <Bar dataKey="amount" fill="#2563eb" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <EmptyChart message="No outstanding balance data yet." />
+        )}
       </div>
       <div className="card">
         <h3 className="mb-4 font-semibold">Customer Status Distribution</h3>
-        <ResponsiveContainer width="100%" height={260}>
-          <PieChart>
-            <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
-              {statusData.map((_, i) => (
-                <Cell key={i} fill={COLORS[i % COLORS.length]} />
-              ))}
-            </Pie>
-            <Legend />
-            <Tooltip />
-          </PieChart>
-        </ResponsiveContainer>
+        {hasStatusData ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+                {statusData.map((_, i) => (
+                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                ))}
+              </Pie>
+              <Legend />
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <EmptyChart message="No customers available for status chart." />
+        )}
       </div>
       {stats.collectionProgress.length > 0 && (
         <div className="card lg:col-span-2">
@@ -79,6 +89,14 @@ export function DashboardCharts({ stats }: { stats: DashboardStats }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function EmptyChart({ message }: { message: string }) {
+  return (
+    <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-center text-sm text-slate-500 dark:border-slate-700">
+      {message}
     </div>
   );
 }
