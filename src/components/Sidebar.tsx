@@ -37,12 +37,17 @@ const links = [
   { href: "/shops", label: "Shops", icon: Store, superOnly: true },
 ];
 
+const platformLinks = [
+  { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
+  { href: "/shops", label: "Shops", icon: Store },
+];
+
 export function Sidebar({ userName, role }: { userName: string; role: string }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
   const isAdmin = role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
   const isSuperAdmin = role === "SUPER_ADMIN";
-  const navLinks = links.filter((link) => {
+  const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly) return isAdmin;
     return true;
@@ -65,7 +70,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
             <p className="mt-1 text-xs text-slate-500">
               {userName} | {role}
             </p>
-            <ShopSwitcher enabled={isSuperAdmin} />
+            <ShopSwitcher enabled={false} />
           </div>
         </div>
       </div>

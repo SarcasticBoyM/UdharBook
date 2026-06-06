@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession, hashPassword } from "@/lib/auth";
-import { canManageShop, isSuperAdmin, requireShopId } from "@/lib/tenant";
+import { isSuperAdmin } from "@/lib/tenant";
+import { canManageUsers } from "@/lib/permissions";
 import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
 import { logger } from "@/lib/logger";
@@ -20,7 +21,7 @@ const createSchema = z.object({
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canManageShop(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canManageUsers(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = isSuperAdmin(session) ? new URL(request.url).searchParams.get("shopId") : session.shopId;
   const users = await prisma.user.findMany({
@@ -37,11 +38,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canManageShop(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canManageUsers(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const body = createSchema.parse(await request.json());
-    const shopId = isSuperAdmin(session) ? body.shopId ?? requireShopId(request, session) : session.shopId;
+    const shopId = isSuperAdmin(session) ? body.shopId : session.shopId;
     if (!shopId || shopId === "platform-shop") {
       logger.warn("user_create_missing_business_shop", { actorId: session.id, actorRole: session.role, requestedShopId: shopId });
       return NextResponse.json({ error: "A business shop is required" }, { status: 400 });

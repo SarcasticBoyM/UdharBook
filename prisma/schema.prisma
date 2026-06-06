@@ -122,6 +122,7 @@ model Shop {
   attendances        Attendance[]
   routeHistories     RouteHistory[]
   visitPhotos        VisitPhoto[]
+  supportAccessGrants SupportAccessGrant[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -158,6 +159,8 @@ model User {
   attendances Attendance[]
   routeHistories RouteHistory[]
   visitPhotos VisitPhoto[]
+  supportAccessRequested SupportAccessGrant[] @relation("SupportAccessRequestedBy")
+  supportAccessAssigned SupportAccessGrant[] @relation("SupportAccessSuperAdmin")
 
   @@index([shopId])
   @@index([role])
@@ -564,6 +567,26 @@ model ActivityLog {
   @@index([shopId, action, createdAt])
   @@index([userId])
   @@index([customerId])
+}
+
+model SupportAccessGrant {
+  id             String    @id @default(cuid())
+  shopId         String
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  requestedById  String
+  requestedBy    User      @relation("SupportAccessRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  superAdminId   String?
+  superAdmin     User?     @relation("SupportAccessSuperAdmin", fields: [superAdminId], references: [id], onDelete: SetNull)
+  reason         String
+  status         String    @default("ACTIVE")
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([shopId, status, expiresAt])
+  @@index([superAdminId, status, expiresAt])
+  @@index([requestedById, createdAt])
 }
 
 model PasswordResetToken {

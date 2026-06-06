@@ -7,19 +7,12 @@ export function isSuperAdmin(session: SessionUser) {
 }
 
 export function canManageShop(session: SessionUser) {
-  return session.role === "SUPER_ADMIN" || session.role === "SHOP_ADMIN";
+  return session.role === "SHOP_ADMIN";
 }
 
 export function requestedShopId(request: Request, session: SessionUser) {
-  if (!isSuperAdmin(session)) return session.shopId;
-  const url = new URL(request.url);
-  const cookieShop = request.headers
-    .get("cookie")
-    ?.split(";")
-    .map((item) => item.trim())
-    .find((item) => item.startsWith("udharbook_shop="))
-    ?.split("=")[1];
-  return url.searchParams.get("shopId") || request.headers.get("x-shop-id") || cookieShop || session.shopId || "default-shop";
+  if (isSuperAdmin(session)) return session.shopId;
+  return session.shopId;
 }
 
 export function requireShopId(request: Request, session: SessionUser) {

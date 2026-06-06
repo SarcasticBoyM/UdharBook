@@ -16,6 +16,32 @@ const PUBLIC = [
   "/icon.svg",
 ];
 
+const SUPER_ADMIN_BLOCKED_PAGES = [
+  "/today-follow-ups",
+  "/customers",
+  "/cheques",
+  "/field-staff",
+  "/live-tracking",
+  "/daily-visits",
+  "/upload",
+  "/follow-ups",
+  "/reports",
+];
+
+const SUPER_ADMIN_BLOCKED_APIS = [
+  "/api/bulk",
+  "/api/cheque-deposit-accounts",
+  "/api/cheques",
+  "/api/customers",
+  "/api/dashboard/stats",
+  "/api/field-staff",
+  "/api/follow-up-reports",
+  "/api/follow-ups",
+  "/api/notifications",
+  "/api/reports",
+  "/api/today-follow-ups",
+];
+
 function logMiddleware(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) {
   const payload = JSON.stringify({
     level,
@@ -75,6 +101,15 @@ export async function middleware(request: NextRequest) {
     const { payload } = await jwtVerify(token, getSecret());
     const role = payload.role as string | undefined;
     const shopId = payload.shopId as string | undefined;
+
+    if (role === "SUPER_ADMIN" && SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix))) {
+      logMiddleware("warn", "middleware_redirect_super_admin_business_page_blocked", { path: pathname, role, shopId });
+      return secure(NextResponse.redirect(new URL("/", request.url)));
+    }
+    if (role === "SUPER_ADMIN" && SUPER_ADMIN_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix))) {
+      logMiddleware("warn", "middleware_reject_super_admin_business_api_blocked", { path: pathname, role, shopId });
+      return secure(NextResponse.json({ error: "Super admin business data access requires temporary support access" }, { status: 403 }));
+    }
 
     if (pathname.startsWith("/shops") && role !== "SUPER_ADMIN") {
       logMiddleware("warn", "middleware_redirect_shops_forbidden", { path: pathname, role, shopId });
