@@ -26,13 +26,26 @@ type ReportRow = {
   mobileNumber: string;
   currentBalance: number;
   summary: string;
+  detailedNotes: string;
+  followUpType: string;
+  recoveryAmount: number;
+  paymentStatus: string;
+  promiseDate: string | null;
   nextAction: string;
   nextActionAt: string | null;
+  reminderStatus: string;
   status: string;
   statusTone: "green" | "yellow" | "red" | "blue" | "slate";
   createdBy: string;
+  userRole: string;
   latestActivityAt: string;
   relativeActivityTime: string;
+  visitStatus: string;
+  chequeStatus: string;
+  bankAccount: string;
+  depositStatus: string;
+  createdAt: string;
+  lastUpdatedAt: string;
   isOverdue: boolean;
   isPromise: boolean;
   notes: string;
@@ -42,6 +55,7 @@ type ReportRow = {
     summary: string;
     by: string;
     status: string;
+    notes: string;
   }[];
 };
 
@@ -606,7 +620,12 @@ export default function FollowUpReportsPage() {
                   </div>
                   <div className="min-w-0">
                     <p className="line-clamp-1 font-medium text-slate-900 dark:text-slate-100">{row.summary}</p>
-                    {row.notes && <p className="mt-1 line-clamp-1 text-xs text-slate-500">{row.notes}</p>}
+                    <div className="mt-1 flex flex-wrap gap-1.5 text-xs">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{row.followUpType}</span>
+                      {row.recoveryAmount > 0 && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">{formatCurrency(row.recoveryAmount)}</span>}
+                      {row.chequeStatus !== "-" && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700 dark:bg-blue-950 dark:text-blue-200">{row.chequeStatus}</span>}
+                    </div>
+                    {row.detailedNotes && <p className="mt-1 line-clamp-1 text-xs text-slate-500">{row.detailedNotes}</p>}
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs text-slate-500">Next action</p>
@@ -630,6 +649,20 @@ export default function FollowUpReportsPage() {
                   <div className="bg-slate-50 px-4 py-4 dark:bg-slate-950">
                     <div className="border-l-2 border-brand-300 pl-4">
                       <p className="font-semibold">Activity Timeline</p>
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300 md:grid-cols-2 xl:grid-cols-4">
+                        <Detail label="Follow-up Type" value={row.followUpType} />
+                        <Detail label="Payment Status" value={row.paymentStatus} />
+                        <Detail label="Promise Date" value={formatDateTime(row.promiseDate)} />
+                        <Detail label="Next Follow-up" value={formatDateTime(row.nextActionAt)} />
+                        <Detail label="Reminder" value={row.reminderStatus} />
+                        <Detail label="Follow-up By" value={`${row.createdBy} (${row.userRole})`} />
+                        <Detail label="Visit Status" value={row.visitStatus} />
+                        <Detail label="Cheque Status" value={row.chequeStatus} />
+                        <Detail label="Bank Account" value={row.bankAccount} />
+                        <Detail label="Deposit Status" value={row.depositStatus} />
+                        <Detail label="Created" value={formatDateTime(row.createdAt)} />
+                        <Detail label="Updated" value={formatDateTime(row.lastUpdatedAt)} />
+                      </div>
                       <div className="mt-3 space-y-3">
                         {row.timeline.length ? (
                           row.timeline.map((item, index) => (
@@ -640,6 +673,7 @@ export default function FollowUpReportsPage() {
                                 <span className="text-xs text-slate-500">{formatDateTime(item.at)}</span>
                               </div>
                               <p className="mt-1 text-slate-700 dark:text-slate-300">{item.summary}</p>
+                              {item.notes && <p className="mt-1 text-xs text-slate-500">{item.notes}</p>}
                               <p className="mt-1 text-xs text-slate-500">By {item.by}</p>
                             </div>
                           ))
@@ -781,6 +815,15 @@ function BusinessStatusBadge({ status, tone }: { status: string; tone: ReportRow
     <span className={cn("inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold", toneClass)}>
       {status}
     </span>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg bg-white p-2 dark:bg-slate-900">
+      <p className="text-[11px] font-semibold uppercase text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate font-medium text-slate-700 dark:text-slate-200">{value || "-"}</p>
+    </div>
   );
 }
 

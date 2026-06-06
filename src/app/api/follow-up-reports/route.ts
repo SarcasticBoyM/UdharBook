@@ -18,6 +18,7 @@ type TimelineItem = {
   summary: string;
   by: string;
   status: string;
+  notes: string;
 };
 
 type ReportRow = {
@@ -27,12 +28,25 @@ type ReportRow = {
   mobileNumber: string;
   currentBalance: number;
   summary: string;
+  detailedNotes: string;
+  followUpType: string;
+  recoveryAmount: number;
+  paymentStatus: string;
+  promiseDate: Date | null;
   nextAction: string;
   nextActionAt: Date | null;
+  reminderStatus: string;
   status: string;
   statusTone: StatusTone;
   createdBy: string;
+  userRole: string;
   staffId: string;
+  visitStatus: string;
+  chequeStatus: string;
+  bankAccount: string;
+  depositStatus: string;
+  createdAt: Date;
+  lastUpdatedAt: Date;
   latestActivityAt: Date;
   relativeActivityTime: string;
   isOverdue: boolean;
@@ -116,6 +130,25 @@ function nextActionFor(customer: { nextFollowupDate: Date | null }, activityNext
   return { text: `Follow up ${formatShortDate(next)}`, at: next };
 }
 
+function reminderStatusFor(followUp: {
+  reminderSentAt: Date | null;
+  manualReminder: boolean;
+  reminderEnabled: boolean;
+  nextFollowUpDateTime: Date | null;
+  scheduledAt: Date | null;
+}) {
+  if (followUp.reminderSentAt) return `Reminder sent ${formatShortDate(followUp.reminderSentAt)}`;
+  const reminderAt = followUp.nextFollowUpDateTime ?? followUp.scheduledAt;
+  if (followUp.manualReminder && followUp.reminderEnabled && reminderAt) return `Reminder set ${formatShortDate(reminderAt)}`;
+  return "No reminder";
+}
+
+function paymentStatusFor(balance: number, recovered: number) {
+  if (balance <= 0) return "Recovered";
+  if (recovered > 0) return "Partial";
+  return "Pending";
+}
+
 function followUpSummary(input: {
   status: FollowUpStatus;
   actor: string;
@@ -178,17 +211,47 @@ function chequeSummary(cheque: {
 
 function rowsToCsv(rows: ReportRow[]) {
   return reportToCsv(
-    ["Customer", "Mobile", "Current Balance", "Summary", "Next Action", "Status", "Created By", "Activity Time", "Notes"],
+    [
+      "Customer Name",
+      "Mobile Number",
+      "Balance Amount",
+      "Follow-up Summary",
+      "Detailed Notes",
+      "Follow-up Type",
+      "Recovery Amount",
+      "Payment Status",
+      "Promise Date",
+      "Next Follow-up Date",
+      "Reminder Status",
+      "Follow-up By",
+      "User Role",
+      "Visit Status",
+      "Cheque Status",
+      "Bank Account",
+      "Deposit Status",
+      "Created Date & Time",
+      "Last Updated Time",
+    ],
     rows.map((row) => [
       row.customerName,
       row.mobileNumber,
       String(row.currentBalance),
       row.summary,
-      row.nextAction,
-      row.status,
+      row.detailedNotes,
+      row.followUpType,
+      String(row.recoveryAmount),
+      row.paymentStatus,
+      formatDateTime(row.promiseDate),
+      formatDateTime(row.nextActionAt),
+      row.reminderStatus,
       row.createdBy,
-      row.relativeActivityTime,
-      row.notes,
+      row.userRole,
+      row.visitStatus,
+      row.chequeStatus,
+      row.bankAccount,
+      row.depositStatus,
+      formatDateTime(row.createdAt),
+      formatDateTime(row.lastUpdatedAt),
     ]),
   );
 }
@@ -197,22 +260,34 @@ async function rowsToExcel(rows: ReportRow[]) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Follow-up Reports");
   sheet.columns = [
-    { header: "Customer", key: "customerName", width: 28 },
-    { header: "Mobile", key: "mobileNumber", width: 16 },
-    { header: "Current Balance", key: "currentBalance", width: 18 },
-    { header: "Summary", key: "summary", width: 52 },
-    { header: "Next Action", key: "nextAction", width: 24 },
-    { header: "Status", key: "status", width: 18 },
-    { header: "Created By", key: "createdBy", width: 18 },
-    { header: "Activity Time", key: "relativeActivityTime", width: 18 },
-    { header: "Latest Activity At", key: "latestActivityAt", width: 24 },
-    { header: "Notes", key: "notes", width: 44 },
+    { header: "Customer Name", key: "customerName", width: 28 },
+    { header: "Mobile Number", key: "mobileNumber", width: 16 },
+    { header: "Balance Amount", key: "currentBalance", width: 18 },
+    { header: "Follow-up Summary", key: "summary", width: 52 },
+    { header: "Detailed Notes", key: "detailedNotes", width: 44 },
+    { header: "Follow-up Type", key: "followUpType", width: 18 },
+    { header: "Recovery Amount", key: "recoveryAmount", width: 18 },
+    { header: "Payment Status", key: "paymentStatus", width: 18 },
+    { header: "Promise Date", key: "promiseDate", width: 24 },
+    { header: "Next Follow-up Date", key: "nextActionAt", width: 24 },
+    { header: "Reminder Status", key: "reminderStatus", width: 24 },
+    { header: "Follow-up By", key: "createdBy", width: 18 },
+    { header: "User Role", key: "userRole", width: 16 },
+    { header: "Visit Status", key: "visitStatus", width: 18 },
+    { header: "Cheque Status", key: "chequeStatus", width: 18 },
+    { header: "Bank Account", key: "bankAccount", width: 28 },
+    { header: "Deposit Status", key: "depositStatus", width: 18 },
+    { header: "Created Date & Time", key: "createdAt", width: 24 },
+    { header: "Last Updated Time", key: "lastUpdatedAt", width: 24 },
   ];
   sheet.getRow(1).font = { bold: true };
   rows.forEach((row) =>
     sheet.addRow({
       ...row,
-      latestActivityAt: formatDateTime(row.latestActivityAt),
+      promiseDate: formatDateTime(row.promiseDate),
+      nextActionAt: formatDateTime(row.nextActionAt),
+      createdAt: formatDateTime(row.createdAt),
+      lastUpdatedAt: formatDateTime(row.lastUpdatedAt),
     }),
   );
   return workbook.xlsx.writeBuffer();
@@ -225,9 +300,9 @@ function rowsToPrintableHtml(rows: ReportRow[]) {
 body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #d1d5db;padding:7px;text-align:left;vertical-align:top}th{background:#f3f4f6}h1{font-size:20px}
 @media print{@page{size:landscape;margin:12mm}}
 </style></head><body><h1>Follow-up Reports</h1><table><thead><tr>${[
-    "Customer",
-    "Mobile",
-    "Balance",
+    "Customer Name",
+    "Mobile Number",
+    "Balance Amount",
     "Summary",
     "Next Action",
     "Status",
@@ -322,11 +397,18 @@ export async function GET(request: Request) {
   const chequeWhere: Prisma.ChequeWhereInput = {
     shopId,
     ...(activityFrom || activityTo
-      ? { collectionDateTime: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
+      ? {
+          OR: [
+            { collectionDateTime: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } },
+            { depositDateTime: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } },
+            { clearedAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } },
+            { bouncedAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } },
+          ],
+        }
       : {}),
     ...(staffId ? { collectedById: staffId } : {}),
     customer: customerWhere,
-    OR: [{ staffVisitId: null }, { staffVisit: { status: "COMPLETED" } }],
+    AND: [{ OR: [{ staffVisitId: null }, { staffVisit: { status: "COMPLETED" } }] }],
   };
 
   const [followUps, completedVisits, payments, cheques, users, paymentsToday, outstanding, allToday, staffGroups, trendRows] =
@@ -345,7 +427,8 @@ export async function GET(request: Request) {
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
           staff: { select: { id: true, name: true, role: true } },
-          cheques: { orderBy: { createdAt: "desc" }, take: 3 },
+          photos: { orderBy: { createdAt: "desc" }, take: 6 },
+          cheques: { orderBy: { createdAt: "desc" }, take: 3, include: { depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } } } },
         },
         orderBy: [{ checkOutAt: "desc" }, { updatedAt: "desc" }],
         take: ACTIVITY_LIMIT,
@@ -364,7 +447,7 @@ export async function GET(request: Request) {
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
           collectedBy: { select: { id: true, name: true, role: true } },
-          depositedAccount: { select: { bankName: true, accountName: true } },
+          depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } },
         },
         orderBy: [{ collectionDateTime: "desc" }, { createdAt: "desc" }],
         take: ACTIVITY_LIMIT,
@@ -410,6 +493,7 @@ export async function GET(request: Request) {
     const notes = cleanText(followUp.notes) || cleanText(followUp.customerResponse);
     const statusLabel = humanStatus(followUp.status);
     const latestActivityAt = followUp.actionLoggedAt ?? followUp.followupDate;
+    const recoveryAmount = followUp.customer.payments[0]?.amount ?? 0;
     const summary = followUpSummary({
       status: followUp.status,
       actor,
@@ -425,20 +509,33 @@ export async function GET(request: Request) {
       mobileNumber: followUp.customer.contactNumber,
       currentBalance: followUp.customer.outstandingBalance,
       summary,
+      detailedNotes: [notes, cleanText(followUp.reminderNotes)].filter(Boolean).join(" | "),
+      followUpType: statusLabel,
+      recoveryAmount,
+      paymentStatus: paymentStatusFor(followUp.customer.outstandingBalance, recoveryAmount),
+      promiseDate: followUp.status === "PAYMENT_PROMISED" ? followUp.nextFollowupDate : null,
       nextAction: followUp.reminderEnabled && followUp.nextFollowUpDateTime
         ? `Reminder ${formatShortDate(followUp.nextFollowUpDateTime)}`
         : next.text,
       nextActionAt: followUp.nextFollowUpDateTime ?? next.at,
+      reminderStatus: reminderStatusFor(followUp),
       status: statusLabel,
       statusTone: toneForStatus(statusLabel),
       createdBy: actor,
+      userRole: humanStatus(followUp.createdBy.role),
       staffId: followUp.createdById,
+      visitStatus: "-",
+      chequeStatus: "-",
+      bankAccount: "-",
+      depositStatus: "-",
+      createdAt: followUp.createdAt,
+      lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
       isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < todayStart),
       isPromise: followUp.status === "PAYMENT_PROMISED",
       notes,
-      timeline: [{ at: latestActivityAt, type: "Follow-up", summary, by: actor, status: statusLabel }],
+      timeline: [{ at: latestActivityAt, type: "Follow-up", summary, by: actor, status: statusLabel, notes }],
     });
   });
 
@@ -446,6 +543,9 @@ export async function GET(request: Request) {
     const cheque = visit.cheques[0];
     const actor = visit.staff.name;
     const latestActivityAt = visit.checkOutAt ?? visit.updatedAt;
+    const visitNotes = [cleanText(visit.result), cleanText(visit.notes), visit.photos.length ? `${visit.photos.length} photo${visit.photos.length === 1 ? "" : "s"} uploaded` : ""]
+      .filter(Boolean)
+      .join(" | ");
     const summary = cheque
       ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
       : visit.recoveryAmount > 0
@@ -460,18 +560,31 @@ export async function GET(request: Request) {
       mobileNumber: visit.customer.contactNumber,
       currentBalance: visit.customer.outstandingBalance,
       summary,
+      detailedNotes: visitNotes,
+      followUpType: visit.visitType,
+      recoveryAmount: visit.recoveryAmount,
+      paymentStatus: paymentStatusFor(visit.customer.outstandingBalance, visit.recoveryAmount),
+      promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,
+      reminderStatus: "No reminder",
       status: cheque ? "Cheque Collected" : statusLabel,
       statusTone: cheque ? "blue" : toneForStatus(statusLabel),
       createdBy: actor,
+      userRole: humanStatus(visit.staff.role),
       staffId: visit.staffId,
+      visitStatus: humanStatus(visit.status),
+      chequeStatus: cheque ? humanStatus(cheque.status) : "-",
+      bankAccount: cheque?.depositedAccount ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}` : "-",
+      depositStatus: cheque?.depositDateTime ? `Deposited ${formatShortDate(cheque.depositDateTime)}` : cheque ? "Pending deposit" : "-",
+      createdAt: visit.createdAt,
+      lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
       isOverdue: Boolean(next.at && next.at < todayStart),
       isPromise: false,
-      notes: cleanText(visit.result) || cleanText(visit.notes),
-      timeline: [{ at: latestActivityAt, type: "Visit", summary, by: actor, status: visit.status }],
+      notes: visitNotes,
+      timeline: [{ at: latestActivityAt, type: "Completed Visit", summary, by: actor, status: visit.status, notes: visitNotes }],
     });
   });
 
@@ -485,18 +598,31 @@ export async function GET(request: Request) {
       mobileNumber: payment.customer.contactNumber,
       currentBalance: payment.customer.outstandingBalance,
       summary: `Payment recovered ${formatMoney(payment.amount)}`,
+      detailedNotes: cleanText(payment.notes),
+      followUpType: "Payment Collected",
+      recoveryAmount: payment.amount,
+      paymentStatus: paymentStatusFor(payment.customer.outstandingBalance, payment.amount),
+      promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,
+      reminderStatus: "No reminder",
       status: "Recovered",
       statusTone: "green",
       createdBy: actor,
+      userRole: humanStatus(payment.createdBy.role),
       staffId: payment.createdById,
+      visitStatus: "-",
+      chequeStatus: "-",
+      bankAccount: "-",
+      depositStatus: "-",
+      createdAt: payment.createdAt,
+      lastUpdatedAt: payment.paidAt,
       latestActivityAt: payment.paidAt,
       relativeActivityTime: relativeTime(payment.paidAt),
       isOverdue: Boolean(next.at && next.at < todayStart),
       isPromise: false,
       notes: cleanText(payment.notes),
-      timeline: [{ at: payment.paidAt, type: "Payment", summary: `Recovered ${formatMoney(payment.amount)}`, by: actor, status: "Recovered" }],
+      timeline: [{ at: payment.paidAt, type: "Payment", summary: `Recovered ${formatMoney(payment.amount)}`, by: actor, status: "Recovered", notes: cleanText(payment.notes) }],
     });
   });
 
@@ -506,6 +632,22 @@ export async function GET(request: Request) {
     const next = nextActionFor(cheque.customer);
     const statusLabel = cheque.status === "PENDING_DEPOSIT" ? "Pending Deposit" : humanStatus(cheque.status);
     const summary = chequeSummary(cheque);
+    const bankAccount = cheque.depositedAccount
+      ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}`
+      : cheque.depositBankAccount || "-";
+    const depositStatus =
+      cheque.status === "BOUNCED"
+        ? "Bounced"
+        : cheque.status === "CLEARED"
+          ? "Cleared"
+          : cheque.depositDateTime
+            ? `Deposited ${formatShortDate(cheque.depositDateTime)}`
+            : "Pending deposit";
+    const chequeNotes = [
+      cleanText(cheque.collectionNotes),
+      cheque.ocrConfidence ? `OCR ${Math.round(cheque.ocrConfidence * 100)}%` : "",
+      cleanText(cheque.bounceReason),
+    ].filter(Boolean).join(" | ");
     pushActivity({
       id: `cheque-${cheque.id}`,
       customerId: cheque.customerId,
@@ -513,18 +655,31 @@ export async function GET(request: Request) {
       mobileNumber: cheque.customer.contactNumber,
       currentBalance: cheque.customer.outstandingBalance,
       summary,
+      detailedNotes: chequeNotes,
+      followUpType: "Cheque Pickup",
+      recoveryAmount: cheque.status === "CLEARED" ? cheque.amount : 0,
+      paymentStatus: cheque.status === "CLEARED" ? "Recovered" : "Pending",
+      promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,
+      reminderStatus: "No reminder",
       status: statusLabel,
       statusTone: toneForStatus(statusLabel),
       createdBy: actor,
+      userRole: humanStatus(cheque.collectedBy.role),
       staffId: cheque.collectedById,
+      visitStatus: cheque.staffVisitId ? "Completed" : "-",
+      chequeStatus: statusLabel,
+      bankAccount,
+      depositStatus,
+      createdAt: cheque.createdAt,
+      lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
       isOverdue: Boolean(next.at && next.at < todayStart),
       isPromise: false,
-      notes: cleanText(cheque.collectionNotes) || cleanText(cheque.bounceReason),
-      timeline: [{ at: latestActivityAt, type: "Cheque", summary, by: actor, status: statusLabel }],
+      notes: chequeNotes,
+      timeline: [{ at: latestActivityAt, type: "Cheque", summary, by: actor, status: statusLabel, notes: chequeNotes }],
     });
   });
 
