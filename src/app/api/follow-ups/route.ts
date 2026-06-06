@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
-import { recordFollowUpActivity } from "@/lib/follow-up-service";
+import { recordFollowUpActivity, type FollowUpSourceModule } from "@/lib/follow-up-service";
 
 const schema = z.object({
   customerId: z.string(),
@@ -32,6 +33,17 @@ const schema = z.object({
   scheduledAt: z.string().datetime().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
   paidAmount: z.number().min(0).optional(),
+  sourceModule: z
+    .enum(["TODAY_FOLLOWUPS", "CUSTOMER_MODULE", "FIELD_VISIT", "CHEQUE_COLLECTION", "CHEQUE_DEPOSIT", "ADMIN_MANUAL", "AUTO_REMINDER"])
+    .optional(),
+  followUpType: z.string().max(80).optional(),
+  summary: z.string().max(300).optional(),
+  detailedNotes: z.string().max(2000).optional(),
+  paymentStatus: z.string().max(80).optional(),
+  chequeStatus: z.string().max(80).optional(),
+  promiseDate: z.string().datetime().optional().nullable(),
+  activitySource: z.string().max(80).optional(),
+  metadata: z.unknown().optional(),
 });
 
 export async function POST(request: Request) {
@@ -60,12 +72,15 @@ export async function POST(request: Request) {
         scheduledAt: body.scheduledAt,
         nextFollowupDate: body.nextFollowupDate,
         recoveryAmount: body.paidAmount,
-        paymentStatus: body.status === "PAID" ? "PAID" : body.status === "PARTIAL_PAID" ? "PARTIAL_PAID" : null,
-        sourceModule: "TODAY_FOLLOWUPS",
-        followUpType: body.status,
-        summary: body.notes ?? body.customerResponse ?? `${body.status.replace(/_/g, " ").toLowerCase()} for ${customer.partyName}`,
-        detailedNotes: body.notes,
-        activitySource: "today-follow-ups",
+        sourceModule: (body.sourceModule ?? "TODAY_FOLLOWUPS") as FollowUpSourceModule,
+        followUpType: body.followUpType ?? body.status,
+        summary: body.summary ?? body.notes ?? body.customerResponse ?? `${body.status.replace(/_/g, " ").toLowerCase()} for ${customer.partyName}`,
+        detailedNotes: body.detailedNotes ?? body.notes,
+        paymentStatus: body.paymentStatus ?? (body.status === "PAID" ? "PAID" : body.status === "PARTIAL_PAID" ? "PARTIAL_PAID" : null),
+        chequeStatus: body.chequeStatus,
+        promiseDate: body.promiseDate,
+        activitySource: body.activitySource ?? (body.sourceModule === "CUSTOMER_MODULE" ? "customer-quick-follow-up" : "today-follow-ups"),
+        metadata: body.metadata as Prisma.InputJsonValue | undefined,
         recordPayment: body.status === "PAID" || body.status === "PARTIAL_PAID",
         paymentMethod: body.status === "PAID" ? "Full recovery" : "Partial recovery",
       });

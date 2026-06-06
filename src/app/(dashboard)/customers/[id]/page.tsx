@@ -181,9 +181,9 @@ export default function CustomerDetailPage() {
         <button
           type="button"
           onClick={() => setShowModal(true)}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white"
+          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
         >
-          Log follow-up call
+          Quick Follow-up
         </button>
       </div>
 
@@ -504,6 +504,9 @@ export default function CustomerDetailPage() {
       {showModal && (
         <FollowUpModal
           customerId={customer.id}
+          customerName={customer.partyName}
+          balance={customer.outstandingBalance}
+          recentInteractions={customer.followUps}
           onClose={() => setShowModal(false)}
           onSaved={load}
         />

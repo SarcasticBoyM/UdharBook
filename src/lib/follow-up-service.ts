@@ -67,7 +67,12 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
 
   const requestedReminderAt = input.nextFollowUpDateTime ?? input.scheduledAt ?? input.nextFollowupDate;
   const reminderDateTime = toDate(requestedReminderAt);
-  const reminderStatusAllowed = input.status === "CALLBACK" || input.status === "FOLLOW_UP_REQUIRED";
+  const reminderStatusAllowed =
+    input.status === "CALLBACK" ||
+    input.status === "FOLLOW_UP_REQUIRED" ||
+    input.status === "PAYMENT_PROMISED" ||
+    input.status === "RESCHEDULED" ||
+    input.status === "PENDING";
   const reminderEnabled = Boolean(input.manualReminder && input.reminderEnabled !== false && reminderDateTime && reminderStatusAllowed);
   const scheduledAt = reminderEnabled ? reminderDateTime : toDate(input.scheduledAt);
   const nextDate = toDate(input.nextFollowupDate) ?? reminderDateTime ?? scheduledAt;
