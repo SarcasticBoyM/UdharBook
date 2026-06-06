@@ -17,6 +17,15 @@ function getSecret() {
   return new TextEncoder().encode(secret);
 }
 
+function sessionLogMeta(user: SessionUser) {
+  return {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    shopId: user.shopId,
+  };
+}
+
 export async function createSession(user: SessionUser) {
   const token = await new SignJWT({
     id: user.id,
@@ -38,11 +47,19 @@ export async function createSession(user: SessionUser) {
     maxAge: MAX_AGE,
     path: "/",
   });
+  logger.info("session_created", {
+    ...sessionLogMeta(user),
+    maxAge: MAX_AGE,
+    secureCookie: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+  });
 }
 
-export async function destroySession() {
+export async function destroySession(reason = "explicit_logout") {
   const cookieStore = await cookies();
   cookieStore.delete(COOKIE_NAME);
+  logger.info("session_destroyed", { reason });
 }
 
 async function clearSessionIfWritable() {
@@ -57,7 +74,10 @@ async function clearSessionIfWritable() {
 export async function getSession(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
-  if (!token) return null;
+  if (!token) {
+    logger.warn("session_missing_cookie");
+    return null;
+  }
 
   try {
     const { payload } = await jwtVerify(token, getSecret());
@@ -88,7 +108,7 @@ export async function getSession(): Promise<SessionUser | null> {
       return null;
     }
 
-    return {
+    const session = {
       id: user.id,
       name: user.name,
       email: user.email,
@@ -96,6 +116,8 @@ export async function getSession(): Promise<SessionUser | null> {
       shopId: user.shopId,
       shopName: user.shop?.shopName ?? null,
     };
+    logger.info("session_validated", sessionLogMeta(session));
+    return session;
   } catch (error) {
     logger.warn("session_decode_failed", {
       error: error instanceof Error ? error.message : "Unknown session decode error",

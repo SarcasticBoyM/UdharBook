@@ -16,6 +16,22 @@ const PUBLIC = [
   "/icon.svg",
 ];
 
+function logMiddleware(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) {
+  const payload = JSON.stringify({
+    level,
+    message,
+    timestamp: new Date().toISOString(),
+    ...meta,
+  });
+  if (level === "error") {
+    console.error(payload);
+  } else if (level === "warn") {
+    console.warn(payload);
+  } else {
+    console.info(payload);
+  }
+}
+
 function getSecret() {
   const secret = process.env.SESSION_SECRET;
   if (!secret || secret.length < 24) {
@@ -44,6 +60,11 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get(COOKIE_NAME)?.value;
   if (!token) {
+    logMiddleware("warn", "middleware_missing_session_cookie", {
+      path: pathname,
+      method: request.method,
+      isApi: pathname.startsWith("/api/"),
+    });
     if (pathname.startsWith("/api/")) {
       return secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
     }
@@ -56,39 +77,44 @@ export async function middleware(request: NextRequest) {
     const shopId = payload.shopId as string | undefined;
 
     if (pathname.startsWith("/shops") && role !== "SUPER_ADMIN") {
+      logMiddleware("warn", "middleware_redirect_shops_forbidden", { path: pathname, role, shopId });
       return secure(NextResponse.redirect(new URL("/", request.url)));
     }
     if (pathname.startsWith("/api/shops") && role !== "SUPER_ADMIN") {
+      logMiddleware("warn", "middleware_reject_api_shops_forbidden", { path: pathname, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
     if (pathname.startsWith("/api/onboarding") && role !== "SUPER_ADMIN") {
+      logMiddleware("warn", "middleware_reject_api_onboarding_forbidden", { path: pathname, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
     if ((pathname.startsWith("/follow-ups") || pathname.startsWith("/reports")) && role === "STAFF") {
+      logMiddleware("info", "middleware_redirect_staff_reports", { path: pathname, role, shopId });
       return secure(NextResponse.redirect(new URL("/today-follow-ups", request.url)));
     }
     if (pathname.startsWith("/live-tracking") && role === "STAFF") {
+      logMiddleware("info", "middleware_redirect_staff_live_tracking", { path: pathname, role, shopId });
       return secure(NextResponse.redirect(new URL("/field-staff", request.url)));
     }
     if (
       (pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/reports")) &&
       role === "STAFF"
     ) {
+      logMiddleware("warn", "middleware_reject_staff_reports_api", { path: pathname, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
     if (!shopId) {
+      logMiddleware("error", "middleware_redirect_missing_shop_id", { path: pathname, role });
       return secure(NextResponse.redirect(new URL("/login", request.url)));
     }
 
+    logMiddleware("info", "middleware_session_validated", { path: pathname, role, shopId });
     return secure(NextResponse.next());
   } catch (error) {
-    console.warn(JSON.stringify({
-      level: "warn",
-      message: "middleware_session_decode_failed",
-      timestamp: new Date().toISOString(),
+    logMiddleware("warn", "middleware_session_decode_failed", {
       path: pathname,
       error: error instanceof Error ? error.message : "Unknown middleware auth error",
-    }));
+    });
     if (pathname.startsWith("/api/")) {
       return clearSessionCookie(secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 })));
     }

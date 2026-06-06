@@ -11,15 +11,31 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [clearingExpiredSession, setClearingExpiredSession] = useState(false);
 
   useEffect(() => {
-    if (window.location.search.includes("session=expired")) {
-      void fetch("/api/auth/logout", { method: "POST" });
+    if (!window.location.search.includes("session=expired")) {
+      return;
     }
-  }, []);
+    let cancelled = false;
+    setClearingExpiredSession(true);
+    void fetch("/api/auth/logout?reason=session_expired_redirect", { method: "POST" }).finally(() => {
+      if (cancelled) {
+        return;
+      }
+      router.replace("/login");
+      setClearingExpiredSession(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (clearingExpiredSession) {
+      return;
+    }
     setLoading(true);
     setError("");
     const res = await fetch("/api/auth/login", {
@@ -73,10 +89,10 @@ export default function LoginPage() {
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || clearingExpiredSession}
             className="w-full rounded-lg bg-brand-600 py-2.5 font-medium text-white hover:bg-brand-700 disabled:opacity-50"
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {clearingExpiredSession ? "Resetting session..." : loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
         <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
