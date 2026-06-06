@@ -149,6 +149,9 @@ export async function middleware(request: NextRequest) {
     logMiddleware("warn", "middleware_session_decode_failed", {
       path: pathname,
       error: error instanceof Error ? error.message : "Unknown middleware auth error",
+      stack: error instanceof Error ? error.stack : undefined,
+      hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+      sessionSecretLength: process.env.SESSION_SECRET?.length ?? 0,
     });
     if (pathname.startsWith("/api/")) {
       return clearSessionCookie(secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 })));

@@ -27,17 +27,29 @@ function sessionLogMeta(user: SessionUser) {
 }
 
 export async function createSession(user: SessionUser) {
-  const token = await new SignJWT({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    shopId: user.shopId,
-    shopName: user.shopName,
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime(`${MAX_AGE}s`)
-    .sign(getSecret());
+  let token: string;
+  try {
+    token = await new SignJWT({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      shopId: user.shopId,
+      shopName: user.shopName,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setExpirationTime(`${MAX_AGE}s`)
+      .sign(getSecret());
+  } catch (error) {
+    logger.error("session_create_token_failed", {
+      ...sessionLogMeta(user),
+      error: error instanceof Error ? error.message : "Unknown session token error",
+      stack: error instanceof Error ? error.stack : undefined,
+      hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+      sessionSecretLength: process.env.SESSION_SECRET?.length ?? 0,
+    });
+    throw error;
+  }
 
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
@@ -90,7 +102,15 @@ export async function getSession(): Promise<SessionUser | null> {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { shop: { select: { shopName: true } } },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        shopId: true,
+        disabledAt: true,
+        shop: { select: { shopName: true } },
+      },
     });
     if (!user) {
       logger.warn("session_user_missing", { userId });
@@ -121,6 +141,7 @@ export async function getSession(): Promise<SessionUser | null> {
   } catch (error) {
     logger.warn("session_decode_failed", {
       error: error instanceof Error ? error.message : "Unknown session decode error",
+      stack: error instanceof Error ? error.stack : undefined,
     });
     await clearSessionIfWritable();
     return null;
@@ -129,14 +150,26 @@ export async function getSession(): Promise<SessionUser | null> {
 
 export async function login(email: string, password: string): Promise<SessionUser | null> {
   const normalizedEmail = email.toLowerCase();
+  logger.info("login_lookup_started", { email: normalizedEmail });
   const user = await prisma.user.findUnique({
     where: { email: normalizedEmail },
-    include: { shop: { select: { shopName: true } } },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      passwordHash: true,
+      role: true,
+      shopId: true,
+      disabledAt: true,
+      tempPasswordExpiresAt: true,
+      shop: { select: { id: true, shopName: true } },
+    },
   });
   if (!user) {
     logger.warn("login_failed_user_missing", { email: normalizedEmail });
     return null;
   }
+  logger.info("login_user_found", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
   if (user.disabledAt) {
     logger.warn("login_failed_disabled_user", { userId: user.id, email: user.email, role: user.role });
     return null;
@@ -145,6 +178,7 @@ export async function login(email: string, password: string): Promise<SessionUse
     logger.error("login_failed_missing_shop", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
     return null;
   }
+  logger.info("login_shop_validated", { userId: user.id, shopId: user.shopId, shopName: user.shop.shopName });
   if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
     logger.warn("login_failed_temp_password_expired", { userId: user.id, email: user.email, role: user.role });
     return null;
@@ -154,12 +188,18 @@ export async function login(email: string, password: string): Promise<SessionUse
     logger.warn("login_failed_invalid_password", { userId: user.id, email: user.email, role: user.role });
     return null;
   }
+  logger.info("login_password_validated", { userId: user.id, email: user.email, role: user.role });
   await prisma.user.update({
     where: { id: user.id },
-    data: {
-      lastLoginAt: new Date(),
-      firstLoginAt: user.firstLoginAt ?? new Date(),
-    },
+    data: { lastLoginAt: new Date() },
+  }).catch((error) => {
+    logger.error("login_last_login_update_failed_non_blocking", {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      error: error instanceof Error ? error.message : "Unknown last login update error",
+      stack: error instanceof Error ? error.stack : undefined,
+    });
   });
   await prisma.activityLog.create({
     data: {
