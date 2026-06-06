@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { prisma } from "./db";
+import { prisma, withPrismaRetry } from "./db";
 import type { SessionUser } from "@/types";
 import { logger } from "@/lib/logger";
 
@@ -100,7 +100,7 @@ export async function getSession(): Promise<SessionUser | null> {
       return null;
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await withPrismaRetry(() => prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -111,7 +111,7 @@ export async function getSession(): Promise<SessionUser | null> {
         disabledAt: true,
         shop: { select: { shopName: true } },
       },
-    });
+    }), { operation: "session_user_lookup", userId });
     if (!user) {
       logger.warn("session_user_missing", { userId });
       await clearSessionIfWritable();
@@ -151,7 +151,7 @@ export async function getSession(): Promise<SessionUser | null> {
 export async function login(email: string, password: string): Promise<SessionUser | null> {
   const normalizedEmail = email.toLowerCase();
   logger.info("login_lookup_started", { email: normalizedEmail });
-  const user = await prisma.user.findUnique({
+  const user = await withPrismaRetry(() => prisma.user.findUnique({
     where: { email: normalizedEmail },
     select: {
       id: true,
@@ -164,7 +164,7 @@ export async function login(email: string, password: string): Promise<SessionUse
       tempPasswordExpiresAt: true,
       shop: { select: { id: true, shopName: true } },
     },
-  });
+  }), { operation: "login_user_lookup", email: normalizedEmail });
   if (!user) {
     logger.warn("login_failed_user_missing", { email: normalizedEmail });
     return null;
