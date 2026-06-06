@@ -6,6 +6,9 @@ import { requireShopId } from "@/lib/tenant";
 
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 const RECENT_CONTACT_HOURS = 6;
+const AUTO_QUEUE_NOTE = "Auto-created for daily recovery queue.";
+const SCHEDULED_STATUSES: FollowUpStatus[] = ["CALLBACK", "FOLLOW_UP_REQUIRED", "PAYMENT_PROMISED", "RESCHEDULED"];
+const CLOSED_STATUSES: FollowUpStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
 
 function startOfToday() {
   const date = new Date();
@@ -70,6 +73,34 @@ function priorityLabel(priority: FollowUpPriority) {
   return priority === "URGENT" ? "Critical" : priority[0] + priority.slice(1).toLowerCase();
 }
 
+function scheduledDateFor(followUp: {
+  nextFollowUpDateTime: Date | null;
+  nextFollowupDate: Date | null;
+  scheduledAt: Date | null;
+}) {
+  return followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt;
+}
+
+function isExplicitlyScheduled(followUp: {
+  status: FollowUpStatus;
+  notes: string | null;
+  manualReminder: boolean;
+  reminderEnabled: boolean;
+  nextFollowUpDateTime: Date | null;
+  nextFollowupDate: Date | null;
+  scheduledAt: Date | null;
+}) {
+  if (!scheduledDateFor(followUp)) return false;
+  if (CLOSED_STATUSES.includes(followUp.status)) return false;
+  if (followUp.status === "PENDING" && followUp.notes === AUTO_QUEUE_NOTE) return false;
+  return (
+    followUp.manualReminder ||
+    followUp.reminderEnabled ||
+    Boolean(followUp.nextFollowUpDateTime) ||
+    SCHEDULED_STATUSES.includes(followUp.status)
+  );
+}
+
 function queueScore(customer: QueueCustomer) {
   const overdue = daysOverdue(customer.nextFollowupDate);
   const followupAge = daysSince(customer.lastFollowupDate);
@@ -98,6 +129,22 @@ type QueueCustomer = Prisma.CustomerGetPayload<{
   smartPriorityLabel: string;
   queueScore: number;
   section: "urgent" | "today" | "recent";
+};
+
+type ScheduledFollowUp = QueueCustomer & {
+  scheduledFollowUp: {
+    id: string;
+    scheduledAt: Date;
+    followUpType: FollowUpStatus;
+    notes: string | null;
+    reminderNotes: string | null;
+    customerResponse: string | null;
+    assignedTo: string;
+    reminderEnabled: boolean;
+    manualReminder: boolean;
+    promiseToPay: boolean;
+    overdue: boolean;
+  };
 };
 
 type SortKey =
@@ -343,6 +390,77 @@ export async function GET(request: Request) {
     prisma.customer.count({ where: { shopId, outstandingBalance: { gt: 0 }, nextFollowupDate: { lt: todayStart } } }),
   ]);
 
+  const scheduledRows = await prisma.followUp.findMany({
+    where: {
+      shopId,
+      status: { notIn: CLOSED_STATUSES },
+      customer: { outstandingBalance: { gt: 0 } },
+      OR: [
+        { manualReminder: true },
+        { reminderEnabled: true },
+        { nextFollowUpDateTime: { not: null } },
+        { status: { in: SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
+      ],
+    },
+    include: {
+      createdBy: { select: { name: true } },
+      customer: { include },
+    },
+    orderBy: [{ nextFollowUpDateTime: "asc" }, { nextFollowupDate: "asc" }, { scheduledAt: "asc" }, { followupDate: "desc" }],
+    take: 300,
+  });
+
+  const scheduledByCustomer = new Map<string, ScheduledFollowUp>();
+  for (const row of scheduledRows) {
+    if (!isExplicitlyScheduled(row)) continue;
+    const scheduledAt = scheduledDateFor(row);
+    if (!scheduledAt) continue;
+    const smart = smartPriority(row.customer);
+    const candidate: ScheduledFollowUp = {
+      ...row.customer,
+      smartPriority: smart,
+      smartPriorityLabel: priorityLabel(smart),
+      queueScore: 0,
+      section: "today",
+      scheduledFollowUp: {
+        id: row.id,
+        scheduledAt,
+        followUpType: row.status,
+        notes: row.notes,
+        reminderNotes: row.reminderNotes,
+        customerResponse: row.customerResponse,
+        assignedTo: row.createdBy.name,
+        reminderEnabled: row.reminderEnabled,
+        manualReminder: row.manualReminder,
+        promiseToPay: row.status === "PAYMENT_PROMISED",
+        overdue: scheduledAt < todayStart,
+      },
+    };
+    candidate.queueScore = queueScore(candidate);
+    const existing = scheduledByCustomer.get(row.customerId);
+    if (!existing) {
+      scheduledByCustomer.set(row.customerId, candidate);
+      continue;
+    }
+    const now = Date.now();
+    const existingAt = existing.scheduledFollowUp.scheduledAt.getTime();
+    const candidateAt = candidate.scheduledFollowUp.scheduledAt.getTime();
+    if ((candidateAt < now && existingAt >= now) || Math.abs(candidateAt - now) < Math.abs(existingAt - now)) {
+      scheduledByCustomer.set(row.customerId, candidate);
+    }
+  }
+
+  const scheduled = Array.from(scheduledByCustomer.values()).sort((a, b) => {
+    const now = Date.now();
+    const aTime = a.scheduledFollowUp.scheduledAt.getTime();
+    const bTime = b.scheduledFollowUp.scheduledAt.getTime();
+    const aOverdue = aTime < now;
+    const bOverdue = bTime < now;
+    if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+    return aTime - bTime;
+  });
+  const scheduledIds = new Set(scheduled.map((customer) => customer.id));
+
   const doneIds = new Set(doneCustomers.map((customer) => customer.id));
   const enriched = customers.map((customer) => {
     const smart = smartPriority(customer);
@@ -366,7 +484,7 @@ export async function GET(request: Request) {
     return item;
   });
 
-  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id));
+  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id) && !scheduledIds.has(customer.id));
   const filteredPool =
     filter === "done" ? [] : pendingPool.filter((customer) => matchesFilter(filter, customer, todayStart, todayEnd));
   const sorted = filteredPool.sort((a, b) => compareBy(sort, a, b) || b.queueScore - a.queueScore);
@@ -407,6 +525,7 @@ export async function GET(request: Request) {
   }, 0);
 
   return NextResponse.json({
+    scheduled,
     pending,
     done,
     summary: {
@@ -420,6 +539,8 @@ export async function GET(request: Request) {
       callsCompleted,
       recoveryToday: todayRecovery._sum.amount ?? 0,
       overdue: overdueCount,
+      scheduled: scheduled.length,
+      scheduledOverdue: scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length,
       autoCreated,
       staffPerformance: staffActivity.map((item) => ({
         staffId: item.createdById,

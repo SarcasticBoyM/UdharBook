@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Bell,
+  CalendarClock,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   History,
   IndianRupee,
@@ -81,7 +84,24 @@ type QueueCustomer = {
   section?: "urgent" | "today" | "recent";
 };
 
+type ScheduledQueueCustomer = QueueCustomer & {
+  scheduledFollowUp: {
+    id: string;
+    scheduledAt: string;
+    followUpType: FollowUpStatus;
+    notes: string | null;
+    reminderNotes: string | null;
+    customerResponse: string | null;
+    assignedTo: string;
+    reminderEnabled: boolean;
+    manualReminder: boolean;
+    promiseToPay: boolean;
+    overdue: boolean;
+  };
+};
+
 type TodayResponse = {
+  scheduled: ScheduledQueueCustomer[];
   pending: QueueCustomer[];
   done: QueueCustomer[];
   summary: {
@@ -95,6 +115,8 @@ type TodayResponse = {
     callsCompleted: number;
     recoveryToday: number;
     overdue: number;
+    scheduled: number;
+    scheduledOverdue: number;
     autoCreated: number;
     staffPerformance: { staffId: string; name: string; actions: number }[];
   };
@@ -127,6 +149,8 @@ type FilterKey =
   | "not_answering"
   | "urgent";
 
+type ScheduledFilterKey = "all" | "today" | "upcoming" | "overdue" | "promise" | "reminder";
+
 const PAGE_SIZE = 30;
 const HIGH_AMOUNT = 50000;
 const COMPLETE_STATUSES: QueueStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
@@ -156,6 +180,15 @@ const FILTERS: { value: FilterKey; label: string }[] = [
   { value: "promise", label: "Promise to Pay" },
   { value: "not_answering", label: "Not Answering" },
   { value: "urgent", label: "Urgent Recovery" },
+];
+
+const SCHEDULED_FILTERS: { value: ScheduledFilterKey; label: string }[] = [
+  { value: "all", label: "All Scheduled" },
+  { value: "today", label: "Today" },
+  { value: "upcoming", label: "Upcoming" },
+  { value: "overdue", label: "Overdue" },
+  { value: "promise", label: "Promise To Pay" },
+  { value: "reminder", label: "Reminder Set" },
 ];
 
 const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
@@ -247,7 +280,40 @@ function statusLabel(status: string | null | undefined) {
   return status ? status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()) : "-";
 }
 
+function scheduledCountdown(date: string | Date) {
+  const target = new Date(date);
+  const diff = target.getTime() - Date.now();
+  const abs = Math.abs(diff);
+  const minutes = Math.max(1, Math.round(abs / 60000));
+  const hours = Math.round(abs / 3600000);
+  const days = Math.round(abs / 86400000);
+  const unit = days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : hours >= 1 ? `${hours}h` : `${minutes}m`;
+  if (diff < 0) return `Overdue by ${unit}`;
+
+  const tomorrow = startOfToday();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowEnd = new Date(tomorrow);
+  tomorrowEnd.setHours(23, 59, 59, 999);
+  if (target >= tomorrow && target <= tomorrowEnd) {
+    return `Tomorrow ${new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(target)}`;
+  }
+  return `Due in ${unit}`;
+}
+
+function matchesScheduledFilter(item: ScheduledQueueCustomer, filter: ScheduledFilterKey) {
+  const scheduledAt = new Date(item.scheduledFollowUp.scheduledAt);
+  const todayStart = startOfToday();
+  const todayEnd = endOfToday();
+  if (filter === "today") return scheduledAt >= todayStart && scheduledAt <= todayEnd;
+  if (filter === "upcoming") return scheduledAt > todayEnd;
+  if (filter === "overdue") return scheduledAt < todayStart || scheduledAt.getTime() < Date.now();
+  if (filter === "promise") return item.scheduledFollowUp.promiseToPay;
+  if (filter === "reminder") return item.scheduledFollowUp.manualReminder || item.scheduledFollowUp.reminderEnabled;
+  return true;
+}
+
 export default function TodayFollowUpsPage() {
+  const [scheduled, setScheduled] = useState<ScheduledQueueCustomer[]>([]);
   const [pending, setPending] = useState<QueueCustomer[]>([]);
   const [done, setDone] = useState<QueueCustomer[]>([]);
   const [summary, setSummary] = useState<TodayResponse["summary"]>({
@@ -261,6 +327,8 @@ export default function TodayFollowUpsPage() {
     callsCompleted: 0,
     recoveryToday: 0,
     overdue: 0,
+    scheduled: 0,
+    scheduledOverdue: 0,
     autoCreated: 0,
     staffPerformance: [],
   });
@@ -270,6 +338,8 @@ export default function TodayFollowUpsPage() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("priority_desc");
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [scheduledFilter, setScheduledFilter] = useState<ScheduledFilterKey>("all");
+  const [scheduledCollapsed, setScheduledCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -278,6 +348,7 @@ export default function TodayFollowUpsPage() {
   const notifiedIds = useRef<Set<string>>(new Set());
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
+    setScheduled(data.scheduled);
     setPending((current) => {
       const map = new Map((reset ? [] : current).map((customer) => [customer.id, customer]));
       for (const customer of data.pending) map.set(customer.id, { ...map.get(customer.id), ...customer });
@@ -345,8 +416,12 @@ export default function TodayFollowUpsPage() {
   }, [hasMore, loadPage, loadingMore, pending.length]);
 
   const selected = useMemo(
-    () => pending.find((customer) => customer.id === selectedId) ?? done.find((customer) => customer.id === selectedId) ?? null,
-    [done, pending, selectedId]
+    () =>
+      scheduled.find((customer) => customer.id === selectedId) ??
+      pending.find((customer) => customer.id === selectedId) ??
+      done.find((customer) => customer.id === selectedId) ??
+      null,
+    [done, pending, scheduled, selectedId]
   );
 
   const pendingSections = useMemo(
@@ -356,6 +431,11 @@ export default function TodayFollowUpsPage() {
       recent: pending.filter((customer) => customer.section === "recent"),
     }),
     [pending]
+  );
+
+  const visibleScheduled = useMemo(
+    () => scheduled.filter((customer) => matchesScheduledFilter(customer, scheduledFilter)),
+    [scheduled, scheduledFilter]
   );
 
   const playAlert = useCallback(() => {
@@ -438,6 +518,7 @@ export default function TodayFollowUpsPage() {
       (nextDate ? new Date(nextDate) > endOfToday() : false);
 
     setPending((current) => (shouldLeaveQueue ? current.filter((item) => item.id !== customer.id) : current.map((item) => (item.id === customer.id ? updated : item))));
+    setScheduled((current) => current.filter((item) => item.id !== customer.id));
     setDone((current) => [updated, ...current.filter((item) => item.id !== customer.id)]);
     setSummary((current) => ({
       ...current,
@@ -494,9 +575,10 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <section className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-8">
+      <section className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-9">
         <Metric label="Pending customers" value={summary.totalPendingCustomers} icon={Clock3} />
         <Metric label="Pending amount" value={formatCurrency(summary.totalPendingAmount)} icon={IndianRupee} />
+        <Metric label="Scheduled" value={summary.scheduled} icon={CalendarClock} tone={summary.scheduledOverdue > 0 ? "red" : "yellow"} />
         <Metric label="Overdue" value={summary.overdue} icon={ShieldAlert} tone="red" />
         <Metric label="Completed today" value={summary.completed} icon={CheckCircle2} tone="green" />
         <Metric label="Recovery today" value={formatCurrency(summary.recoveryToday)} icon={IndianRupee} tone="green" />
@@ -558,6 +640,19 @@ export default function TodayFollowUpsPage() {
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <main className="space-y-5">
+          <ScheduledQueueSection
+            customers={visibleScheduled}
+            total={scheduled.length}
+            overdueCount={summary.scheduledOverdue}
+            selectedId={selectedId}
+            filter={scheduledFilter}
+            collapsed={scheduledCollapsed}
+            onFilterChange={setScheduledFilter}
+            onToggle={() => setScheduledCollapsed((value) => !value)}
+            onSelect={setSelectedId}
+            onQuickSave={quickSave}
+          />
+
           {loading ? (
             <div className="flex min-h-56 items-center justify-center rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
               <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
@@ -674,6 +769,164 @@ function Metric({
       <p className="mt-2 text-xl font-bold">{value}</p>
     </div>
   );
+}
+
+function ScheduledQueueSection({
+  customers,
+  total,
+  overdueCount,
+  selectedId,
+  filter,
+  collapsed,
+  onFilterChange,
+  onToggle,
+  onSelect,
+  onQuickSave,
+}: {
+  customers: ScheduledQueueCustomer[];
+  total: number;
+  overdueCount: number;
+  selectedId: string | null;
+  filter: ScheduledFilterKey;
+  collapsed: boolean;
+  onFilterChange: (filter: ScheduledFilterKey) => void;
+  onToggle: () => void;
+  onSelect: (id: string) => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  return (
+    <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm dark:border-blue-900 dark:bg-blue-950/30">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <CalendarClock className="h-5 w-5 text-blue-700 dark:text-blue-300" />
+            <h2 className="text-lg font-bold">Scheduled Follow-ups</h2>
+          </div>
+          <p className="mt-1 text-sm text-blue-900/70 dark:text-blue-100/70">
+            {total} manually scheduled, {overdueCount} overdue
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-3 text-sm font-semibold text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
+        >
+          {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          {collapsed ? "Show" : "Hide"}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <>
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {SCHEDULED_FILTERS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => onFilterChange(item.value)}
+                className={cn(
+                  "shrink-0 rounded-full border px-3 py-2 text-xs font-semibold",
+                  filter === item.value
+                    ? "border-blue-700 bg-blue-700 text-white"
+                    : "border-blue-200 bg-white text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {customers.length === 0 ? (
+            <div className="mt-3 rounded-lg border border-dashed border-blue-300 bg-white/80 p-5 text-center text-sm text-blue-900/70 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-100/70">
+              No scheduled follow-ups match this view.
+            </div>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {customers.map((customer) => (
+                <ScheduledFollowUpCard
+                  key={customer.scheduledFollowUp.id}
+                  customer={customer}
+                  active={selectedId === customer.id}
+                  onOpen={() => onSelect(customer.id)}
+                  onQuickSave={onQuickSave}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ScheduledFollowUpCard({
+  customer,
+  active,
+  onOpen,
+  onQuickSave,
+}: {
+  customer: ScheduledQueueCustomer;
+  active: boolean;
+  onOpen: () => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  const scheduled = customer.scheduledFollowUp;
+  const dueAt = new Date(scheduled.scheduledAt);
+  const overdue = dueAt.getTime() < Date.now();
+  const latest = latestFollowUp(customer);
+  const notes = scheduled.notes || scheduled.customerResponse || scheduled.reminderNotes || latest?.notes || customer.notes || "No notes added.";
+
+  return (
+    <article
+      onClick={onOpen}
+      className={cn(
+        "cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition dark:bg-slate-900",
+        active && "ring-2 ring-blue-500",
+        overdue ? "border-red-300 dark:border-red-900" : "border-blue-200 dark:border-blue-900"
+      )}
+    >
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-lg font-bold">{customer.partyName}</h3>
+            {scheduled.promiseToPay && <Badge tone="violet">Promise to pay</Badge>}
+            {(scheduled.manualReminder || scheduled.reminderEnabled) && <Badge tone="blue">Reminder set</Badge>}
+            {overdue && <Badge tone="red">Overdue</Badge>}
+          </div>
+          <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{displayPhone(customer.contactNumber)}</p>
+          <p className="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{notes}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-4 lg:grid-cols-2">
+          <Info label="Balance" value={formatCurrency(customer.outstandingBalance)} />
+          <Info label="Scheduled" value={formatDateTime(dueAt)} />
+          <Info label="Type" value={statusLabel(scheduled.followUpType)} />
+          <Info label="Assigned" value={scheduled.assignedTo || "Staff"} />
+        </div>
+
+        <div className="flex flex-col gap-2 lg:min-w-40">
+          <span className={cn("rounded-full px-3 py-1 text-center text-xs font-bold", overdue ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100" : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100")}>
+            {scheduledCountdown(dueAt)}
+          </span>
+          <div className="grid grid-cols-2 gap-2">
+            <QuickButton label="Open" onClick={onOpen} />
+            <QuickButton label="Called" onClick={() => onQuickSave(customer, "CONTACTED", "Marked called from scheduled queue.")} />
+            <QuickButton label="Reschedule" onClick={onOpen} />
+            <QuickButton label="Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function Badge({ children, tone }: { children: React.ReactNode; tone: "blue" | "red" | "violet" }) {
+  const classes = {
+    blue: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100",
+    red: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100",
+    violet: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-100",
+  }[tone];
+  return <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", classes)}>{children}</span>;
 }
 
 function QueueSection({
