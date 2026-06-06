@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
+import { isFieldWorker } from "@/lib/field-tracking";
 
 const photoSchema = z.object({
   url: z.string().url(),
@@ -22,7 +23,7 @@ export async function POST(request: Request, { params }: Params) {
     const body = photoSchema.parse(await request.json());
     const visit = await prisma.staffVisit.findFirst({ where: { id, shopId } });
     if (!visit) return NextResponse.json({ error: "Visit not found" }, { status: 404 });
-    if (session.role !== "STAFF" || visit.staffId !== session.id) {
+    if (!isFieldWorker(session) || visit.staffId !== session.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

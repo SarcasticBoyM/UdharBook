@@ -48,6 +48,9 @@ export async function PATCH(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (session.role === "FIELD_SALES") {
+    return NextResponse.json({ error: "Field sales users can collect cheques from active visits, but cannot update cheque deposit status" }, { status: 403 });
+  }
 
   const { id } = await params;
   const shopId = requireShopId(request, session);

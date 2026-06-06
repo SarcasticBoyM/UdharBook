@@ -19,6 +19,9 @@ export async function POST(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (session.role === "FIELD_SALES") {
+    return NextResponse.json({ error: "Field sales payments must be recorded from an active visit workflow" }, { status: 403 });
+  }
 
   try {
     const { id } = await params;

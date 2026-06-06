@@ -212,7 +212,7 @@ export default function OnboardingPage() {
     setError("");
     setStaffPassword("");
     try {
-      const role = staff.roleLabel === "Shop Admin" ? "SHOP_ADMIN" : "STAFF";
+      const role = staff.roleLabel === "Shop Admin" ? "SHOP_ADMIN" : staff.roleLabel === "Field Executive" ? "FIELD_SALES" : "STAFF";
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

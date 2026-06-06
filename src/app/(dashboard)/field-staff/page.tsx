@@ -70,7 +70,7 @@ type Visit = {
   }[];
 };
 
-type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "STAFF";
+type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "STAFF" | "FIELD_SALES";
 
 type StaffStatus = {
   id: string;
@@ -227,9 +227,9 @@ export default function FieldStaffPage() {
   const retryTimerRef = useRef<number | null>(null);
   const activeVisitRef = useRef<Visit | null>(null);
 
-  const isStaff = role === "STAFF";
-  const isAdmin = role === "SHOP_ADMIN" || role === "SUPER_ADMIN";
-  const canCheckIn = Boolean(isStaff && (selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
+  const isFieldWorker = role === "FIELD_SALES" || role === "STAFF";
+  const isAdmin = role === "SHOP_ADMIN";
+  const canCheckIn = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
   const summary = useMemo(
     () => ({
@@ -377,11 +377,11 @@ export default function FieldStaffPage() {
     const data = await res.json();
     if (data.success) {
       setVisits(data.visits);
-      const openVisit = isStaff ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
+      const openVisit = isFieldWorker ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
       setActiveVisit(openVisit);
       setShowChequeFlow(isChequePayment(openVisit?.visitType ?? "", openVisit?.paymentMode ?? ""));
     }
-  }, [isStaff]);
+  }, [isFieldWorker]);
 
   const loadStaffStatuses = useCallback(async () => {
     if (!isAdmin) return;
@@ -499,7 +499,7 @@ export default function FieldStaffPage() {
   }
 
   async function startTracking() {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     setTracking(true);
     window.localStorage.setItem(GPS_SESSION_KEY, "true");
     runDirectGpsRequest({
@@ -514,7 +514,7 @@ export default function FieldStaffPage() {
   }
 
   async function stopTracking() {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     setTracking(false);
     window.localStorage.removeItem(GPS_SESSION_KEY);
     stopGpsWatcher();
@@ -534,7 +534,7 @@ export default function FieldStaffPage() {
   }
 
   async function saveCheckIn(position: GeolocationPosition) {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     if (!selectedCustomer && !leadName.trim()) return;
     const res = await fetch("/api/field-staff/visits", {
       method: "POST",
@@ -585,13 +585,13 @@ export default function FieldStaffPage() {
   }
 
   function checkIn() {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     if (!canCheckIn) return;
     runDirectGpsRequest({ status: "ON_VISIT", onSuccess: saveCheckIn });
   }
 
   function checkOut() {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     if (!activeVisit) return;
     runDirectGpsRequest({
       status: "ACTIVE",
@@ -643,7 +643,7 @@ export default function FieldStaffPage() {
   }
 
   function startNewVisit(prefill = search) {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     setShowNewVisit(true);
     setSelectedCustomer(null);
     setLeadName(prefill.trim());
@@ -651,7 +651,7 @@ export default function FieldStaffPage() {
   }
 
   function applyChip(source: CustomerSource) {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     setActiveCustomerSource(source);
     setSelectedCustomer(null);
     if (source === "new_visit") {
@@ -702,7 +702,7 @@ export default function FieldStaffPage() {
   }, [loadStaffStatuses, loadVisits, role]);
 
   useEffect(() => {
-    if (!isStaff) return;
+    if (!isFieldWorker) return;
     if (window.localStorage.getItem(GPS_SESSION_KEY) === "true") {
       setTracking(true);
       ensureGpsSession("restore");
@@ -723,10 +723,10 @@ export default function FieldStaffPage() {
       window.removeEventListener("focus", restart);
       document.removeEventListener("visibilitychange", restart);
     };
-  }, [ensureGpsSession, isStaff, startGpsWatcher]);
+  }, [ensureGpsSession, isFieldWorker, startGpsWatcher]);
 
   useEffect(() => {
-    if (!isStaff) {
+    if (!isFieldWorker) {
       setCustomers([]);
       setSearching(false);
       return;
@@ -750,7 +750,7 @@ export default function FieldStaffPage() {
       setSearching(false);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [activeCustomerSource, isStaff, search]);
+  }, [activeCustomerSource, isFieldWorker, search]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 pb-28">
@@ -759,9 +759,9 @@ export default function FieldStaffPage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Field Operations</p>
           <h1 className="text-2xl font-bold md:text-3xl">Field Operations</h1>
           <p className="text-sm text-slate-500">
-            {isStaff ? "Search customer or start a new visit instantly." : "Monitor live staff status, active visits, GPS, and today timeline."}
+            {isFieldWorker ? "Search customer or start a new visit instantly." : "Monitor live staff status, active visits, GPS, and today timeline."}
           </p>
-          {isStaff && (
+          {isFieldWorker && (
             <>
               <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${gpsBadge()}`}>
                 {gpsState === "checking" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
@@ -772,7 +772,7 @@ export default function FieldStaffPage() {
             </>
           )}
         </div>
-        {isStaff ? (
+        {isFieldWorker ? (
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={tracking ? stopTracking : startTracking} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white md:flex-none">
               {tracking ? <PauseCircle className="h-5 w-5" /> : <Navigation className="h-5 w-5" />}
@@ -792,7 +792,7 @@ export default function FieldStaffPage() {
       </div>
 
       {message && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div>}
-      {isStaff && gpsError && (
+      {isFieldWorker && gpsError && (
         <div className={`rounded-lg border p-3 text-sm ${gpsState === "denied" || gpsState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
           <p className="font-semibold">{gpsError}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -802,7 +802,7 @@ export default function FieldStaffPage() {
         </div>
       )}
 
-      {isStaff && tracking && (
+      {isFieldWorker && tracking && (
         <div className={`fixed bottom-20 right-3 z-40 rounded-full border px-3 py-2 text-xs font-semibold shadow-lg lg:bottom-4 ${gpsBadge()}`}>
           <span className="mr-1">{gpsState === "active" ? "GPS Active" : gpsLabel()}</span>
           <span className="font-normal">{lastSyncLabel().replace("Last sync: ", "")}</span>
@@ -822,7 +822,7 @@ export default function FieldStaffPage() {
 
       {isAdmin && <StaffStatusPanel staff={staffStatuses} />}
 
-      {isStaff && activeVisit ? (
+      {isFieldWorker && activeVisit ? (
         <ActiveVisitCard
           visit={activeVisit}
           visitType={visitType}
@@ -857,7 +857,7 @@ export default function FieldStaffPage() {
           onToggleChequeFlow={setShowChequeFlow}
           onSavedCheque={loadVisits}
         />
-      ) : isStaff ? (
+      ) : isFieldWorker ? (
         <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-bold">Start Customer Visit</h2>
@@ -1641,3 +1641,4 @@ function Stat({ label, value }: { label: string; value: string | number }) {
     </div>
   );
 }
+

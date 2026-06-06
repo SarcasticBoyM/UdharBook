@@ -70,6 +70,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (session.role === "FIELD_SALES") {
+    return NextResponse.json({ error: "Field sales users can create leads from the field visit workflow" }, { status: 403 });
+  }
 
   try {
     const body = createSchema.parse(await request.json());

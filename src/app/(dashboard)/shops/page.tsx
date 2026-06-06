@@ -189,7 +189,8 @@ export default function ShopsPage() {
             <input value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} placeholder="Name" className="rounded-lg border px-3 py-2 dark:border-slate-600 dark:bg-slate-800" required />
             <input type="email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} placeholder="Email" className="rounded-lg border px-3 py-2 dark:border-slate-600 dark:bg-slate-800" required />
             <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} className="rounded-lg border px-3 py-2 dark:border-slate-600 dark:bg-slate-800">
-              <option value="STAFF">Staff</option>
+              <option value="STAFF">Accounting / Recovery Staff</option>
+              <option value="FIELD_SALES">Field Sales</option>
               <option value="SHOP_ADMIN">Shop Admin</option>
             </select>
             <button className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white">Create</button>

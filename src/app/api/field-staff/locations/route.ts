@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
-import { freshnessStatus, isFieldAdmin, startOfDay, visibleStaffId, workDate } from "@/lib/field-tracking";
+import { freshnessStatus, isFieldAdmin, isFieldWorker, startOfDay, visibleStaffId, workDate } from "@/lib/field-tracking";
 
 const locationSchema = z.object({
   latitude: z.number().min(-90).max(90),
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
     const today = startOfDay();
 
     const staff = await prisma.user.findMany({
-      where: { shopId, ...(staffId ? { id: staffId } : { role: "STAFF" }) },
+      where: { shopId, ...(staffId ? { id: staffId } : { role: { in: ["STAFF", "FIELD_SALES"] } }) },
       select: { id: true, name: true, role: true },
       orderBy: { name: "asc" },
     });
@@ -104,8 +104,8 @@ export async function POST(request: Request) {
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.role !== "STAFF") {
-      return NextResponse.json({ success: false, error: "Only staff can update field location" }, { status: 403 });
+    if (!isFieldWorker(session)) {
+      return NextResponse.json({ success: false, error: "Only field users can update field location" }, { status: 403 });
     }
 
     const shopId = requireShopId(request, session);

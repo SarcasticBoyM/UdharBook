@@ -52,6 +52,7 @@ export async function GET(request: Request) {
   upcoming.setDate(upcoming.getDate() + 7);
 
   const where: Prisma.OrderWhereInput = { shopId };
+  if (session.role === "FIELD_SALES") where.createdById = session.id;
   if (filter === "pending") where.status = { in: ["PENDING", "PROCESSING"] };
   if (filter === "delivered") where.status = "DELIVERED";
   if (filter === "high") where.priority = "High";
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
   }
   if (filter === "sales") where.visitSource = "Sales Visit";
   if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
+  const summaryScope: Prisma.OrderWhereInput = session.role === "FIELD_SALES" ? { shopId, createdById: session.id } : { shopId };
 
   const [orders, pendingOrders, highPriorityOrders, deliveredToday, upcomingDeliveries] = await prisma.$transaction([
     prisma.order.findMany({
@@ -71,18 +73,18 @@ export async function GET(request: Request) {
       },
       take: 300,
     }),
-    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] } } }),
-    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, priority: "High" } }),
+    prisma.order.count({ where: { ...summaryScope, status: { in: ["PENDING", "PROCESSING"] } } }),
+    prisma.order.count({ where: { ...summaryScope, status: { in: ["PENDING", "PROCESSING"] }, priority: "High" } }),
     prisma.order.count({
       where: {
-        shopId,
+        ...summaryScope,
         status: "DELIVERED",
         deliveredAt: { gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) },
       },
     }),
     prisma.order.count({
       where: {
-        shopId,
+        ...summaryScope,
         status: { in: ["PENDING", "PROCESSING"] },
         preferredDeliveryDate: { gte: now, lte: upcoming },
       },
@@ -98,8 +100,7 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role === "STAFF") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (session.role === "SUPER_ADMIN") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (session.role !== "SHOP_ADMIN") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {

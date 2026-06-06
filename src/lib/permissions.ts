@@ -13,5 +13,5 @@ export function canManageUsers(role: UserRole): boolean {
 }
 
 export function canViewReports(role: UserRole): boolean {
-  return role === "SHOP_ADMIN";
+  return role === "SHOP_ADMIN" || role === "STAFF";
 }

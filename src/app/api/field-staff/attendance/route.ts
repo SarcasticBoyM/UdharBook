@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
-import { endOfDay, startOfDay, visibleStaffId, workDate } from "@/lib/field-tracking";
+import { endOfDay, isFieldWorker, startOfDay, visibleStaffId, workDate } from "@/lib/field-tracking";
 
 const attendanceSchema = z.object({
   action: z.enum(["START", "STOP"]),
@@ -53,8 +53,8 @@ export async function POST(request: Request) {
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.role !== "STAFF") {
-      return NextResponse.json({ success: false, error: "Only staff can update attendance" }, { status: 403 });
+    if (!isFieldWorker(session)) {
+      return NextResponse.json({ success: false, error: "Only field users can update attendance" }, { status: 403 });
     }
 
     const shopId = requireShopId(request, session);

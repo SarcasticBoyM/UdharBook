@@ -44,12 +44,17 @@ const platformLinks = [
   { href: "/shops", label: "Shops", icon: Store },
 ];
 
+const fieldSalesLinks = new Set(["/field-staff", "/daily-visits", "/customers", "/orders", "/cheques"]);
+const staffLinks = new Set(["/", "/today-follow-ups", "/customers", "/cheques", "/upload", "/follow-ups", "/reports"]);
+
 export function Sidebar({ userName, role }: { userName: string; role: string }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
-  const isAdmin = role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+  const isAdmin = role === "SHOP_ADMIN";
   const isSuperAdmin = role === "SUPER_ADMIN";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
+    if (role === "FIELD_SALES") return fieldSalesLinks.has(link.href);
+    if (role === "STAFF") return staffLinks.has(link.href);
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly) return isAdmin;
     return true;

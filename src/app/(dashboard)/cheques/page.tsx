@@ -455,7 +455,7 @@ export default function ChequeCollectionsPage() {
 
   const loadDepositAccounts = useCallback(async () => {
     const search = new URLSearchParams();
-    search.set("activeOnly", currentRole === "STAFF" ? "true" : "false");
+    search.set("activeOnly", currentRole === "STAFF" || currentRole === "FIELD_SALES" ? "true" : "false");
     if (from) search.set("from", from);
     if (to) search.set("to", to);
     if (staffId) search.set("staffId", staffId);
@@ -936,7 +936,7 @@ export default function ChequeCollectionsPage() {
             <Plus className="h-4 w-4" />
             Add Cheque
           </button>
-          {currentRole !== "STAFF" && (
+          {currentRole === "SHOP_ADMIN" && (
             <button
               type="button"
               onClick={() => setAccountPanelOpen((open) => !open)}
@@ -987,7 +987,7 @@ export default function ChequeCollectionsPage() {
         </div>
       )}
 
-      {accountPanelOpen && currentRole !== "STAFF" && (
+      {accountPanelOpen && currentRole === "SHOP_ADMIN" && (
         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
           <h2 className="font-bold">Manage Deposit Accounts</h2>
           <form onSubmit={saveDepositAccount} className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_160px_auto]">

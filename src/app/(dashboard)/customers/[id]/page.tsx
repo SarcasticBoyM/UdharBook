@@ -108,6 +108,8 @@ export default function CustomerDetailPage() {
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNotes, setPaymentNotes] = useState("");
   const [note, setNote] = useState("");
+  const [role, setRole] = useState("");
+  const isFieldSales = role === "FIELD_SALES";
 
   const load = useCallback(() => {
     fetch(`/api/customers/${id}`)
@@ -118,6 +120,13 @@ export default function CustomerDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setRole(data?.user?.role ?? ""))
+      .catch(() => setRole(""));
+  }, []);
 
   const addPayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -185,13 +194,15 @@ export default function CustomerDetailPage() {
             {formatStatus(customer.status as Parameters<typeof formatStatus>[0])}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowModal(true)}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-        >
-          Quick Follow-up
-        </button>
+        {!isFieldSales && (
+          <button
+            type="button"
+            onClick={() => setShowModal(true)}
+            className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
+          >
+            Quick Follow-up
+          </button>
+        )}
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -257,7 +268,7 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      {!isFieldSales && <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <form onSubmit={addPayment} className="card">
           <h2 className="font-semibold">Record Payment</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -323,7 +334,7 @@ export default function CustomerDetailPage() {
             )}
           </ul>
         </form>
-      </div>
+      </div>}
 
       <div className="card mt-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -515,7 +526,7 @@ export default function CustomerDetailPage() {
         </ul>
       </div>
 
-      {showModal && (
+      {showModal && !isFieldSales && (
         <FollowUpModal
           customerId={customer.id}
           customerName={customer.partyName}

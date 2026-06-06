@@ -11,7 +11,7 @@ import { logger } from "@/lib/logger";
 const createSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
-  role: z.enum(["SHOP_ADMIN", "STAFF"]),
+  role: z.enum(["SHOP_ADMIN", "STAFF", "FIELD_SALES"]),
   mobile: z.string().optional(),
   jobTitle: z.string().optional(),
   password: z.string().min(8).optional(),
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Selected shop no longer exists. Please select a valid business shop." }, { status: 400 });
     }
     if (!isSuperAdmin(session) && body.role === "SHOP_ADMIN") {
-      return NextResponse.json({ error: "Shop admins can only create staff" }, { status: 403 });
+      return NextResponse.json({ error: "Shop admins can only create staff or field sales users" }, { status: 403 });
     }
     const temporaryPassword = body.password ?? generateTemporaryPassword();
     const user = await prisma.user.create({

@@ -67,6 +67,8 @@ export default function OrderDeskPage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [role, setRole] = useState("");
+  const canManageOrders = role === "SHOP_ADMIN";
 
   async function load() {
     setLoading(true);
@@ -85,6 +87,13 @@ export default function OrderDeskPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setRole(data?.user?.role ?? ""))
+      .catch(() => setRole(""));
+  }, []);
 
   const visibleOrders = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -174,19 +183,21 @@ export default function OrderDeskPage() {
               <span>Source: {order.visitSource ?? "Field visit"}</span>
               <span>Order date: {formatDateTime(order.createdAt)}</span>
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {statuses.map((status) => (
-                <button
-                  key={status}
-                  type="button"
-                  onClick={() => updateStatus(order.id, status)}
-                  disabled={order.status === status}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold disabled:opacity-50 dark:border-slate-700"
-                >
-                  {status.replace(/_/g, " ")}
-                </button>
-              ))}
-            </div>
+            {canManageOrders && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {statuses.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => updateStatus(order.id, status)}
+                    disabled={order.status === status}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold disabled:opacity-50 dark:border-slate-700"
+                  >
+                    {status.replace(/_/g, " ")}
+                  </button>
+                ))}
+              </div>
+            )}
           </article>
         ))}
       </div>

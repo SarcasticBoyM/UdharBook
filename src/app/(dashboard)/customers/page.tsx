@@ -22,6 +22,8 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [followUpId, setFollowUpId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [role, setRole] = useState("");
+  const isFieldSales = role === "FIELD_SALES";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +48,13 @@ export default function CustomersPage() {
     const t = setTimeout(load, 300);
     return () => clearTimeout(t);
   }, [load]);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setRole(data?.user?.role ?? ""))
+      .catch(() => setRole(""));
+  }, []);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -83,19 +92,23 @@ export default function CustomersPage() {
             {view === "pending" ? " (with outstanding balance)" : ""}
           </p>
         </div>
-        <Link
-          href="/customers/new"
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700"
-        >
-          Add Customer
-        </Link>
-        <button
-          type="button"
-          onClick={exportExcel}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800"
-        >
-          Export Excel
-        </button>
+        {!isFieldSales && (
+          <Link
+            href="/customers/new"
+            className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700"
+          >
+            Add Customer
+          </Link>
+        )}
+        {!isFieldSales && (
+          <button
+            type="button"
+            onClick={exportExcel}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800"
+          >
+            Export Excel
+          </button>
+        )}
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -228,13 +241,15 @@ export default function CustomersPage() {
                         dueDate={c.nextFollowupDate}
                         compact
                       />
-                      <button
-                        type="button"
-                        onClick={() => setFollowUpId(c.id)}
-                        className="text-left text-xs text-brand-600 hover:underline"
-                      >
-                        Log follow-up
-                      </button>
+                      {!isFieldSales && (
+                        <button
+                          type="button"
+                          onClick={() => setFollowUpId(c.id)}
+                          className="text-left text-xs text-brand-600 hover:underline"
+                        >
+                          Quick Follow-up
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

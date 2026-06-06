@@ -12,6 +12,7 @@ enum UserRole {
   SUPER_ADMIN
   SHOP_ADMIN
   STAFF
+  FIELD_SALES
 }
 
 enum CustomerStatus {

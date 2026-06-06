@@ -14,7 +14,11 @@ export function endOfDay(value = new Date()) {
 }
 
 export function isFieldAdmin(session: SessionUser) {
-  return session.role === "SUPER_ADMIN" || session.role === "SHOP_ADMIN";
+  return session.role === "SHOP_ADMIN";
+}
+
+export function isFieldWorker(session: SessionUser) {
+  return session.role === "STAFF" || session.role === "FIELD_SALES";
 }
 
 export function visibleStaffId(session: SessionUser, requested?: string | null) {
