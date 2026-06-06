@@ -565,6 +565,9 @@ export async function GET(request: Request) {
       visit.orderQuantity ? `Qty: ${visit.orderQuantity}` : "",
       visit.orderExpectedDelivery ? `Delivery: ${formatShortDate(visit.orderExpectedDelivery)}` : "",
       cleanText(visit.orderPriority ? `Priority: ${visit.orderPriority}` : ""),
+      cleanText(visit.paymentMode ? `Payment mode: ${visit.paymentMode}` : ""),
+      cleanText(visit.paymentReference ? `Reference: ${visit.paymentReference}` : ""),
+      cleanText(visit.paymentBankName ? `Bank: ${visit.paymentBankName}` : ""),
       cleanText(visit.notes),
       visit.photos.length ? `${visit.photos.length} photo${visit.photos.length === 1 ? "" : "s"} uploaded` : "",
     ]
@@ -576,6 +579,12 @@ export async function GET(request: Request) {
       ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
       : orderReceived
         ? orderSummary
+        : visit.visitType === "Payment Collection" && visit.paymentMode === "Cash" && visit.recoveryAmount > 0
+          ? `Cash payment collected ${formatMoney(visit.recoveryAmount)}`
+        : visit.visitType === "Payment Collection" && visit.paymentMode === "NEFT / RTGS"
+          ? `NEFT payment received${visit.recoveryAmount > 0 ? ` ${formatMoney(visit.recoveryAmount)}` : ""}`
+        : visit.visitType === "Payment Collection" && visit.paymentMode === "Cheque Collected"
+          ? "Cheque collected during payment visit"
         : visit.recoveryAmount > 0
           ? `Visited by ${actor}, recovered ${formatMoney(visit.recoveryAmount)}`
           : visit.visitType === "Sales Visit" && visit.outcome
@@ -598,7 +607,7 @@ export async function GET(request: Request) {
       nextAction: next.text,
       nextActionAt: next.at,
       reminderStatus: "No reminder",
-      status: cheque ? "Cheque Collected" : orderReceived ? "Order Received" : statusLabel,
+      status: cheque || visit.paymentMode === "Cheque Collected" ? "Cheque Collected" : orderReceived ? "Order Received" : statusLabel,
       statusTone: cheque ? "blue" : toneForStatus(statusLabel),
       createdBy: actor,
       userRole: humanStatus(visit.staff.role),
@@ -688,7 +697,7 @@ export async function GET(request: Request) {
       currentBalance: cheque.customer.outstandingBalance,
       summary,
       detailedNotes: chequeNotes,
-      followUpType: "Cheque Pickup",
+      followUpType: "Payment Collection",
       recoveryAmount: cheque.status === "CLEARED" ? cheque.amount : 0,
       paymentStatus: cheque.status === "CLEARED" ? "Recovered" : "Pending",
       promiseDate: null,

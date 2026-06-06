@@ -23,10 +23,21 @@ const updateSchema = z.object({
   orderExpectedDelivery: z.string().datetime().optional(),
   orderProductCategory: z.string().optional(),
   orderPriority: z.string().optional(),
+  paymentMode: z.enum(["Cash", "NEFT / RTGS", "Cheque Collected"]).optional(),
+  paymentReference: z.string().optional(),
+  paymentBankName: z.string().optional(),
+  paymentScreenshotUrl: z.string().optional(),
 });
 
 const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup", "Collection", "Follow-up", "Payment Reminder"]);
-const followUpOutcomes = new Set(["Follow-up required", "Payment promised", "Revisit required", "Customer unavailable", "No response"]);
+const followUpOutcomes = new Set(["Follow-up Required", "Payment Promised", "Revisit Required", "Customer Unavailable", "Customer Busy"]);
+
+function paymentSummary(mode?: string | null, amount = 0) {
+  if (mode === "Cash") return `Cash payment collected Rs ${amount}`;
+  if (mode === "NEFT / RTGS") return `NEFT payment received${amount > 0 ? ` Rs ${amount}` : ""}`;
+  if (mode === "Cheque Collected") return "Cheque collected during payment visit";
+  return null;
+}
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -87,6 +98,10 @@ export async function PATCH(request: Request, { params }: Params) {
           recoveryAmount,
           travelKm,
           orderQuantity: body.orderQuantity,
+          paymentMode: body.paymentMode,
+          paymentReference: body.paymentReference,
+          paymentBankName: body.paymentBankName,
+          paymentScreenshotUrl: body.paymentScreenshotUrl,
         },
         include: {
           staff: { select: { name: true, role: true } },
@@ -159,9 +174,11 @@ export async function PATCH(request: Request, { params }: Params) {
           followUpType: updated.visitType,
           summary:
             recoveryAmount > 0
-              ? `Field visit recovered Rs ${recoveryAmount}`
+              ? paymentSummary(updated.paymentMode, recoveryAmount) ?? `Field visit recovered Rs ${recoveryAmount}`
               : updated.visitType === "Sales Visit" && updated.outcome === "Order Received"
                 ? `Sales visit completed, ${updated.orderProductCategory ?? "order"} received${updated.orderQuantity ? ` qty ${updated.orderQuantity}` : ""}`
+                : updated.paymentMode === "Cheque Collected"
+                  ? "Cheque collected during payment visit"
                 : `${updated.visitType} completed`,
           detailedNotes: body.notes,
           visitId: updated.id,
@@ -171,9 +188,12 @@ export async function PATCH(request: Request, { params }: Params) {
             orderAmount: body.orderAmount ?? null,
             orderQuantity: body.orderQuantity ?? null,
             orderProductCategory: body.orderProductCategory ?? null,
+            paymentMode: body.paymentMode ?? null,
+            paymentReference: body.paymentReference ?? null,
+            paymentBankName: body.paymentBankName ?? null,
             nextAction: body.nextAction ?? null,
           },
-          recordPayment: recoveryAmount > 0,
+          recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
           paymentMethod: "FIELD_VISIT",
         });
       }

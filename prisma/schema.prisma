@@ -279,6 +279,10 @@ model StaffVisit {
   orderExpectedDelivery DateTime?
   orderProductCategory String?
   orderPriority   String?
+  paymentMode     String?
+  paymentReference String?
+  paymentBankName String?
+  paymentScreenshotUrl String?
   leadArea        String?
   leadContactPerson String?
   visitMetadata   Json?

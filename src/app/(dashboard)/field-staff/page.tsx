@@ -49,6 +49,10 @@ type Visit = {
   orderExpectedDelivery?: string | null;
   orderProductCategory?: string | null;
   orderPriority?: string | null;
+  paymentMode?: string | null;
+  paymentReference?: string | null;
+  paymentBankName?: string | null;
+  paymentScreenshotUrl?: string | null;
   leadArea?: string | null;
   leadContactPerson?: string | null;
   recoveryAmount: number;
@@ -89,33 +93,26 @@ type StaffStatus = {
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
 type CustomerSource = "recent" | "pending_recovery" | "today_followup" | "high_amount" | "new_visit";
 
-const quickResults = [
-  "Interested",
-  "Order received",
-  "Follow-up required",
-  "Payment promised",
-  "Payment collected",
-  "Cheque collected",
-  "Customer unavailable",
-  "Revisit required",
-  "Complaint resolved",
-  "Complaint pending",
-  "New lead generated",
-  "No response",
+const commonVisitOutcomes = [
+  "Discussion Done",
+  "Customer Unavailable",
+  "Revisit Required",
+  "Follow-up Required",
+  "Customer Busy",
+  "Payment Promised",
 ];
+const paymentModes = ["Cash", "NEFT / RTGS", "Cheque Collected"];
 const salesOrderStatuses = [
   "Order Received",
-  "Follow-up Required",
   "Product Discussion",
-  "Sample Given",
   "Customer Interested",
+  "Follow-up Required",
   "No Order",
   "Revisit Required",
 ];
 const visitTypes = [
   "Recovery Follow-up",
   "Payment Collection",
-  "Cheque Pickup",
   "Sales Visit",
   "New Lead Visit",
   "Complaint Visit",
@@ -125,8 +122,8 @@ const visitTypes = [
   "Market Survey",
   "General Visit",
 ];
-const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup"]);
-const followUpRequiredOutcomes = new Set(["Follow-up Required", "Revisit Required", "Payment promised", "Customer unavailable", "No response"]);
+const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection"]);
+const followUpRequiredOutcomes = new Set(["Follow-up Required", "Revisit Required", "Payment Promised", "Customer Unavailable", "Customer Busy"]);
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
 const customerSourceOptions: { label: string; value: CustomerSource }[] = [
   { label: "Recent Customers", value: "recent" },
@@ -154,11 +151,25 @@ function formatDateTime(value?: string | null) {
 }
 
 function resultOptionsFor(visitType: string) {
-  return visitType === "Sales Visit" ? salesOrderStatuses : quickResults;
+  if (visitType === "Sales Visit") return salesOrderStatuses;
+  if (visitType === "Payment Collection") return ["Payment Collected", ...commonVisitOutcomes];
+  return commonVisitOutcomes;
 }
 
 function isOrderReceived(visitType: string, result: string) {
   return visitType === "Sales Visit" && result === "Order Received";
+}
+
+function isPaymentCollection(visitType: string) {
+  return visitType === "Payment Collection";
+}
+
+function isChequePayment(visitType: string, paymentMode: string) {
+  return isPaymentCollection(visitType) && paymentMode === "Cheque Collected";
+}
+
+function isMoneyPayment(visitType: string, paymentMode: string) {
+  return isPaymentCollection(visitType) && paymentMode !== "Cheque Collected";
 }
 
 function needsNextFollowup(result: string) {
@@ -189,12 +200,16 @@ export default function FieldStaffPage() {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [staffStatuses, setStaffStatuses] = useState<StaffStatus[]>([]);
   const [notes, setNotes] = useState("");
-  const [result, setResult] = useState(quickResults[0]);
+  const [result, setResult] = useState(resultOptionsFor("Sales Visit")[0]);
   const [nextAction, setNextAction] = useState("");
   const [orderQuantity, setOrderQuantity] = useState("");
   const [orderExpectedDelivery, setOrderExpectedDelivery] = useState("");
   const [orderProductCategory, setOrderProductCategory] = useState("");
   const [orderPriority, setOrderPriority] = useState("Normal");
+  const [paymentMode, setPaymentMode] = useState(paymentModes[0]);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentBankName, setPaymentBankName] = useState("");
+  const [paymentScreenshotUrl, setPaymentScreenshotUrl] = useState("");
   const [recoveryAmount, setRecoveryAmount] = useState("");
   const [nextFollowupDate, setNextFollowupDate] = useState("");
   const [showChequeFlow, setShowChequeFlow] = useState(false);
@@ -260,14 +275,22 @@ export default function FieldStaffPage() {
   }, [result, visitType]);
 
   useEffect(() => {
+    setShowChequeFlow(isChequePayment(visitType, paymentMode));
+  }, [paymentMode, visitType]);
+
+  useEffect(() => {
     if (!activeVisit) return;
     setVisitType(activeVisit.visitType ?? "General Visit");
-    setResult(activeVisit.outcome ?? activeVisit.result ?? quickResults[0]);
+    setResult(activeVisit.outcome ?? activeVisit.result ?? resultOptionsFor(activeVisit.visitType ?? "General Visit")[0]);
     setNextAction(activeVisit.nextAction ?? "");
     setOrderQuantity(activeVisit.orderQuantity ? String(activeVisit.orderQuantity) : "");
     setOrderProductCategory(activeVisit.orderProductCategory ?? "");
     setOrderPriority(activeVisit.orderPriority ?? "Normal");
     setOrderExpectedDelivery(activeVisit.orderExpectedDelivery ? activeVisit.orderExpectedDelivery.slice(0, 10) : "");
+    setPaymentMode(activeVisit.paymentMode ?? paymentModes[0]);
+    setPaymentReference(activeVisit.paymentReference ?? "");
+    setPaymentBankName(activeVisit.paymentBankName ?? "");
+    setPaymentScreenshotUrl(activeVisit.paymentScreenshotUrl ?? "");
     setRecoveryAmount(activeVisit.recoveryAmount ? String(activeVisit.recoveryAmount) : "");
   }, [activeVisit]);
 
@@ -347,7 +370,7 @@ export default function FieldStaffPage() {
       setVisits(data.visits);
       const openVisit = isStaff ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
       setActiveVisit(openVisit);
-      setShowChequeFlow(openVisit?.visitType === "Cheque Pickup" || openVisit?.result === "Cheque collected");
+      setShowChequeFlow(isChequePayment(openVisit?.visitType ?? "", openVisit?.paymentMode ?? ""));
     }
   }, [isStaff]);
 
@@ -494,6 +517,13 @@ export default function FieldStaffPage() {
     setMessage("Field tracking stopped.");
   }
 
+  function handlePaymentScreenshot(file?: File) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPaymentScreenshotUrl(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  }
+
   async function saveCheckIn(position: GeolocationPosition) {
     if (!isStaff) return;
     if (!selectedCustomer && !leadName.trim()) return;
@@ -513,13 +543,17 @@ export default function FieldStaffPage() {
         orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
         orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
         orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
+        paymentMode: isPaymentCollection(visitType) ? paymentMode : undefined,
+        paymentReference: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+        paymentBankName: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+        paymentScreenshotUrl: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
         leadArea: leadArea || undefined,
         leadContactPerson: leadContactPerson || undefined,
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
         notes,
-        recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
+        recoveryAmount: isMoneyPayment(visitType, paymentMode) || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
         nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
       }),
     });
@@ -566,13 +600,17 @@ export default function FieldStaffPage() {
             visitType,
             outcome: result,
             nextAction: nextAction || undefined,
-            recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
+            recoveryAmount: isMoneyPayment(visitType, paymentMode) || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
             nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
             followupNotes: notes,
             orderQuantity: isOrderReceived(visitType, result) ? Number(orderQuantity || activeVisit.orderQuantity || 0) : undefined,
             orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
             orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
             orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
+            paymentMode: isPaymentCollection(visitType) ? paymentMode : undefined,
+            paymentReference: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+            paymentBankName: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+            paymentScreenshotUrl: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
           }),
         });
         const data = await res.json();
@@ -589,6 +627,10 @@ export default function FieldStaffPage() {
         setOrderQuantity("");
         setOrderProductCategory("");
         setOrderPriority("Normal");
+        setPaymentMode(paymentModes[0]);
+        setPaymentReference("");
+        setPaymentBankName("");
+        setPaymentScreenshotUrl("");
         await loadVisits();
       },
     });
@@ -787,6 +829,10 @@ export default function FieldStaffPage() {
           orderExpectedDelivery={orderExpectedDelivery}
           orderProductCategory={orderProductCategory}
           orderPriority={orderPriority}
+          paymentMode={paymentMode}
+          paymentReference={paymentReference}
+          paymentBankName={paymentBankName}
+          paymentScreenshotUrl={paymentScreenshotUrl}
           gpsChecking={gpsState === "checking"}
           onNotes={setNotes}
           onVisitType={setVisitType}
@@ -798,6 +844,10 @@ export default function FieldStaffPage() {
           onOrderExpectedDelivery={setOrderExpectedDelivery}
           onOrderProductCategory={setOrderProductCategory}
           onOrderPriority={setOrderPriority}
+          onPaymentMode={setPaymentMode}
+          onPaymentReference={setPaymentReference}
+          onPaymentBankName={setPaymentBankName}
+          onPaymentScreenshot={handlePaymentScreenshot}
           onCheckOut={checkOut}
           showChequeFlow={showChequeFlow}
           onToggleChequeFlow={setShowChequeFlow}
@@ -888,6 +938,10 @@ export default function FieldStaffPage() {
               orderExpectedDelivery={orderExpectedDelivery}
               orderProductCategory={orderProductCategory}
               orderPriority={orderPriority}
+              paymentMode={paymentMode}
+              paymentReference={paymentReference}
+              paymentBankName={paymentBankName}
+              paymentScreenshotUrl={paymentScreenshotUrl}
               onVisitType={setVisitType}
               onResult={setResult}
               onNextAction={setNextAction}
@@ -897,6 +951,10 @@ export default function FieldStaffPage() {
               onOrderExpectedDelivery={setOrderExpectedDelivery}
               onOrderProductCategory={setOrderProductCategory}
               onOrderPriority={setOrderPriority}
+              onPaymentMode={setPaymentMode}
+              onPaymentReference={setPaymentReference}
+              onPaymentBankName={setPaymentBankName}
+              onPaymentScreenshot={handlePaymentScreenshot}
             />
           )}
 
@@ -938,7 +996,19 @@ export default function FieldStaffPage() {
                   </>
                 )}
                 {recoveryVisitTypes.has(visitType) && (
-                  <input value={recoveryAmount} onChange={(e) => setRecoveryAmount(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                  <PaymentFields
+                    visitType={visitType}
+                    paymentMode={paymentMode}
+                    paymentReference={paymentReference}
+                    paymentBankName={paymentBankName}
+                    paymentScreenshotUrl={paymentScreenshotUrl}
+                    recoveryAmount={recoveryAmount}
+                    onPaymentMode={setPaymentMode}
+                    onPaymentReference={setPaymentReference}
+                    onPaymentBankName={setPaymentBankName}
+                    onPaymentScreenshot={handlePaymentScreenshot}
+                    onRecovery={setRecoveryAmount}
+                  />
                 )}
                 {needsNextFollowup(result) && (
                   <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -995,6 +1065,10 @@ function VisitDetailFields({
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
+  paymentMode,
+  paymentReference,
+  paymentBankName,
+  paymentScreenshotUrl,
   onVisitType,
   onResult,
   onNextAction,
@@ -1004,6 +1078,10 @@ function VisitDetailFields({
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
+  onPaymentMode,
+  onPaymentReference,
+  onPaymentBankName,
+  onPaymentScreenshot,
 }: {
   visitType: string;
   result: string;
@@ -1014,6 +1092,10 @@ function VisitDetailFields({
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
+  paymentMode: string;
+  paymentReference: string;
+  paymentBankName: string;
+  paymentScreenshotUrl: string;
   onVisitType: (value: string) => void;
   onResult: (value: string) => void;
   onNextAction: (value: string) => void;
@@ -1023,6 +1105,10 @@ function VisitDetailFields({
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
+  onPaymentMode: (value: string) => void;
+  onPaymentReference: (value: string) => void;
+  onPaymentBankName: (value: string) => void;
+  onPaymentScreenshot: (file?: File) => void;
 }) {
   return (
     <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
@@ -1037,7 +1123,19 @@ function VisitDetailFields({
         <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
       {recoveryVisitTypes.has(visitType) && (
-        <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        <PaymentFields
+          visitType={visitType}
+          paymentMode={paymentMode}
+          paymentReference={paymentReference}
+          paymentBankName={paymentBankName}
+          paymentScreenshotUrl={paymentScreenshotUrl}
+          recoveryAmount={recoveryAmount}
+          onPaymentMode={onPaymentMode}
+          onPaymentReference={onPaymentReference}
+          onPaymentBankName={onPaymentBankName}
+          onPaymentScreenshot={onPaymentScreenshot}
+          onRecovery={onRecovery}
+        />
       )}
       {isOrderReceived(visitType, result) && (
         <>
@@ -1055,6 +1153,59 @@ function VisitDetailFields({
   );
 }
 
+function PaymentFields({
+  visitType,
+  paymentMode,
+  paymentReference,
+  paymentBankName,
+  paymentScreenshotUrl,
+  recoveryAmount,
+  onPaymentMode,
+  onPaymentReference,
+  onPaymentBankName,
+  onPaymentScreenshot,
+  onRecovery,
+}: {
+  visitType: string;
+  paymentMode: string;
+  paymentReference: string;
+  paymentBankName: string;
+  paymentScreenshotUrl: string;
+  recoveryAmount: string;
+  onPaymentMode: (value: string) => void;
+  onPaymentReference: (value: string) => void;
+  onPaymentBankName: (value: string) => void;
+  onPaymentScreenshot: (file?: File) => void;
+  onRecovery: (value: string) => void;
+}) {
+  if (visitType !== "Payment Collection") {
+    return (
+      <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+    );
+  }
+
+  return (
+    <>
+      <select value={paymentMode} onChange={(e) => onPaymentMode(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+        {paymentModes.map((mode) => <option key={mode}>{mode}</option>)}
+      </select>
+      {paymentMode !== "Cheque Collected" && (
+        <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      )}
+      {paymentMode === "NEFT / RTGS" && (
+        <>
+          <input value={paymentReference} onChange={(e) => onPaymentReference(e.target.value)} placeholder="Reference number" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={paymentBankName} onChange={(e) => onPaymentBankName(e.target.value)} placeholder="Bank name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <label className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-200">
+            {paymentScreenshotUrl ? "Screenshot added" : "Upload screenshot"}
+            <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => onPaymentScreenshot(event.target.files?.[0])} />
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
 function ActiveVisitCard({
   visit,
   visitType,
@@ -1067,6 +1218,10 @@ function ActiveVisitCard({
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
+  paymentMode,
+  paymentReference,
+  paymentBankName,
+  paymentScreenshotUrl,
   gpsChecking,
   onNotes,
   onVisitType,
@@ -1078,6 +1233,10 @@ function ActiveVisitCard({
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
+  onPaymentMode,
+  onPaymentReference,
+  onPaymentBankName,
+  onPaymentScreenshot,
   onCheckOut,
   showChequeFlow,
   onToggleChequeFlow,
@@ -1094,6 +1253,10 @@ function ActiveVisitCard({
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
+  paymentMode: string;
+  paymentReference: string;
+  paymentBankName: string;
+  paymentScreenshotUrl: string;
   gpsChecking: boolean;
   onNotes: (value: string) => void;
   onVisitType: (value: string) => void;
@@ -1105,6 +1268,10 @@ function ActiveVisitCard({
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
+  onPaymentMode: (value: string) => void;
+  onPaymentReference: (value: string) => void;
+  onPaymentBankName: (value: string) => void;
+  onPaymentScreenshot: (file?: File) => void;
   onCheckOut: () => void;
   showChequeFlow: boolean;
   onToggleChequeFlow: (value: boolean) => void;
@@ -1135,7 +1302,19 @@ function ActiveVisitCard({
         </select>
         <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         {isRecoveryVisit && (
-          <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <PaymentFields
+            visitType={visitType}
+            paymentMode={paymentMode}
+            paymentReference={paymentReference}
+            paymentBankName={paymentBankName}
+            paymentScreenshotUrl={paymentScreenshotUrl}
+            recoveryAmount={recoveryAmount}
+            onPaymentMode={onPaymentMode}
+            onPaymentReference={onPaymentReference}
+            onPaymentBankName={onPaymentBankName}
+            onPaymentScreenshot={onPaymentScreenshot}
+            onRecovery={onRecovery}
+          />
         )}
         {isOrderVisit && (
           <>
@@ -1171,7 +1350,7 @@ function ActiveVisitCard({
           </div>
         </div>
       )}
-      {(result === "Cheque collected" || visitType === "Cheque Pickup") && (
+      {isChequePayment(visitType, paymentMode) && (
         <button
           type="button"
           onClick={() => onToggleChequeFlow(!showChequeFlow)}
