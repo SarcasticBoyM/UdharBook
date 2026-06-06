@@ -453,11 +453,14 @@ export async function POST(request: Request) {
     const linkedVisit = body.staffVisitId
       ? await prisma.staffVisit.findFirst({
           where: { id: body.staffVisitId, shopId, customerId: body.customerId },
-          select: { id: true, staffId: true, notes: true, result: true },
+          select: { id: true, staffId: true, status: true, notes: true, result: true },
         })
       : null;
     if (body.staffVisitId && !linkedVisit) {
       return NextResponse.json({ error: "Linked visit not found for this customer" }, { status: 404 });
+    }
+    if (linkedVisit && (session.role !== "STAFF" || linkedVisit.staffId !== session.id || linkedVisit.status !== "CHECKED_IN")) {
+      return NextResponse.json({ error: "Linked visit cannot be modified by this user" }, { status: 403 });
     }
 
     const cheque = await prisma.$transaction(async (tx) => {

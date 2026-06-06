@@ -56,6 +56,26 @@ type Visit = {
   }[];
 };
 
+type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "STAFF";
+
+type StaffStatus = {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+  latestLocation: {
+    createdAt: string;
+    accuracy: number | null;
+    ageMinutes: number | null;
+    googleMapsUrl: string;
+  } | null;
+  openVisit: {
+    id: string;
+    checkInAt: string;
+    customer: { partyName: string; contactNumber: string };
+  } | null;
+};
+
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
 type CustomerSource = "recent" | "pending_recovery" | "today_followup" | "high_amount" | "new_visit";
 
@@ -88,6 +108,7 @@ function formatDateTime(value?: string | null) {
 }
 
 export default function FieldStaffPage() {
+  const [role, setRole] = useState<UserRole | null>(null);
   const [tracking, setTracking] = useState(false);
   const [location, setLocation] = useState<GeolocationPosition | null>(null);
   const [gpsState, setGpsState] = useState<GpsState>("idle");
@@ -106,6 +127,7 @@ export default function FieldStaffPage() {
   const [visitType, setVisitType] = useState("Follow-up");
   const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [staffStatuses, setStaffStatuses] = useState<StaffStatus[]>([]);
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState(quickResults[0]);
   const [recoveryAmount, setRecoveryAmount] = useState("");
@@ -115,7 +137,9 @@ export default function FieldStaffPage() {
   const retryTimerRef = useRef<number | null>(null);
   const activeVisitRef = useRef<Visit | null>(null);
 
-  const canCheckIn = Boolean((selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
+  const isStaff = role === "STAFF";
+  const isAdmin = role === "SHOP_ADMIN" || role === "SUPER_ADMIN";
+  const canCheckIn = Boolean(isStaff && (selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
   const summary = useMemo(
     () => ({
@@ -232,11 +256,18 @@ export default function FieldStaffPage() {
     const data = await res.json();
     if (data.success) {
       setVisits(data.visits);
-      const openVisit = data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null;
+      const openVisit = isStaff ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
       setActiveVisit(openVisit);
       setShowChequeFlow(openVisit?.visitType === "Cheque Pickup" || openVisit?.result === "Cheque collected");
     }
-  }, []);
+  }, [isStaff]);
+
+  const loadStaffStatuses = useCallback(async () => {
+    if (!isAdmin) return;
+    const res = await fetch("/api/field-staff/locations");
+    const data = await res.json().catch(() => ({}));
+    if (data.success) setStaffStatuses(data.staff ?? []);
+  }, [isAdmin]);
 
   const runDirectGpsRequest = useCallback((options?: {
     status?: string;
@@ -347,6 +378,7 @@ export default function FieldStaffPage() {
   }
 
   async function startTracking() {
+    if (!isStaff) return;
     setTracking(true);
     window.localStorage.setItem(GPS_SESSION_KEY, "true");
     runDirectGpsRequest({
@@ -361,6 +393,7 @@ export default function FieldStaffPage() {
   }
 
   async function stopTracking() {
+    if (!isStaff) return;
     setTracking(false);
     window.localStorage.removeItem(GPS_SESSION_KEY);
     stopGpsWatcher();
@@ -373,6 +406,7 @@ export default function FieldStaffPage() {
   }
 
   async function saveCheckIn(position: GeolocationPosition) {
+    if (!isStaff) return;
     if (!selectedCustomer && !leadName.trim()) return;
     const res = await fetch("/api/field-staff/visits", {
       method: "POST",
@@ -409,11 +443,13 @@ export default function FieldStaffPage() {
   }
 
   function checkIn() {
+    if (!isStaff) return;
     if (!canCheckIn) return;
     runDirectGpsRequest({ status: "ON_VISIT", onSuccess: saveCheckIn });
   }
 
   function checkOut() {
+    if (!isStaff) return;
     if (!activeVisit) return;
     runDirectGpsRequest({
       status: "ACTIVE",
@@ -447,6 +483,7 @@ export default function FieldStaffPage() {
   }
 
   function startNewVisit(prefill = search) {
+    if (!isStaff) return;
     setShowNewVisit(true);
     setSelectedCustomer(null);
     setLeadName(prefill.trim());
@@ -454,6 +491,7 @@ export default function FieldStaffPage() {
   }
 
   function applyChip(source: CustomerSource) {
+    if (!isStaff) return;
     setActiveCustomerSource(source);
     setSelectedCustomer(null);
     if (source === "new_visit") {
@@ -491,10 +529,20 @@ export default function FieldStaffPage() {
   }
 
   useEffect(() => {
-    loadVisits();
-  }, [loadVisits]);
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setRole((data?.user?.role as UserRole | undefined) ?? null))
+      .catch(() => setRole(null));
+  }, []);
 
   useEffect(() => {
+    if (!role) return;
+    loadVisits();
+    void loadStaffStatuses();
+  }, [loadStaffStatuses, loadVisits, role]);
+
+  useEffect(() => {
+    if (!isStaff) return;
     if (window.localStorage.getItem(GPS_SESSION_KEY) === "true") {
       setTracking(true);
       ensureGpsSession("restore");
@@ -515,9 +563,14 @@ export default function FieldStaffPage() {
       window.removeEventListener("focus", restart);
       document.removeEventListener("visibilitychange", restart);
     };
-  }, [ensureGpsSession, startGpsWatcher]);
+  }, [ensureGpsSession, isStaff, startGpsWatcher]);
 
   useEffect(() => {
+    if (!isStaff) {
+      setCustomers([]);
+      setSearching(false);
+      return;
+    }
     const timer = window.setTimeout(async () => {
       const query = search.trim();
       const shouldLoadSource = activeCustomerSource !== "new_visit";
@@ -537,7 +590,7 @@ export default function FieldStaffPage() {
       setSearching(false);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [activeCustomerSource, search]);
+  }, [activeCustomerSource, isStaff, search]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 pb-28">
@@ -545,28 +598,41 @@ export default function FieldStaffPage() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Field Operations</p>
           <h1 className="text-2xl font-bold md:text-3xl">Field Staff</h1>
-          <p className="text-sm text-slate-500">Search customer or start a new visit instantly.</p>
-          <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${gpsBadge()}`}>
-            {gpsState === "checking" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
-            {gpsLabel()}
-            {location && <span className="font-normal">+/-{Math.round(location.coords.accuracy)}m</span>}
+          <p className="text-sm text-slate-500">
+            {isStaff ? "Search customer or start a new visit instantly." : "Monitor live staff status, active visits, GPS, and today timeline."}
+          </p>
+          {isStaff && (
+            <>
+              <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${gpsBadge()}`}>
+                {gpsState === "checking" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <LocateFixed className="h-3.5 w-3.5" />}
+                {gpsLabel()}
+                {location && <span className="font-normal">+/-{Math.round(location.coords.accuracy)}m</span>}
+              </div>
+              <p className="mt-1 text-xs text-slate-500">{tracking ? lastSyncLabel() : "Start Day to keep GPS active."}</p>
+            </>
+          )}
+        </div>
+        {isStaff ? (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={tracking ? stopTracking : startTracking} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white md:flex-none">
+              {tracking ? <PauseCircle className="h-5 w-5" /> : <Navigation className="h-5 w-5" />}
+              {tracking ? "Stop Day" : "Start Day"}
+            </button>
+            <button type="button" onClick={requestGPS} disabled={gpsState === "checking"} className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold disabled:opacity-60">
+              {gpsState === "checking" ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
+              GPS
+            </button>
           </div>
-          <p className="mt-1 text-xs text-slate-500">{tracking ? lastSyncLabel() : "Start Day to keep GPS active."}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={tracking ? stopTracking : startTracking} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white md:flex-none">
-            {tracking ? <PauseCircle className="h-5 w-5" /> : <Navigation className="h-5 w-5" />}
-            {tracking ? "Stop Day" : "Start Day"}
+        ) : isAdmin ? (
+          <button type="button" onClick={loadStaffStatuses} className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold">
+            <RefreshCw className="h-5 w-5" />
+            Refresh
           </button>
-          <button type="button" onClick={requestGPS} disabled={gpsState === "checking"} className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold disabled:opacity-60">
-            {gpsState === "checking" ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
-            GPS
-          </button>
-        </div>
+        ) : null}
       </div>
 
       {message && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div>}
-      {gpsError && (
+      {isStaff && gpsError && (
         <div className={`rounded-lg border p-3 text-sm ${gpsState === "denied" || gpsState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
           <p className="font-semibold">{gpsError}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -576,7 +642,7 @@ export default function FieldStaffPage() {
         </div>
       )}
 
-      {tracking && (
+      {isStaff && tracking && (
         <div className={`fixed bottom-20 right-3 z-40 rounded-full border px-3 py-2 text-xs font-semibold shadow-lg lg:bottom-4 ${gpsBadge()}`}>
           <span className="mr-1">{gpsState === "active" ? "GPS Active" : gpsLabel()}</span>
           <span className="font-normal">{lastSyncLabel().replace("Last sync: ", "")}</span>
@@ -589,7 +655,9 @@ export default function FieldStaffPage() {
         <Stat label="Recovered" value={money(summary.recovered)} />
       </div>
 
-      {activeVisit ? (
+      {isAdmin && <StaffStatusPanel staff={staffStatuses} />}
+
+      {isStaff && activeVisit ? (
         <ActiveVisitCard
           visit={activeVisit}
           notes={notes}
@@ -606,7 +674,7 @@ export default function FieldStaffPage() {
           onToggleChequeFlow={setShowChequeFlow}
           onSavedCheque={loadVisits}
         />
-      ) : (
+      ) : isStaff ? (
         <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-bold">Start Customer Visit</h2>
@@ -712,7 +780,7 @@ export default function FieldStaffPage() {
             </button>
           </div>
         </section>
-      )}
+      ) : null}
 
       <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <h2 className="flex items-center gap-2 text-lg font-bold"><Activity className="h-5 w-5" /> Today Timeline</h2>
@@ -830,6 +898,58 @@ function ActiveVisitCard({
       <button type="button" onClick={onCheckOut} disabled={gpsChecking} className="mt-3 flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-semibold text-white disabled:opacity-60">
         <CheckCircle2 className="h-5 w-5" /> Check Out & Save Visit
       </button>
+    </section>
+  );
+}
+
+function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
+  return (
+    <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold">Live Staff Status</h2>
+          <p className="text-sm text-slate-500">Monitoring-only view of active staff, open visits, and latest GPS.</p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {staff.length === 0 ? (
+          <p className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500 md:col-span-2">
+            No staff activity is available for this shop yet.
+          </p>
+        ) : (
+          staff.map((person) => (
+            <div key={person.id} className="rounded-lg border p-3 dark:border-slate-700">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">{person.name}</p>
+                  <p className="text-xs text-slate-500">
+                    {person.openVisit
+                      ? `${person.openVisit.customer.partyName} - checked in ${formatDateTime(person.openVisit.checkInAt)}`
+                      : person.latestLocation
+                        ? `Last GPS ${formatDateTime(person.latestLocation.createdAt)}`
+                        : "No GPS today"}
+                  </p>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${person.openVisit ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"}`}>
+                  {person.openVisit ? "IN PROGRESS" : person.status}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                {person.latestLocation && (
+                  <>
+                    <span>Accuracy: {person.latestLocation.accuracy ? `+/-${Math.round(person.latestLocation.accuracy)}m` : "-"}</span>
+                    <span>{person.latestLocation.ageMinutes === null ? "Age: -" : `Age: ${person.latestLocation.ageMinutes} min`}</span>
+                    <a href={person.latestLocation.googleMapsUrl} target="_blank" className="text-brand-600 hover:underline">
+                      GPS map
+                    </a>
+                  </>
+                )}
+                {person.openVisit && <span>Mobile: {person.openVisit.customer.contactNumber}</span>}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
     </section>
   );
 }

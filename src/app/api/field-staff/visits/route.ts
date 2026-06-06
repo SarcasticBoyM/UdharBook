@@ -100,6 +100,9 @@ export async function POST(request: Request) {
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (session.role !== "STAFF") {
+      return NextResponse.json({ success: false, error: "Only staff can check in visits" }, { status: 403 });
+    }
 
     const shopId = requireShopId(request, session);
     const body = visitSchema.parse(await request.json());

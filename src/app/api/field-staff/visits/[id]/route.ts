@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
-import { distanceMeters, isFieldAdmin, startOfDay } from "@/lib/field-tracking";
+import { distanceMeters, startOfDay } from "@/lib/field-tracking";
 
 const updateSchema = z.object({
   action: z.enum(["CHECK_OUT", "CANCEL"]),
@@ -32,7 +32,7 @@ export async function PATCH(request: Request, { params }: Params) {
       include: { customer: { select: { id: true, outstandingBalance: true } } },
     });
     if (!existing) return NextResponse.json({ error: "Visit not found" }, { status: 404 });
-    if (!isFieldAdmin(session) && existing.staffId !== session.id) {
+    if (session.role !== "STAFF" || existing.staffId !== session.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (existing.status !== "CHECKED_IN") {
