@@ -572,7 +572,7 @@ export async function GET(request: Request) {
     ]
       .filter(Boolean)
       .join(" | ");
-    const orderReceived = (visit.visitType === "Sales Visit" && visit.outcome === "Order Received") || visit.visitType === "Order Booking";
+    const orderReceived = (["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visit.visitType) && visit.outcome === "Order Received") || visit.visitType === "Order Booking";
     const orderSummary = visit.orderPriority === "Urgent" && visit.orderProductCategory
       ? `Urgent order discussed: ${visit.orderProductCategory}`
       : visit.orderExpectedDelivery

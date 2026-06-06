@@ -24,6 +24,7 @@ const SUPER_ADMIN_BLOCKED_PAGES = [
   "/live-tracking",
   "/daily-visits",
   "/upload",
+  "/orders",
   "/follow-ups",
   "/reports",
 ];
@@ -38,6 +39,7 @@ const SUPER_ADMIN_BLOCKED_APIS = [
   "/api/follow-up-reports",
   "/api/follow-ups",
   "/api/notifications",
+  "/api/orders",
   "/api/reports",
   "/api/today-follow-ups",
 ];

@@ -29,6 +29,10 @@ export interface DashboardStats {
   overdueFollowups: number;
   highOutstanding: number;
   recoveryAmount: number;
+  pendingOrders: number;
+  highPriorityOrders: number;
+  deliveredToday: number;
+  upcomingDeliveries: number;
   staffActivity: { name: string; count: number }[];
   statusDistribution: { status: string; count: number }[];
   collectionProgress: { month: string; collected: number }[];

@@ -24,6 +24,10 @@ const emptyStats: DashboardStats = {
   overdueFollowups: 0,
   highOutstanding: 0,
   recoveryAmount: 0,
+  pendingOrders: 0,
+  highPriorityOrders: 0,
+  deliveredToday: 0,
+  upcomingDeliveries: 0,
   staffActivity: [],
   statusDistribution: [],
   collectionProgress: [],
@@ -76,6 +80,8 @@ async function getStats(shopId: string): Promise<DashboardStats> {
   if (!shopId) return emptyStats;
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
+  const nextWeek = new Date();
+  nextWeek.setDate(nextWeek.getDate() + 7);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
   const customers = await prisma.customer.findMany({ where: { shopId } });
@@ -113,6 +119,12 @@ async function getStats(shopId: string): Promise<DashboardStats> {
     select: { id: true, name: true },
   });
   const userMap = new Map(users.map((user) => [user.id, user.name]));
+  const [pendingOrders, highPriorityOrders, deliveredToday, upcomingDeliveries] = await prisma.$transaction([
+    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] } } }),
+    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, priority: "High" } }),
+    prisma.order.count({ where: { shopId, status: "DELIVERED", deliveredAt: { gte: todayStart, lte: todayEnd } } }),
+    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, preferredDeliveryDate: { gte: new Date(), lte: nextWeek } } }),
+  ]);
 
   const stats = {
     totalCustomers: customers.length,
@@ -124,6 +136,10 @@ async function getStats(shopId: string): Promise<DashboardStats> {
     overdueFollowups: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate < todayStart).length,
     highOutstanding: customers.filter((c) => c.outstandingBalance >= threshold).length,
     recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
+    pendingOrders,
+    highPriorityOrders,
+    deliveredToday,
+    upcomingDeliveries,
     staffActivity: staffGroups.map((group) => ({
       name: group.userId ? userMap.get(group.userId) ?? "Unknown" : "System",
       count: group._count.userId,

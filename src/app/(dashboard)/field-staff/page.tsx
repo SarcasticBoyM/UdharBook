@@ -101,6 +101,15 @@ const commonVisitOutcomes = [
   "Customer Busy",
   "Payment Promised",
 ];
+const leadVisitOutcomes = [
+  "Order Received",
+  "Discussion Done",
+  "Customer Interested",
+  "Revisit Required",
+  "Follow-up Required",
+  "Customer Busy",
+  "Customer Unavailable",
+];
 const paymentModes = ["Cash", "NEFT / RTGS", "Cheque Collected"];
 const salesOrderStatuses = [
   "Order Received",
@@ -115,6 +124,7 @@ const visitTypes = [
   "Payment Collection",
   "Sales Visit",
   "New Lead Visit",
+  "Prospect Visit",
   "Complaint Visit",
   "Stock Check",
   "Relationship Visit",
@@ -153,11 +163,12 @@ function formatDateTime(value?: string | null) {
 function resultOptionsFor(visitType: string) {
   if (visitType === "Sales Visit") return salesOrderStatuses;
   if (visitType === "Payment Collection") return ["Payment Collected", ...commonVisitOutcomes];
+  if (visitType === "New Lead Visit" || visitType === "Prospect Visit") return leadVisitOutcomes;
   return commonVisitOutcomes;
 }
 
 function isOrderReceived(visitType: string, result: string) {
-  return visitType === "Sales Visit" && result === "Order Received";
+  return ["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visitType) && result === "Order Received";
 }
 
 function isPaymentCollection(visitType: string) {

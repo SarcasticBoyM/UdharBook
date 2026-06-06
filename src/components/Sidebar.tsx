@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   CalendarClock,
   CalendarCheck2,
+  ClipboardList,
   Landmark,
   FileBarChart,
   Map,
@@ -28,6 +29,7 @@ const links = [
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
   { href: "/cheques", label: "Cheque Collections", icon: Landmark },
   { href: "/field-staff", label: "Field Staff", icon: UserRoundCheck },
+  { href: "/orders", label: "Order Desk", icon: ClipboardList },
   { href: "/live-tracking", label: "Live Tracking", icon: MapPinned, adminOnly: true },
   { href: "/daily-visits", label: "Daily Visits", icon: Map },
   { href: "/customers", label: "Customers", icon: Users },

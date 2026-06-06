@@ -90,6 +90,13 @@ enum AttendanceStatus {
   COMPLETED
 }
 
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  CANCELLED
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -123,6 +130,7 @@ model Shop {
   routeHistories     RouteHistory[]
   visitPhotos        VisitPhoto[]
   supportAccessGrants SupportAccessGrant[]
+  orders             Order[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -161,6 +169,7 @@ model User {
   visitPhotos VisitPhoto[]
   supportAccessRequested SupportAccessGrant[] @relation("SupportAccessRequestedBy")
   supportAccessAssigned SupportAccessGrant[] @relation("SupportAccessSuperAdmin")
+  ordersCreated Order[] @relation("OrderCreatedBy")
 
   @@index([shopId])
   @@index([role])
@@ -191,6 +200,7 @@ model Customer {
   longitude          Float?
   geoAddress         String?
   staffVisits        StaffVisit[]
+  orders             Order[]
 
   @@index([nextFollowupDate])
   @@index([status])
@@ -292,6 +302,7 @@ model StaffVisit {
   updatedAt       DateTime         @updatedAt
   photos          VisitPhoto[]
   cheques         Cheque[]
+  orders          Order[]
 
   @@index([shopId, checkInAt])
   @@index([staffId, checkInAt])
@@ -303,6 +314,35 @@ model StaffVisit {
   @@index([shopId, staffId, createdAt])
   @@index([shopId, staffId, status, checkInAt])
   @@index([shopId, customerId, checkInAt])
+}
+
+model Order {
+  id                    String      @id @default(cuid())
+  shopId                String
+  shop                  Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId            String
+  customer              Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdById           String
+  createdBy             User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  staffVisitId          String?
+  staffVisit            StaffVisit? @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
+  orderDetails          String
+  preferredDeliveryDate DateTime?
+  priority              String      @default("Normal")
+  status                OrderStatus @default(PENDING)
+  sourceModule          String      @default("FIELD_VISIT")
+  visitSource           String?
+  deliveredAt           DateTime?
+  cancelledAt           DateTime?
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@unique([shopId, staffVisitId])
+  @@index([shopId, status, priority])
+  @@index([shopId, preferredDeliveryDate])
+  @@index([shopId, createdAt])
+  @@index([shopId, createdById, createdAt])
+  @@index([customerId, createdAt])
 }
 
 model VisitPhoto {

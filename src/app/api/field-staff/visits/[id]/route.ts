@@ -39,6 +39,10 @@ function paymentSummary(mode?: string | null, amount = 0) {
   return null;
 }
 
+function isOrderVisit(visitType?: string | null, outcome?: string | null) {
+  return ["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visitType ?? "") && outcome === "Order Received";
+}
+
 type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
@@ -175,8 +179,10 @@ export async function PATCH(request: Request, { params }: Params) {
           summary:
             recoveryAmount > 0
               ? paymentSummary(updated.paymentMode, recoveryAmount) ?? `Field visit recovered Rs ${recoveryAmount}`
-              : updated.visitType === "Sales Visit" && updated.outcome === "Order Received"
-                ? "Order received during sales visit"
+              : isOrderVisit(updated.visitType, updated.outcome)
+                ? updated.visitType === "New Lead Visit" || updated.visitType === "Prospect Visit"
+                  ? "Lead converted with first order"
+                  : "Order received during sales visit"
                 : updated.paymentMode === "Cheque Collected"
                   ? "Cheque collected during payment visit"
                 : `${updated.visitType} completed`,
@@ -195,6 +201,41 @@ export async function PATCH(request: Request, { params }: Params) {
           },
           recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
           paymentMethod: "FIELD_VISIT",
+        });
+      }
+
+      if (isOrderVisit(updated.visitType, updated.outcome)) {
+        const orderDetails = updated.orderProductCategory?.trim() || "Order received during visit";
+        await tx.order.upsert({
+          where: { shopId_staffVisitId: { shopId, staffVisitId: updated.id } },
+          create: {
+            shopId,
+            customerId: existing.customerId,
+            createdById: session.id,
+            staffVisitId: updated.id,
+            orderDetails,
+            preferredDeliveryDate: updated.orderExpectedDelivery,
+            priority: updated.orderPriority ?? "Normal",
+            sourceModule: "FIELD_VISIT",
+            visitSource: updated.visitType,
+          },
+          update: {
+            orderDetails,
+            preferredDeliveryDate: updated.orderExpectedDelivery,
+            priority: updated.orderPriority ?? "Normal",
+            visitSource: updated.visitType,
+          },
+        });
+        await tx.activityLog.create({
+          data: {
+            shopId,
+            userId: session.id,
+            customerId: existing.customerId,
+            action: "order_received",
+            details: updated.visitType === "New Lead Visit" || updated.visitType === "Prospect Visit"
+              ? "Lead converted with first order"
+              : "Order received during sales visit",
+          },
         });
       }
 
