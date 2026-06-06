@@ -17,8 +17,10 @@ const PUBLIC = [
 ];
 
 function getSecret() {
-  const secret =
-    process.env.SESSION_SECRET ?? "dev-secret-change-in-production-min-32-chars";
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 24) {
+    throw new Error("SESSION_SECRET is missing or too short");
+  }
   return new TextEncoder().encode(secret);
 }
 
@@ -79,7 +81,14 @@ export async function middleware(request: NextRequest) {
     }
 
     return secure(NextResponse.next());
-  } catch {
+  } catch (error) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      message: "middleware_session_decode_failed",
+      timestamp: new Date().toISOString(),
+      path: pathname,
+      error: error instanceof Error ? error.message : "Unknown middleware auth error",
+    }));
     if (pathname.startsWith("/api/")) {
       return clearSessionCookie(secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 })));
     }

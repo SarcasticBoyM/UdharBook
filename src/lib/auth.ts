@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "./db";
 import type { SessionUser } from "@/types";
+import { logger } from "@/lib/logger";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -62,6 +63,7 @@ export async function getSession(): Promise<SessionUser | null> {
     const { payload } = await jwtVerify(token, getSecret());
     const userId = payload.id as string | undefined;
     if (!userId) {
+      logger.warn("session_decode_missing_user_id");
       await clearSessionIfWritable();
       return null;
     }
@@ -70,7 +72,18 @@ export async function getSession(): Promise<SessionUser | null> {
       where: { id: userId },
       include: { shop: { select: { shopName: true } } },
     });
-    if (!user || user.disabledAt) {
+    if (!user) {
+      logger.warn("session_user_missing", { userId });
+      await clearSessionIfWritable();
+      return null;
+    }
+    if (user.disabledAt) {
+      logger.warn("session_user_disabled", { userId: user.id, email: user.email, role: user.role });
+      await clearSessionIfWritable();
+      return null;
+    }
+    if (!user.shop) {
+      logger.error("session_shop_missing", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
       await clearSessionIfWritable();
       return null;
     }
@@ -83,22 +96,42 @@ export async function getSession(): Promise<SessionUser | null> {
       shopId: user.shopId,
       shopName: user.shop?.shopName ?? null,
     };
-  } catch {
+  } catch (error) {
+    logger.warn("session_decode_failed", {
+      error: error instanceof Error ? error.message : "Unknown session decode error",
+    });
     await clearSessionIfWritable();
     return null;
   }
 }
 
 export async function login(email: string, password: string): Promise<SessionUser | null> {
+  const normalizedEmail = email.toLowerCase();
   const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
+    where: { email: normalizedEmail },
     include: { shop: { select: { shopName: true } } },
   });
-  if (!user) return null;
-  if (user.disabledAt) return null;
-  if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) return null;
+  if (!user) {
+    logger.warn("login_failed_user_missing", { email: normalizedEmail });
+    return null;
+  }
+  if (user.disabledAt) {
+    logger.warn("login_failed_disabled_user", { userId: user.id, email: user.email, role: user.role });
+    return null;
+  }
+  if (!user.shop) {
+    logger.error("login_failed_missing_shop", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
+    return null;
+  }
+  if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
+    logger.warn("login_failed_temp_password_expired", { userId: user.id, email: user.email, role: user.role });
+    return null;
+  }
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) return null;
+  if (!valid) {
+    logger.warn("login_failed_invalid_password", { userId: user.id, email: user.email, role: user.role });
+    return null;
+  }
   await prisma.user.update({
     where: { id: user.id },
     data: { lastLoginAt: new Date() },
@@ -110,7 +143,16 @@ export async function login(email: string, password: string): Promise<SessionUse
       shopId: user.shopId,
       details: user.email,
     },
+  }).catch((error) => {
+    logger.error("login_activity_log_failed", {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      shopId: user.shopId,
+      error: error instanceof Error ? error.message : "Unknown activity log error",
+    });
   });
+  logger.info("login_success", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
   return {
     id: user.id,
     name: user.name,

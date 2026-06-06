@@ -5,6 +5,7 @@ import { getSession, hashPassword } from "@/lib/auth";
 import { canManageShop, isSuperAdmin, requireShopId } from "@/lib/tenant";
 import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
+import { logger } from "@/lib/logger";
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -39,7 +40,13 @@ export async function POST(request: Request) {
     const body = createSchema.parse(await request.json());
     const shopId = isSuperAdmin(session) ? body.shopId ?? requireShopId(request, session) : session.shopId;
     if (!shopId || shopId === "platform-shop") {
+      logger.warn("user_create_missing_business_shop", { actorId: session.id, actorRole: session.role, requestedShopId: shopId });
       return NextResponse.json({ error: "A business shop is required" }, { status: 400 });
+    }
+    const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true } });
+    if (!shop) {
+      logger.warn("user_create_shop_not_found", { actorId: session.id, actorRole: session.role, requestedShopId: shopId });
+      return NextResponse.json({ error: "Selected shop no longer exists. Please select a valid business shop." }, { status: 400 });
     }
     if (!isSuperAdmin(session) && body.role === "SHOP_ADMIN") {
       return NextResponse.json({ error: "Shop admins can only create staff" }, { status: 403 });
@@ -68,4 +75,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-
