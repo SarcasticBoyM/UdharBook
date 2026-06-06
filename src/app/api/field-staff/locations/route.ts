@@ -40,7 +40,10 @@ export async function GET(request: Request) {
     const shopId = requireShopId(request, session);
     const { searchParams } = new URL(request.url);
     const staffId = visibleStaffId(session, searchParams.get("staffId"));
-    const today = startOfDay();
+    const selectedDate = searchParams.get("date") ? new Date(searchParams.get("date") as string) : new Date();
+    const today = startOfDay(selectedDate);
+    const dayEnd = new Date(today);
+    dayEnd.setHours(23, 59, 59, 999);
 
     const staff = await prisma.user.findMany({
       where: { shopId, ...(staffId ? { id: staffId } : { role: { in: ["STAFF", "FIELD_SALES"] } }) },
@@ -50,12 +53,12 @@ export async function GET(request: Request) {
 
     const [locations, openVisits, attendances] = await prisma.$transaction([
       prisma.staffLocation.findMany({
-        where: { shopId, createdAt: { gte: today }, ...(staffId ? { staffId } : {}) },
+        where: { shopId, createdAt: { gte: today, lte: dayEnd }, ...(staffId ? { staffId } : {}) },
         orderBy: { createdAt: "desc" },
         take: 1000,
       }),
       prisma.staffVisit.findMany({
-        where: { shopId, status: "CHECKED_IN", ...(staffId ? { staffId } : {}) },
+        where: { shopId, status: "CHECKED_IN", checkInAt: { gte: today, lte: dayEnd }, ...(staffId ? { staffId } : {}) },
         include: { customer: { select: { partyName: true, contactNumber: true } } },
       }),
       prisma.attendance.findMany({
