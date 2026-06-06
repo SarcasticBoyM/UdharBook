@@ -19,6 +19,7 @@ const updateSchema = z.object({
   nextFollowupDate: z.string().datetime().optional(),
   followupNotes: z.string().optional(),
   orderAmount: z.number().min(0).optional(),
+  orderQuantity: z.number().min(0).optional(),
   orderExpectedDelivery: z.string().datetime().optional(),
   orderProductCategory: z.string().optional(),
   orderPriority: z.string().optional(),
@@ -85,6 +86,7 @@ export async function PATCH(request: Request, { params }: Params) {
           orderPriority: body.orderPriority,
           recoveryAmount,
           travelKm,
+          orderQuantity: body.orderQuantity,
         },
         include: {
           staff: { select: { name: true, role: true } },
@@ -158,8 +160,8 @@ export async function PATCH(request: Request, { params }: Params) {
           summary:
             recoveryAmount > 0
               ? `Field visit recovered Rs ${recoveryAmount}`
-              : updated.visitType === "Order Booking" && updated.orderAmount
-                ? `Order booked Rs ${updated.orderAmount}`
+              : updated.visitType === "Sales Visit" && updated.outcome === "Order Received"
+                ? `Sales visit completed, ${updated.orderProductCategory ?? "order"} received${updated.orderQuantity ? ` qty ${updated.orderQuantity}` : ""}`
                 : `${updated.visitType} completed`,
           detailedNotes: body.notes,
           visitId: updated.id,
@@ -167,6 +169,7 @@ export async function PATCH(request: Request, { params }: Params) {
           metadata: {
             outcome: body.outcome ?? body.result ?? null,
             orderAmount: body.orderAmount ?? null,
+            orderQuantity: body.orderQuantity ?? null,
             orderProductCategory: body.orderProductCategory ?? null,
             nextAction: body.nextAction ?? null,
           },

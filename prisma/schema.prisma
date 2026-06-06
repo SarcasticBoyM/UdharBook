@@ -275,6 +275,7 @@ model StaffVisit {
   nextAction      String?
   nextVisitDate   DateTime?
   orderAmount     Float?
+  orderQuantity   Float?
   orderExpectedDelivery DateTime?
   orderProductCategory String?
   orderPriority   String?

@@ -45,6 +45,7 @@ type Visit = {
   nextAction?: string | null;
   nextVisitDate?: string | null;
   orderAmount?: number | null;
+  orderQuantity?: number | null;
   orderExpectedDelivery?: string | null;
   orderProductCategory?: string | null;
   orderPriority?: string | null;
@@ -102,11 +103,19 @@ const quickResults = [
   "New lead generated",
   "No response",
 ];
+const salesOrderStatuses = [
+  "Order Received",
+  "Follow-up Required",
+  "Product Discussion",
+  "Sample Given",
+  "Customer Interested",
+  "No Order",
+  "Revisit Required",
+];
 const visitTypes = [
   "Recovery Follow-up",
   "Payment Collection",
   "Cheque Pickup",
-  "Order Booking",
   "Sales Visit",
   "New Lead Visit",
   "Complaint Visit",
@@ -117,6 +126,7 @@ const visitTypes = [
   "General Visit",
 ];
 const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup"]);
+const followUpRequiredOutcomes = new Set(["Follow-up Required", "Revisit Required", "Payment promised", "Customer unavailable", "No response"]);
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
 const customerSourceOptions: { label: string; value: CustomerSource }[] = [
   { label: "Recent Customers", value: "recent" },
@@ -141,6 +151,18 @@ function money(value: number) {
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function resultOptionsFor(visitType: string) {
+  return visitType === "Sales Visit" ? salesOrderStatuses : quickResults;
+}
+
+function isOrderReceived(visitType: string, result: string) {
+  return visitType === "Sales Visit" && result === "Order Received";
+}
+
+function needsNextFollowup(result: string) {
+  return followUpRequiredOutcomes.has(result);
 }
 
 export default function FieldStaffPage() {
@@ -169,7 +191,7 @@ export default function FieldStaffPage() {
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState(quickResults[0]);
   const [nextAction, setNextAction] = useState("");
-  const [orderAmount, setOrderAmount] = useState("");
+  const [orderQuantity, setOrderQuantity] = useState("");
   const [orderExpectedDelivery, setOrderExpectedDelivery] = useState("");
   const [orderProductCategory, setOrderProductCategory] = useState("");
   const [orderPriority, setOrderPriority] = useState("Normal");
@@ -188,7 +210,7 @@ export default function FieldStaffPage() {
     () => ({
       visits: visits.length,
       completed: visits.filter((visit) => visit.status === "COMPLETED").length,
-      ordersBooked: visits.filter((visit) => visit.visitType === "Order Booking").length,
+      ordersBooked: visits.filter((visit) => isOrderReceived(visit.visitType ?? "", visit.outcome ?? visit.result ?? "") || Boolean(visit.orderQuantity ?? visit.orderAmount)).length,
       orderValue: visits.reduce((sum, visit) => sum + (visit.orderAmount ?? 0), 0),
       recovered: visits.reduce((sum, visit) => sum + visit.recoveryAmount, 0),
       newLeads: visits.filter((visit) => visit.visitType === "New Lead Visit" || visit.visitType === "New Lead").length,
@@ -231,11 +253,18 @@ export default function FieldStaffPage() {
   }, [activeVisit]);
 
   useEffect(() => {
+    const options = resultOptionsFor(visitType);
+    if (!options.includes(result)) {
+      setResult(options[0]);
+    }
+  }, [result, visitType]);
+
+  useEffect(() => {
     if (!activeVisit) return;
     setVisitType(activeVisit.visitType ?? "General Visit");
     setResult(activeVisit.outcome ?? activeVisit.result ?? quickResults[0]);
     setNextAction(activeVisit.nextAction ?? "");
-    setOrderAmount(activeVisit.orderAmount ? String(activeVisit.orderAmount) : "");
+    setOrderQuantity(activeVisit.orderQuantity ? String(activeVisit.orderQuantity) : "");
     setOrderProductCategory(activeVisit.orderProductCategory ?? "");
     setOrderPriority(activeVisit.orderPriority ?? "Normal");
     setOrderExpectedDelivery(activeVisit.orderExpectedDelivery ? activeVisit.orderExpectedDelivery.slice(0, 10) : "");
@@ -479,11 +508,11 @@ export default function FieldStaffPage() {
         visitType,
         outcome: result,
         nextAction: nextAction || undefined,
-        nextVisitDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-        orderAmount: visitType === "Order Booking" ? Number(orderAmount || 0) : undefined,
-        orderExpectedDelivery: orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-        orderProductCategory: orderProductCategory || undefined,
-        orderPriority: orderPriority || undefined,
+        nextVisitDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+        orderQuantity: isOrderReceived(visitType, result) ? Number(orderQuantity || 0) : undefined,
+        orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+        orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
+        orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
         leadArea: leadArea || undefined,
         leadContactPerson: leadContactPerson || undefined,
         latitude: position.coords.latitude,
@@ -491,7 +520,7 @@ export default function FieldStaffPage() {
         accuracy: position.coords.accuracy,
         notes,
         recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
-        nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+        nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
       }),
     });
     const data = await res.json();
@@ -538,12 +567,12 @@ export default function FieldStaffPage() {
             outcome: result,
             nextAction: nextAction || undefined,
             recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
-            nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+            nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
             followupNotes: notes,
-            orderAmount: visitType === "Order Booking" ? Number(orderAmount || activeVisit.orderAmount || 0) : undefined,
-            orderExpectedDelivery: orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-            orderProductCategory: orderProductCategory || undefined,
-            orderPriority: orderPriority || undefined,
+            orderQuantity: isOrderReceived(visitType, result) ? Number(orderQuantity || activeVisit.orderQuantity || 0) : undefined,
+            orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+            orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
+            orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
           }),
         });
         const data = await res.json();
@@ -556,8 +585,8 @@ export default function FieldStaffPage() {
         setRecoveryAmount("");
         setNextFollowupDate("");
         setNextAction("");
-        setOrderAmount("");
         setOrderExpectedDelivery("");
+        setOrderQuantity("");
         setOrderProductCategory("");
         setOrderPriority("Normal");
         await loadVisits();
@@ -754,7 +783,7 @@ export default function FieldStaffPage() {
           recoveryAmount={recoveryAmount}
           nextFollowupDate={nextFollowupDate}
           nextAction={nextAction}
-          orderAmount={orderAmount}
+          orderQuantity={orderQuantity}
           orderExpectedDelivery={orderExpectedDelivery}
           orderProductCategory={orderProductCategory}
           orderPriority={orderPriority}
@@ -765,7 +794,7 @@ export default function FieldStaffPage() {
           onRecovery={setRecoveryAmount}
           onNextFollowup={setNextFollowupDate}
           onNextAction={setNextAction}
-          onOrderAmount={setOrderAmount}
+          onOrderQuantity={setOrderQuantity}
           onOrderExpectedDelivery={setOrderExpectedDelivery}
           onOrderProductCategory={setOrderProductCategory}
           onOrderPriority={setOrderPriority}
@@ -855,7 +884,7 @@ export default function FieldStaffPage() {
               nextAction={nextAction}
               recoveryAmount={recoveryAmount}
               nextFollowupDate={nextFollowupDate}
-              orderAmount={orderAmount}
+              orderQuantity={orderQuantity}
               orderExpectedDelivery={orderExpectedDelivery}
               orderProductCategory={orderProductCategory}
               orderPriority={orderPriority}
@@ -864,7 +893,7 @@ export default function FieldStaffPage() {
               onNextAction={setNextAction}
               onRecovery={setRecoveryAmount}
               onNextFollowup={setNextFollowupDate}
-              onOrderAmount={setOrderAmount}
+              onOrderQuantity={setOrderQuantity}
               onOrderExpectedDelivery={setOrderExpectedDelivery}
               onOrderProductCategory={setOrderProductCategory}
               onOrderPriority={setOrderPriority}
@@ -893,25 +922,27 @@ export default function FieldStaffPage() {
                   {visitTypes.map((type) => <option key={type}>{type}</option>)}
                 </select>
                 <select value={result} onChange={(e) => setResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-                  {quickResults.map((item) => <option key={item}>{item}</option>)}
+                  {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
                 </select>
                 <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                {visitType === "Order Booking" && (
+                {isOrderReceived(visitType, result) && (
                   <>
-                    <input value={orderAmount} onChange={(e) => setOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                    <input value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <input value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <input value={orderQuantity} onChange={(e) => setOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                     <select value={orderPriority} onChange={(e) => setOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                       <option>Normal</option>
-                      <option>High</option>
                       <option>Urgent</option>
+                      <option>High</option>
                     </select>
                   </>
                 )}
                 {recoveryVisitTypes.has(visitType) && (
                   <input value={recoveryAmount} onChange={(e) => setRecoveryAmount(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 )}
-                <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                {needsNextFollowup(result) && (
+                  <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                )}
               </div>
             </div>
           )}
@@ -942,7 +973,7 @@ export default function FieldStaffPage() {
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {visit.verified ? "GPS captured" : "GPS saved"}</span>
                 <span>{visit.visitType ?? "Visit"}</span>
-                {visit.orderAmount ? <span>Order {money(visit.orderAmount)}</span> : null}
+                {visit.orderQuantity ? <span>Qty {visit.orderQuantity}</span> : visit.orderAmount ? <span>Order {money(visit.orderAmount)}</span> : null}
                 {visit.recoveryAmount > 0 && <span className="flex items-center gap-1"><IndianRupee className="h-3.5 w-3.5" /> {money(visit.recoveryAmount)}</span>}
                 {visit.nextAction && <span>Next: {visit.nextAction}</span>}
               </div>
@@ -960,7 +991,7 @@ function VisitDetailFields({
   nextAction,
   recoveryAmount,
   nextFollowupDate,
-  orderAmount,
+  orderQuantity,
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
@@ -969,7 +1000,7 @@ function VisitDetailFields({
   onNextAction,
   onRecovery,
   onNextFollowup,
-  onOrderAmount,
+  onOrderQuantity,
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
@@ -979,7 +1010,7 @@ function VisitDetailFields({
   nextAction: string;
   recoveryAmount: string;
   nextFollowupDate: string;
-  orderAmount: string;
+  orderQuantity: string;
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
@@ -988,7 +1019,7 @@ function VisitDetailFields({
   onNextAction: (value: string) => void;
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
-  onOrderAmount: (value: string) => void;
+  onOrderQuantity: (value: string) => void;
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
@@ -999,22 +1030,24 @@ function VisitDetailFields({
         {visitTypes.map((type) => <option key={type}>{type}</option>)}
       </select>
       <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-        {quickResults.map((item) => <option key={item}>{item}</option>)}
+        {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
       </select>
       <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-      <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      {needsNextFollowup(result) && (
+        <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      )}
       {recoveryVisitTypes.has(visitType) && (
         <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
-      {visitType === "Order Booking" && (
+      {isOrderReceived(visitType, result) && (
         <>
-          <input value={orderAmount} onChange={(e) => onOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={orderQuantity} onChange={(e) => onOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
           <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
             <option>Normal</option>
-            <option>High</option>
             <option>Urgent</option>
+            <option>High</option>
           </select>
         </>
       )}
@@ -1030,7 +1063,7 @@ function ActiveVisitCard({
   recoveryAmount,
   nextFollowupDate,
   nextAction,
-  orderAmount,
+  orderQuantity,
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
@@ -1041,7 +1074,7 @@ function ActiveVisitCard({
   onRecovery,
   onNextFollowup,
   onNextAction,
-  onOrderAmount,
+  onOrderQuantity,
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
@@ -1057,7 +1090,7 @@ function ActiveVisitCard({
   recoveryAmount: string;
   nextFollowupDate: string;
   nextAction: string;
-  orderAmount: string;
+  orderQuantity: string;
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
@@ -1068,7 +1101,7 @@ function ActiveVisitCard({
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
   onNextAction: (value: string) => void;
-  onOrderAmount: (value: string) => void;
+  onOrderQuantity: (value: string) => void;
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
@@ -1079,7 +1112,7 @@ function ActiveVisitCard({
 }) {
   const latestCheque = visit.cheques?.[0];
   const isRecoveryVisit = recoveryVisitTypes.has(visitType);
-  const isOrderVisit = visitType === "Order Booking";
+  const isOrderVisit = isOrderReceived(visitType, result);
   return (
     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
       <div className="flex items-start justify-between gap-3">
@@ -1098,7 +1131,7 @@ function ActiveVisitCard({
           {visitTypes.map((type) => <option key={type}>{type}</option>)}
         </select>
         <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-          {quickResults.map((item) => <option key={item}>{item}</option>)}
+          {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
         </select>
         <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         {isRecoveryVisit && (
@@ -1106,17 +1139,19 @@ function ActiveVisitCard({
         )}
         {isOrderVisit && (
           <>
-            <input value={orderAmount} onChange={(e) => onOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-            <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={orderQuantity} onChange={(e) => onOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
             <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
               <option>Normal</option>
-              <option>High</option>
               <option>Urgent</option>
+              <option>High</option>
             </select>
           </>
         )}
-        <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        {needsNextFollowup(result) && (
+          <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        )}
         <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
           <Camera className="h-5 w-5" /> Add photo
         </button>

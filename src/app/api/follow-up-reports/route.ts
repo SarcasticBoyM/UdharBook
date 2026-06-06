@@ -562,18 +562,25 @@ export async function GET(request: Request) {
       cleanText(visit.result),
       cleanText(visit.nextAction ? `Next: ${visit.nextAction}` : ""),
       cleanText(visit.orderProductCategory ? `Product: ${visit.orderProductCategory}` : ""),
+      visit.orderQuantity ? `Qty: ${visit.orderQuantity}` : "",
+      visit.orderExpectedDelivery ? `Delivery: ${formatShortDate(visit.orderExpectedDelivery)}` : "",
+      cleanText(visit.orderPriority ? `Priority: ${visit.orderPriority}` : ""),
       cleanText(visit.notes),
       visit.photos.length ? `${visit.photos.length} photo${visit.photos.length === 1 ? "" : "s"} uploaded` : "",
     ]
       .filter(Boolean)
       .join(" | ");
+    const orderReceived = (visit.visitType === "Sales Visit" && visit.outcome === "Order Received") || visit.visitType === "Order Booking";
+    const orderSummary = `Sales visit completed, ${visit.orderProductCategory ?? "order"} received${visit.orderQuantity ? ` qty ${visit.orderQuantity}` : ""}`;
     const summary = cheque
       ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
-      : visit.visitType === "Order Booking" && visit.orderAmount
-        ? `Order booked ${formatMoney(visit.orderAmount)} by ${actor}`
+      : orderReceived
+        ? orderSummary
         : visit.recoveryAmount > 0
           ? `Visited by ${actor}, recovered ${formatMoney(visit.recoveryAmount)}`
-          : cleanText(visit.outcome) || cleanText(visit.result) || cleanText(visit.notes) || `${visit.visitType} completed by ${actor}`;
+          : visit.visitType === "Sales Visit" && visit.outcome
+            ? `${visit.outcome}, ${visit.notes ? cleanText(visit.notes) : "sales visit completed"}`
+            : cleanText(visit.outcome) || cleanText(visit.result) || cleanText(visit.notes) || `${visit.visitType} completed by ${actor}`;
     const statusLabel = visit.recoveryAmount > 0 ? "Recovered" : "Completed";
     const next = nextActionFor(visit.customer);
     pushActivity({
@@ -585,13 +592,13 @@ export async function GET(request: Request) {
       summary,
       detailedNotes: visitNotes,
       followUpType: visit.visitType,
-      recoveryAmount: visit.visitType === "Order Booking" ? visit.orderAmount ?? 0 : visit.recoveryAmount,
+      recoveryAmount: visit.recoveryAmount,
       paymentStatus: paymentStatusFor(visit.customer.outstandingBalance, visit.recoveryAmount),
       promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,
       reminderStatus: "No reminder",
-      status: cheque ? "Cheque Collected" : visit.visitType === "Order Booking" ? "Order Received" : statusLabel,
+      status: cheque ? "Cheque Collected" : orderReceived ? "Order Received" : statusLabel,
       statusTone: cheque ? "blue" : toneForStatus(statusLabel),
       createdBy: actor,
       userRole: humanStatus(visit.staff.role),

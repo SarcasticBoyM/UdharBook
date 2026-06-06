@@ -1,0 +1,1 @@
+ALTER TABLE "StaffVisit" ADD COLUMN "orderQuantity" DOUBLE PRECISION;
