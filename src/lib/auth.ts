@@ -134,7 +134,10 @@ export async function login(email: string, password: string): Promise<SessionUse
   }
   await prisma.user.update({
     where: { id: user.id },
-    data: { lastLoginAt: new Date() },
+    data: {
+      lastLoginAt: new Date(),
+      firstLoginAt: user.firstLoginAt ?? new Date(),
+    },
   });
   await prisma.activityLog.create({
     data: {

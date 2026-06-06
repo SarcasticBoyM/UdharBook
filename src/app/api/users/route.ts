@@ -11,6 +11,9 @@ const createSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   role: z.enum(["SHOP_ADMIN", "STAFF"]),
+  mobile: z.string().optional(),
+  jobTitle: z.string().optional(),
+  password: z.string().min(8).optional(),
   shopId: z.string().optional(),
 });
 
@@ -51,16 +54,18 @@ export async function POST(request: Request) {
     if (!isSuperAdmin(session) && body.role === "SHOP_ADMIN") {
       return NextResponse.json({ error: "Shop admins can only create staff" }, { status: 403 });
     }
-    const temporaryPassword = generateTemporaryPassword();
+    const temporaryPassword = body.password ?? generateTemporaryPassword();
     const user = await prisma.user.create({
       data: {
         name: body.name,
         email: body.email.toLowerCase(),
+        mobile: body.mobile,
         role: body.role,
+        jobTitle: body.jobTitle,
         shopId,
         passwordHash: await hashPassword(temporaryPassword),
-        passwordResetRequired: true,
-        tempPasswordExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        passwordResetRequired: !body.password,
+        tempPasswordExpiresAt: body.password ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
       },
       include: { shop: { select: { shopName: true } } },
     });

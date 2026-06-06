@@ -151,6 +151,7 @@ export default async function DashboardPage() {
   let stats = emptyStats;
   let highBalanceCustomers: Awaited<ReturnType<typeof prisma.customer.findMany>> = [];
   let recentActivity: RecentActivityItem[] = [];
+  let staffCount = 0;
 
   try {
     stats = await getStats(shopId);
@@ -176,6 +177,7 @@ export default async function DashboardPage() {
           customer: { select: { partyName: true, id: true } },
         },
       });
+      staffCount = await prisma.user.count({ where: { shopId, role: { not: "SUPER_ADMIN" } } });
     } catch (error) {
       dashboardError = true;
       console.error("Dashboard secondary queries failed", error);
@@ -192,6 +194,8 @@ export default async function DashboardPage() {
           Dashboard data could not be loaded right now. Other modules can still be opened from the sidebar.
         </div>
       )}
+
+      <SetupProgressCard stats={stats} staffCount={staffCount} />
 
       {(stats.overdueFollowups > 0 || stats.todayFollowups > 0) && (
         <div className="mt-4 space-y-2">
@@ -282,5 +286,39 @@ export default async function DashboardPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+function SetupProgressCard({ stats, staffCount }: { stats: DashboardStats; staffCount: number }) {
+  const items = [
+    { label: "Create shop", done: true, href: "/shops" },
+    { label: "Add admin", done: staffCount > 0, href: "/shops" },
+    { label: "Upload customers", done: stats.totalCustomers > 0, href: "/upload" },
+    { label: "Add staff", done: staffCount > 1, href: "/shops" },
+    { label: "Configure reminders", done: true, href: "/today-follow-ups" },
+    { label: "Start first follow-up", done: stats.todayFollowups > 0 || stats.overdueFollowups > 0, href: "/today-follow-ups" },
+  ];
+  const done = items.filter((item) => item.done).length;
+  const percent = Math.round((done / items.length) * 100);
+  if (percent === 100 && stats.totalCustomers > 0) return null;
+
+  return (
+    <section className="mt-5 rounded-lg border border-brand-100 bg-brand-50 p-4 text-brand-950 dark:border-brand-900 dark:bg-brand-950/40 dark:text-brand-50">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Setup progress</h2>
+          <p className="mt-1 text-sm opacity-80">Complete these steps to start recovery work smoothly.</p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-sm font-bold text-brand-800 dark:bg-brand-900 dark:text-brand-100">{percent}%</span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((item) => (
+          <Link key={item.label} href={item.href} className="flex items-center gap-2 rounded-lg bg-white/80 px-3 py-2 text-sm font-medium dark:bg-slate-900/70">
+            <span className={item.done ? "text-emerald-600" : "text-slate-400"}>{item.done ? "Done" : "Open"}</span>
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }

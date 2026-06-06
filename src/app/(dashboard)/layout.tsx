@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { Sidebar } from "@/components/Sidebar";
+import { getOnboardingState } from "@/lib/onboarding";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login?session=expired");
+  const onboarding = await getOnboardingState(session);
+  if (onboarding.needsOnboarding) redirect("/onboarding");
 
   return (
     <div className="flex min-h-screen">

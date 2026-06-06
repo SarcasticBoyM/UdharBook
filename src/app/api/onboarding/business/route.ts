@@ -13,8 +13,24 @@ const schema = z.object({
   email: z.string().email(),
   gstNumber: z.string().optional(),
   address: z.string().optional(),
+  city: z.string().optional(),
+  businessType: z.string().optional(),
+  logoUrl: z.string().optional(),
   adminName: z.string().min(1),
   adminEmail: z.string().email(),
+  adminMobile: z.string().optional(),
+  adminPassword: z.string().min(8).optional(),
+  onboardingMode: z.boolean().optional(),
+  preferences: z
+    .object({
+      remindersEnabled: z.boolean().optional(),
+      defaultFollowupTiming: z.string().optional(),
+      chequeModuleEnabled: z.boolean().optional(),
+      fieldStaffTrackingEnabled: z.boolean().optional(),
+      whatsappShortcutsEnabled: z.boolean().optional(),
+      highAmountThreshold: z.number().min(0).optional(),
+    })
+    .optional(),
 });
 
 export async function POST(request: Request) {
@@ -24,7 +40,7 @@ export async function POST(request: Request) {
 
   try {
     const body = schema.parse(await request.json());
-    const temporaryPassword = generateTemporaryPassword();
+    const temporaryPassword = body.adminPassword ?? generateTemporaryPassword();
     const result = await prisma.$transaction(async (tx) => {
       const shop = await tx.shop.create({
         data: {
@@ -34,6 +50,12 @@ export async function POST(request: Request) {
           email: body.email,
           gstNumber: body.gstNumber,
           address: body.address,
+          city: body.city,
+          businessType: body.businessType,
+          logoUrl: body.logoUrl,
+          onboardingCompleted: body.onboardingMode ? false : true,
+          setupStep: body.onboardingMode ? "import_customers" : "complete",
+          recoveryPreferences: body.preferences,
           subscriptionStatus: "TRIAL",
         },
       });
@@ -41,11 +63,12 @@ export async function POST(request: Request) {
         data: {
           name: body.adminName,
           email: body.adminEmail.toLowerCase(),
+          mobile: body.adminMobile,
           passwordHash: await hashPassword(temporaryPassword),
           role: "SHOP_ADMIN",
           shopId: shop.id,
-          passwordResetRequired: true,
-          tempPasswordExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          passwordResetRequired: !body.adminPassword,
+          tempPasswordExpiresAt: body.adminPassword ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
         select: { id: true, name: true, email: true, role: true, shopId: true },
       });
@@ -59,12 +82,19 @@ export async function POST(request: Request) {
       details: result.shop.shopName,
     });
 
-    return NextResponse.json({ ...result, temporaryPassword }, { status: 201 });
+    const response = NextResponse.json({ ...result, temporaryPassword }, { status: 201 });
+    response.cookies.set("udharbook_shop", result.shop.id, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+    return response;
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Unique")) {
+    if (typeof error === "object" && error && "code" in error && error.code === "P2002") {
       return NextResponse.json({ error: "Email already exists" }, { status: 409 });
     }
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-
