@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { WalletCards } from "lucide-react";
@@ -11,6 +11,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (window.location.search.includes("session=expired")) {
+      void fetch("/api/auth/logout", { method: "POST" });
+    }
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

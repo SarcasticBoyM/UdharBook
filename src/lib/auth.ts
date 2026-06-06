@@ -44,6 +44,15 @@ export async function destroySession() {
   cookieStore.delete(COOKIE_NAME);
 }
 
+async function clearSessionIfWritable() {
+  try {
+    const cookieStore = await cookies();
+    cookieStore.delete(COOKIE_NAME);
+  } catch {
+    // Server components cannot always mutate cookies; route handlers will clear it.
+  }
+}
+
 export async function getSession(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
@@ -51,15 +60,31 @@ export async function getSession(): Promise<SessionUser | null> {
 
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const userId = payload.id as string | undefined;
+    if (!userId) {
+      await clearSessionIfWritable();
+      return null;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { shop: { select: { shopName: true } } },
+    });
+    if (!user || user.disabledAt) {
+      await clearSessionIfWritable();
+      return null;
+    }
+
     return {
-      id: payload.id as string,
-      name: payload.name as string,
-      email: payload.email as string,
-      role: payload.role as SessionUser["role"],
-      shopId: payload.shopId as string,
-      shopName: (payload.shopName as string | null) ?? null,
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      shopId: user.shopId,
+      shopName: user.shop?.shopName ?? null,
     };
   } catch {
+    await clearSessionIfWritable();
     return null;
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   ChevronDown,
@@ -140,6 +140,28 @@ const initialSummary: ReportResponse["summary"] = {
   completed: 0,
 };
 
+const emptyReportData: ReportResponse = {
+  rows: [],
+  users: [],
+  summary: initialSummary,
+  staffPerformance: [],
+  trend: [],
+  pagination: { page: 1, limit: 25, total: 0, pages: 1 },
+};
+
+const emptyChequeData: ChequeReportResponse = {
+  items: [],
+  users: [],
+  summary: {
+    totalCollected: 0,
+    underClearingAmount: 0,
+    clearedAmount: 0,
+    bouncedAmount: 0,
+    pendingDepositAmount: 0,
+  },
+  pagination: { page: 1, limit: 25, total: 0, pages: 1 },
+};
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("en-IN", {
@@ -161,6 +183,8 @@ export default function FollowUpReportsPage() {
   const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [chequeLoading, setChequeLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [chequeError, setChequeError] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
@@ -197,10 +221,14 @@ export default function FollowUpReportsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError("");
     try {
       const res = await fetch(`/api/follow-up-reports?${params.toString()}`);
       if (!res.ok) throw new Error("Could not load reports");
       setData((await res.json()) as ReportResponse);
+    } catch {
+      setData(emptyReportData);
+      setError("Follow-up reports could not be loaded. The selected shop may no longer exist or may not have any report data yet.");
     } finally {
       setLoading(false);
     }
@@ -219,16 +247,25 @@ export default function FollowUpReportsPage() {
 
   const loadChequeSummary = useCallback(async () => {
     setChequeLoading(true);
+    setChequeError("");
     try {
       const [chequeRes, accountRes] = await Promise.all([
         fetch(`/api/cheques?${chequeParams.toString()}`),
         fetch("/api/cheque-deposit-accounts?activeOnly=false"),
       ]);
       if (chequeRes.ok) setChequeData((await chequeRes.json()) as ChequeReportResponse);
+      else {
+        setChequeData(emptyChequeData);
+        setChequeError("Cheque reports could not be loaded for the selected shop.");
+      }
       if (accountRes.ok) {
         const payload = await accountRes.json();
         setDepositAccounts(payload.accounts ?? []);
       }
+    } catch {
+      setChequeData(emptyChequeData);
+      setDepositAccounts([]);
+      setChequeError("Cheque reports could not be loaded for the selected shop.");
     } finally {
       setChequeLoading(false);
     }
@@ -242,8 +279,10 @@ export default function FollowUpReportsPage() {
     loadChequeSummary();
   }, [loadChequeSummary]);
 
-  const summary = data?.summary ?? initialSummary;
-  const maxTrend = Math.max(...(data?.trend.map((item) => item.amount) ?? [0]), 1);
+  const reportData = data ?? emptyReportData;
+  const chequeReportData = chequeData ?? emptyChequeData;
+  const summary = reportData.summary;
+  const maxTrend = Math.max(...(reportData.trend.map((item) => item.amount) ?? [0]), 1);
 
   const updateFilter = (key: keyof typeof filters, value: string | boolean) => {
     setPage(1);
@@ -292,6 +331,18 @@ export default function FollowUpReportsPage() {
         <Metric label="Completed" value={summary.completed} icon={BarChart3} tone="green" />
       </section>
 
+      {(error || chequeError) && (
+        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          {error || chequeError}
+        </div>
+      )}
+
+      {!loading && !chequeLoading && !error && !chequeError && reportData.rows.length === 0 && chequeReportData.items.length === 0 && (
+        <div className="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+          No report data is available yet. Create or select a business shop and add customers, follow-ups, or cheques to populate this page.
+        </div>
+      )}
+
       <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex items-center gap-2">
           <Filter className="h-4 w-4 text-slate-500" />
@@ -308,7 +359,7 @@ export default function FollowUpReportsPage() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
             >
               <option value="">All staff</option>
-              {data?.users.map((user) => (
+              {reportData.users.map((user) => (
                 <option key={user.id} value={user.id}>
                   {user.name}
                 </option>
@@ -347,7 +398,7 @@ export default function FollowUpReportsPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="font-semibold">Collection Trend Reports</h2>
           <div className="mt-4 space-y-3">
-            {(data?.trend.length ? data.trend : [{ date: "No collections yet", amount: 0 }]).slice(-12).map((item) => (
+            {(reportData.trend.length ? reportData.trend : [{ date: "No collections yet", amount: 0 }]).slice(-12).map((item) => (
               <div key={item.date} className="grid grid-cols-[110px_1fr_90px] items-center gap-3 text-sm">
                 <span className="truncate text-slate-500">{item.date}</span>
                 <div className="h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
@@ -362,8 +413,8 @@ export default function FollowUpReportsPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <h2 className="font-semibold">Staff Performance Reports</h2>
           <div className="mt-4 space-y-3">
-            {data?.staffPerformance.length ? (
-              data.staffPerformance.map((staff, index) => (
+            {reportData.staffPerformance.length ? (
+              reportData.staffPerformance.map((staff, index) => (
                 <div key={staff.staffId} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                   <div className="flex items-center justify-between">
                     <p className="font-semibold">{index === 0 ? "Top: " : ""}{staff.staffName}</p>
@@ -398,11 +449,11 @@ export default function FollowUpReportsPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <Metric label="Total cheques" value={chequeData?.summary.totalCollected ?? 0} icon={Landmark} />
-          <Metric label="Total deposited" value={formatCurrency((chequeData?.summary.underClearingAmount ?? 0) + (chequeData?.summary.clearedAmount ?? 0) + (chequeData?.summary.bouncedAmount ?? 0))} icon={IndianRupee} />
-          <Metric label="Total cleared" value={formatCurrency(chequeData?.summary.clearedAmount ?? 0)} icon={IndianRupee} tone="green" />
-          <Metric label="Total bounced" value={formatCurrency(chequeData?.summary.bouncedAmount ?? 0)} icon={ShieldAlert} tone="red" />
-          <Metric label="Under clearing" value={formatCurrency(chequeData?.summary.underClearingAmount ?? 0)} icon={BarChart3} tone="yellow" />
+          <Metric label="Total cheques" value={chequeReportData.summary.totalCollected} icon={Landmark} />
+          <Metric label="Total deposited" value={formatCurrency(chequeReportData.summary.underClearingAmount + chequeReportData.summary.clearedAmount + chequeReportData.summary.bouncedAmount)} icon={IndianRupee} />
+          <Metric label="Total cleared" value={formatCurrency(chequeReportData.summary.clearedAmount)} icon={IndianRupee} tone="green" />
+          <Metric label="Total bounced" value={formatCurrency(chequeReportData.summary.bouncedAmount)} icon={ShieldAlert} tone="red" />
+          <Metric label="Under clearing" value={formatCurrency(chequeReportData.summary.underClearingAmount)} icon={BarChart3} tone="yellow" />
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -469,8 +520,8 @@ export default function FollowUpReportsPage() {
               </tr>
             </thead>
             <tbody>
-              {chequeData?.items.length ? (
-                chequeData.items.map((cheque) => (
+              {chequeReportData.items.length ? (
+                chequeReportData.items.map((cheque) => (
                   <tr key={cheque.id} className="border-t border-slate-100 dark:border-slate-800">
                     <Td>{cheque.customer.partyName}</Td>
                     <Td>{cheque.chequeNumber}</Td>
@@ -559,9 +610,9 @@ export default function FollowUpReportsPage() {
               </tr>
             </thead>
             <tbody>
-              {data?.rows.length ? (
-                data.rows.map((row) => (
-                  <>
+              {reportData.rows.length ? (
+                reportData.rows.map((row) => (
+                  <Fragment key={row.id}>
                     <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
                       <Td>
                         <button type="button" onClick={() => setExpanded(expanded === row.id ? null : row.id)} className="rounded p-1 hover:bg-slate-100 dark:hover:bg-slate-800">
@@ -597,7 +648,7 @@ export default function FollowUpReportsPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))
               ) : (
                 <tr>
@@ -611,7 +662,7 @@ export default function FollowUpReportsPage() {
         </div>
         <div className="flex items-center justify-between border-t border-slate-200 p-4 text-sm dark:border-slate-800">
           <span className="text-slate-500">
-            Page {data?.pagination.page ?? page} of {data?.pagination.pages ?? 1} / {data?.pagination.total ?? 0} rows
+            Page {reportData.pagination.page ?? page} of {reportData.pagination.pages} / {reportData.pagination.total} rows
           </span>
           <div className="flex gap-2">
             <button
@@ -624,7 +675,7 @@ export default function FollowUpReportsPage() {
             </button>
             <button
               type="button"
-              disabled={!data || page >= data.pagination.pages}
+              disabled={page >= reportData.pagination.pages}
               onClick={() => setPage((value) => value + 1)}
               className="rounded-lg border border-slate-300 px-3 py-2 disabled:opacity-50 dark:border-slate-700"
             >

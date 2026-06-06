@@ -437,7 +437,7 @@ export async function GET(request: Request) {
       filteredDepositedAmount: filteredDepositedAmount._sum.amount ?? 0,
       filteredPendingAmount: filteredPendingAmount._sum.amount ?? 0,
     },
-    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });
 }
 

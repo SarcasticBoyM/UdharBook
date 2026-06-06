@@ -4,7 +4,7 @@ import { Sidebar } from "@/components/Sidebar";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect("/login");
+  if (!session) redirect("/login?session=expired");
 
   return (
     <div className="flex min-h-screen">

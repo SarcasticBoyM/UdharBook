@@ -20,10 +20,16 @@ export async function POST(
   }
 
   const disabled = new URL(request.url).searchParams.get("disabled") !== "false";
-  const updated = await prisma.user.update({
-    where: { id },
-    data: { disabledAt: disabled ? new Date() : null },
-    include: { shop: { select: { shopName: true } } },
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.user.update({
+      where: { id },
+      data: { disabledAt: disabled ? new Date() : null },
+      include: { shop: { select: { shopName: true } } },
+    });
+    if (disabled) {
+      await tx.passwordResetToken.deleteMany({ where: { userId: id, usedAt: null } });
+    }
+    return result;
   });
   await logActivity({
     action: disabled ? "user_disabled" : "user_enabled",
@@ -33,4 +39,3 @@ export async function POST(
   });
   return NextResponse.json({ user: updated });
 }
-

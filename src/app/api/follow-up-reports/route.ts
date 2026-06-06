@@ -347,6 +347,6 @@ export async function GET(request: Request) {
     },
     staffPerformance,
     trend: Array.from(trendMap.entries()).map(([date, amount]) => ({ date, amount })),
-    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });
 }

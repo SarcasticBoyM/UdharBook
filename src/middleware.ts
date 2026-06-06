@@ -81,10 +81,21 @@ export async function middleware(request: NextRequest) {
     return secure(NextResponse.next());
   } catch {
     if (pathname.startsWith("/api/")) {
-      return secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
+      return clearSessionCookie(secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 })));
     }
-    return secure(NextResponse.redirect(new URL("/login", request.url)));
+    return clearSessionCookie(secure(NextResponse.redirect(new URL("/login", request.url))));
   }
+}
+
+function clearSessionCookie(response: NextResponse) {
+  response.cookies.set(COOKIE_NAME, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 0,
+    path: "/",
+  });
+  return response;
 }
 
 function secure(response: NextResponse) {
