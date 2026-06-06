@@ -176,7 +176,7 @@ export async function PATCH(request: Request, { params }: Params) {
             recoveryAmount > 0
               ? paymentSummary(updated.paymentMode, recoveryAmount) ?? `Field visit recovered Rs ${recoveryAmount}`
               : updated.visitType === "Sales Visit" && updated.outcome === "Order Received"
-                ? `Sales visit completed, ${updated.orderProductCategory ?? "order"} received${updated.orderQuantity ? ` qty ${updated.orderQuantity}` : ""}`
+                ? "Order received during sales visit"
                 : updated.paymentMode === "Cheque Collected"
                   ? "Cheque collected during payment visit"
                 : `${updated.visitType} completed`,

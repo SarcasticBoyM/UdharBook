@@ -561,9 +561,8 @@ export async function GET(request: Request) {
       cleanText(visit.outcome),
       cleanText(visit.result),
       cleanText(visit.nextAction ? `Next: ${visit.nextAction}` : ""),
-      cleanText(visit.orderProductCategory ? `Product: ${visit.orderProductCategory}` : ""),
-      visit.orderQuantity ? `Qty: ${visit.orderQuantity}` : "",
-      visit.orderExpectedDelivery ? `Delivery: ${formatShortDate(visit.orderExpectedDelivery)}` : "",
+      cleanText(visit.orderProductCategory ? `Order Details: ${visit.orderProductCategory}` : ""),
+      visit.orderExpectedDelivery ? `Preferred Delivery: ${formatShortDate(visit.orderExpectedDelivery)}` : "",
       cleanText(visit.orderPriority ? `Priority: ${visit.orderPriority}` : ""),
       cleanText(visit.paymentMode ? `Payment mode: ${visit.paymentMode}` : ""),
       cleanText(visit.paymentReference ? `Reference: ${visit.paymentReference}` : ""),
@@ -574,7 +573,11 @@ export async function GET(request: Request) {
       .filter(Boolean)
       .join(" | ");
     const orderReceived = (visit.visitType === "Sales Visit" && visit.outcome === "Order Received") || visit.visitType === "Order Booking";
-    const orderSummary = `Sales visit completed, ${visit.orderProductCategory ?? "order"} received${visit.orderQuantity ? ` qty ${visit.orderQuantity}` : ""}`;
+    const orderSummary = visit.orderPriority === "Urgent" && visit.orderProductCategory
+      ? `Urgent order discussed: ${visit.orderProductCategory}`
+      : visit.orderExpectedDelivery
+        ? `Order received, delivery requested for ${formatShortDate(visit.orderExpectedDelivery)}`
+        : "Order received during sales visit";
     const summary = cheque
       ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
       : orderReceived

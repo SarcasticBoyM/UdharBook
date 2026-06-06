@@ -202,7 +202,6 @@ export default function FieldStaffPage() {
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState(resultOptionsFor("Sales Visit")[0]);
   const [nextAction, setNextAction] = useState("");
-  const [orderQuantity, setOrderQuantity] = useState("");
   const [orderExpectedDelivery, setOrderExpectedDelivery] = useState("");
   const [orderProductCategory, setOrderProductCategory] = useState("");
   const [orderPriority, setOrderPriority] = useState("Normal");
@@ -283,7 +282,6 @@ export default function FieldStaffPage() {
     setVisitType(activeVisit.visitType ?? "General Visit");
     setResult(activeVisit.outcome ?? activeVisit.result ?? resultOptionsFor(activeVisit.visitType ?? "General Visit")[0]);
     setNextAction(activeVisit.nextAction ?? "");
-    setOrderQuantity(activeVisit.orderQuantity ? String(activeVisit.orderQuantity) : "");
     setOrderProductCategory(activeVisit.orderProductCategory ?? "");
     setOrderPriority(activeVisit.orderPriority ?? "Normal");
     setOrderExpectedDelivery(activeVisit.orderExpectedDelivery ? activeVisit.orderExpectedDelivery.slice(0, 10) : "");
@@ -537,9 +535,8 @@ export default function FieldStaffPage() {
         address: leadAddress || undefined,
         visitType,
         outcome: result,
-        nextAction: nextAction || undefined,
+        nextAction: isOrderReceived(visitType, result) ? undefined : nextAction || undefined,
         nextVisitDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-        orderQuantity: isOrderReceived(visitType, result) ? Number(orderQuantity || 0) : undefined,
         orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
         orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
         orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
@@ -599,11 +596,10 @@ export default function FieldStaffPage() {
             result,
             visitType,
             outcome: result,
-            nextAction: nextAction || undefined,
+            nextAction: isOrderReceived(visitType, result) ? undefined : nextAction || undefined,
             recoveryAmount: isMoneyPayment(visitType, paymentMode) || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
             nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
             followupNotes: notes,
-            orderQuantity: isOrderReceived(visitType, result) ? Number(orderQuantity || activeVisit.orderQuantity || 0) : undefined,
             orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
             orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
             orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
@@ -624,7 +620,6 @@ export default function FieldStaffPage() {
         setNextFollowupDate("");
         setNextAction("");
         setOrderExpectedDelivery("");
-        setOrderQuantity("");
         setOrderProductCategory("");
         setOrderPriority("Normal");
         setPaymentMode(paymentModes[0]);
@@ -825,7 +820,6 @@ export default function FieldStaffPage() {
           recoveryAmount={recoveryAmount}
           nextFollowupDate={nextFollowupDate}
           nextAction={nextAction}
-          orderQuantity={orderQuantity}
           orderExpectedDelivery={orderExpectedDelivery}
           orderProductCategory={orderProductCategory}
           orderPriority={orderPriority}
@@ -840,7 +834,6 @@ export default function FieldStaffPage() {
           onRecovery={setRecoveryAmount}
           onNextFollowup={setNextFollowupDate}
           onNextAction={setNextAction}
-          onOrderQuantity={setOrderQuantity}
           onOrderExpectedDelivery={setOrderExpectedDelivery}
           onOrderProductCategory={setOrderProductCategory}
           onOrderPriority={setOrderPriority}
@@ -934,7 +927,6 @@ export default function FieldStaffPage() {
               nextAction={nextAction}
               recoveryAmount={recoveryAmount}
               nextFollowupDate={nextFollowupDate}
-              orderQuantity={orderQuantity}
               orderExpectedDelivery={orderExpectedDelivery}
               orderProductCategory={orderProductCategory}
               orderPriority={orderPriority}
@@ -947,7 +939,6 @@ export default function FieldStaffPage() {
               onNextAction={setNextAction}
               onRecovery={setRecoveryAmount}
               onNextFollowup={setNextFollowupDate}
-              onOrderQuantity={setOrderQuantity}
               onOrderExpectedDelivery={setOrderExpectedDelivery}
               onOrderProductCategory={setOrderProductCategory}
               onOrderPriority={setOrderPriority}
@@ -982,12 +973,13 @@ export default function FieldStaffPage() {
                 <select value={result} onChange={(e) => setResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                   {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
                 </select>
-                <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                {!isOrderReceived(visitType, result) && (
+                  <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                )}
                 {isOrderReceived(visitType, result) && (
                   <>
-                    <input value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                    <input value={orderQuantity} onChange={(e) => setOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <textarea value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
+                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                     <select value={orderPriority} onChange={(e) => setOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                       <option>Normal</option>
                       <option>Urgent</option>
@@ -1061,7 +1053,6 @@ function VisitDetailFields({
   nextAction,
   recoveryAmount,
   nextFollowupDate,
-  orderQuantity,
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
@@ -1074,7 +1065,6 @@ function VisitDetailFields({
   onNextAction,
   onRecovery,
   onNextFollowup,
-  onOrderQuantity,
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
@@ -1088,7 +1078,6 @@ function VisitDetailFields({
   nextAction: string;
   recoveryAmount: string;
   nextFollowupDate: string;
-  orderQuantity: string;
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
@@ -1101,7 +1090,6 @@ function VisitDetailFields({
   onNextAction: (value: string) => void;
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
-  onOrderQuantity: (value: string) => void;
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
@@ -1118,7 +1106,9 @@ function VisitDetailFields({
       <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
         {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
       </select>
-      <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      {!isOrderReceived(visitType, result) && (
+        <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      )}
       {needsNextFollowup(result) && (
         <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
@@ -1139,9 +1129,8 @@ function VisitDetailFields({
       )}
       {isOrderReceived(visitType, result) && (
         <>
-          <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          <input value={orderQuantity} onChange={(e) => onOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
+          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
           <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
             <option>Normal</option>
             <option>Urgent</option>
@@ -1214,7 +1203,6 @@ function ActiveVisitCard({
   recoveryAmount,
   nextFollowupDate,
   nextAction,
-  orderQuantity,
   orderExpectedDelivery,
   orderProductCategory,
   orderPriority,
@@ -1229,7 +1217,6 @@ function ActiveVisitCard({
   onRecovery,
   onNextFollowup,
   onNextAction,
-  onOrderQuantity,
   onOrderExpectedDelivery,
   onOrderProductCategory,
   onOrderPriority,
@@ -1249,7 +1236,6 @@ function ActiveVisitCard({
   recoveryAmount: string;
   nextFollowupDate: string;
   nextAction: string;
-  orderQuantity: string;
   orderExpectedDelivery: string;
   orderProductCategory: string;
   orderPriority: string;
@@ -1264,7 +1250,6 @@ function ActiveVisitCard({
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
   onNextAction: (value: string) => void;
-  onOrderQuantity: (value: string) => void;
   onOrderExpectedDelivery: (value: string) => void;
   onOrderProductCategory: (value: string) => void;
   onOrderPriority: (value: string) => void;
@@ -1300,7 +1285,9 @@ function ActiveVisitCard({
         <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
           {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
         </select>
-        <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        {!isOrderVisit && (
+          <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        )}
         {isRecoveryVisit && (
           <PaymentFields
             visitType={visitType}
@@ -1318,9 +1305,8 @@ function ActiveVisitCard({
         )}
         {isOrderVisit && (
           <>
-            <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-            <input value={orderQuantity} onChange={(e) => onOrderQuantity(e.target.value)} inputMode="decimal" placeholder="Quantity" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
+            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
             <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
               <option>Normal</option>
               <option>Urgent</option>
@@ -1331,9 +1317,11 @@ function ActiveVisitCard({
         {needsNextFollowup(result) && (
           <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         )}
-        <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
-          <Camera className="h-5 w-5" /> Add photo
-        </button>
+        {!isOrderVisit && (
+          <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
+            <Camera className="h-5 w-5" /> Add photo
+          </button>
+        )}
       </div>
       {latestCheque && (
         <div className="mt-4 rounded-lg border border-emerald-200 bg-white p-3 text-sm shadow-sm dark:border-emerald-900 dark:bg-slate-900">
