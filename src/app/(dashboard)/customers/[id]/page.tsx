@@ -25,6 +25,13 @@ type CustomerDetail = {
     followupDate: string;
     status: string;
     notes: string | null;
+    summary: string | null;
+    detailedNotes: string | null;
+    sourceModule: string;
+    followUpType: string | null;
+    recoveryAmount: number | null;
+    paymentStatus: string | null;
+    chequeStatus: string | null;
     nextFollowupDate: string | null;
     createdBy: { name: string };
   }[];
@@ -392,9 +399,14 @@ export default function CustomerDetailPage() {
               <li key={f.id} className="flex gap-4 border-b border-slate-100 pb-4 dark:border-slate-800">
                 <div className="text-xs text-slate-500 w-24 shrink-0">{formatDate(f.followupDate)}</div>
                 <div>
-                  <p className="font-medium">{f.status.replace(/_/g, " ")}</p>
-                  <p className="text-xs text-slate-500">By {f.createdBy.name}</p>
-                  {f.notes && <p className="mt-1 text-sm">{f.notes}</p>}
+                  <p className="font-medium">{f.summary || f.followUpType || f.status.replace(/_/g, " ")}</p>
+                  <p className="text-xs text-slate-500">By {f.createdBy.name} / {f.sourceModule.replace(/_/g, " ")}</p>
+                  {(f.detailedNotes || f.notes) && <p className="mt-1 text-sm">{f.detailedNotes || f.notes}</p>}
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                    {f.recoveryAmount ? <span>Recovery: {formatCurrency(f.recoveryAmount)}</span> : null}
+                    {f.paymentStatus ? <span>Payment: {f.paymentStatus.replace(/_/g, " ")}</span> : null}
+                    {f.chequeStatus ? <span>Cheque: {f.chequeStatus.replace(/_/g, " ")}</span> : null}
+                  </div>
                   {f.nextFollowupDate && (
                     <p className="mt-1 text-xs">Next: {formatDate(f.nextFollowupDate)}</p>
                   )}

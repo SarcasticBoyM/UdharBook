@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const schema = z.object({
   customerId: z.string(),
@@ -33,16 +34,6 @@ const schema = z.object({
   paidAmount: z.number().min(0).optional(),
 });
 
-function customerStatusFromFollowUp(status: z.infer<typeof schema>["status"], balance: number) {
-  if (status === "PAID" || balance === 0) return "CLEARED";
-  if (status === "COMPLETED") return balance === 0 ? "CLEARED" : "ACTIVE";
-  if (status === "MISSED") return "HIGH_RISK";
-  if (status === "RESCHEDULED" || status === "CALLBACK" || status === "FOLLOW_UP_REQUIRED") return "PENDING";
-  if (status === "NOT_REACHABLE" || status === "WRONG_NUMBER") return "HIGH_RISK";
-  if (status === "CONTACTED" || status === "PAYMENT_PROMISED" || status === "PARTIAL_PAID") return "ACTIVE";
-  return "PENDING";
-}
-
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -53,86 +44,31 @@ export async function POST(request: Request) {
     const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
-    const requestedReminderAt = body.nextFollowUpDateTime ?? body.scheduledAt ?? body.nextFollowupDate;
-    const reminderDateTime = requestedReminderAt ? new Date(requestedReminderAt) : null;
-    const reminderStatusAllowed = body.status === "CALLBACK" || body.status === "FOLLOW_UP_REQUIRED";
-    const reminderEnabled = Boolean(body.manualReminder && body.reminderEnabled !== false && reminderDateTime && reminderStatusAllowed);
-    const scheduledAt = reminderEnabled ? reminderDateTime : null;
-    const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : scheduledAt;
-    const now = new Date();
-    const isCompleteAction = body.status === "COMPLETED" || body.status === "PAID";
-    const isRescheduledAction = body.status === "RESCHEDULED";
-    const paidAmount =
-      body.status === "PAID"
-        ? customer.outstandingBalance
-        : body.status === "PARTIAL_PAID"
-          ? Math.min(body.paidAmount ?? 0, customer.outstandingBalance)
-          : 0;
-    const newBalance = body.status === "PAID" ? 0 : Math.max(0, customer.outstandingBalance - paidAmount);
-
     const result = await prisma.$transaction(async (tx) => {
-      const followUp = await tx.followUp.create({
-        data: {
-          shopId,
-          customerId: body.customerId,
-          status: body.status,
-          priority: body.priority,
-          notes: body.notes,
-          reminderNotes: body.reminderNotes,
-          customerResponse: body.customerResponse,
-          manualReminder: reminderEnabled,
-          reminderEnabled,
-          nextFollowUpDateTime: reminderEnabled ? reminderDateTime : null,
-          scheduledAt,
-          completedAt: isCompleteAction ? now : null,
-          rescheduledAt: isRescheduledAction ? now : null,
-          actionLoggedAt: now,
-          nextFollowupDate: nextDate,
-          createdById: session.id,
-        },
+      return recordFollowUpActivity(tx, {
+        shopId,
+        customerId: body.customerId,
+        createdById: session.id,
+        status: body.status,
+        priority: body.priority,
+        notes: body.notes,
+        reminderNotes: body.reminderNotes,
+        customerResponse: body.customerResponse,
+        manualReminder: body.manualReminder,
+        reminderEnabled: body.reminderEnabled,
+        nextFollowUpDateTime: body.nextFollowUpDateTime,
+        scheduledAt: body.scheduledAt,
+        nextFollowupDate: body.nextFollowupDate,
+        recoveryAmount: body.paidAmount,
+        paymentStatus: body.status === "PAID" ? "PAID" : body.status === "PARTIAL_PAID" ? "PARTIAL_PAID" : null,
+        sourceModule: "TODAY_FOLLOWUPS",
+        followUpType: body.status,
+        summary: body.notes ?? body.customerResponse ?? `${body.status.replace(/_/g, " ").toLowerCase()} for ${customer.partyName}`,
+        detailedNotes: body.notes,
+        activitySource: "today-follow-ups",
+        recordPayment: body.status === "PAID" || body.status === "PARTIAL_PAID",
+        paymentMethod: body.status === "PAID" ? "Full recovery" : "Partial recovery",
       });
-
-      if (paidAmount > 0) {
-        await tx.paymentEntry.create({
-          data: {
-            shopId,
-            customerId: body.customerId,
-            amount: paidAmount,
-            method: body.status === "PAID" ? "Full recovery" : "Partial recovery",
-            notes: body.notes,
-            paidAt: now,
-            createdById: session.id,
-          },
-        });
-      }
-
-      const nextCustomerStatus = customerStatusFromFollowUp(body.status, newBalance);
-
-      if (customer.status !== nextCustomerStatus) {
-        await tx.statusHistory.create({
-          data: {
-            customerId: body.customerId,
-            fromStatus: customer.status,
-            toStatus: nextCustomerStatus,
-            notes: body.notes,
-            changedById: session.id,
-          },
-        });
-      }
-
-      const updated = await tx.customer.update({
-        where: { id: body.customerId },
-        data: {
-          status: nextCustomerStatus,
-          notes: body.notes ?? customer.notes,
-          lastFollowupDate: now,
-          nextFollowupDate: nextDate,
-          totalCallsMade: { increment: 1 },
-          outstandingBalance: newBalance,
-        },
-      });
-
-      return { followUp, customer: updated };
     });
 
     await logActivity({
@@ -140,7 +76,7 @@ export async function POST(request: Request) {
       userId: session.id,
       shopId,
       customerId: body.customerId,
-      details: `${body.status} ${nextDate?.toISOString() ?? ""}`.trim(),
+      details: `${body.status} ${result.followUp.nextFollowupDate?.toISOString() ?? ""}`.trim(),
     });
 
     return NextResponse.json(result, { status: 201 });

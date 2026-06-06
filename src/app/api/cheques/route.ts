@@ -7,6 +7,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 import { logActivity } from "@/lib/activity";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 
@@ -501,6 +502,31 @@ export async function POST(request: Request) {
           toStatus: "COLLECTED",
           notes: body.collectionNotes ?? "Cheque collected",
         },
+      });
+      await recordFollowUpActivity(tx, {
+        shopId,
+        customerId: body.customerId,
+        createdById: session.id,
+        status: "CONTACTED",
+        priority: body.amount >= HIGH_VALUE ? "HIGH" : "MEDIUM",
+        notes: body.collectionNotes ?? `Cheque collected: ${body.chequeNumber}`,
+        recoveryAmount: body.amount,
+        paymentStatus: "CHEQUE_COLLECTED",
+        chequeId: created.id,
+        chequeStatus: "COLLECTED",
+        sourceModule: "CHEQUE_COLLECTION",
+        followUpType: "CHEQUE_PICKUP",
+        summary: `Cheque collected Rs ${body.amount}`,
+        detailedNotes: body.collectionNotes,
+        visitId: body.staffVisitId,
+        activitySource: "cheque-collection",
+        metadata: {
+          chequeNumber: body.chequeNumber,
+          bankName: body.bankName,
+          chequeDate: body.chequeDate,
+          ocrConfidence: body.ocrConfidence ?? null,
+        },
+        recordPayment: false,
       });
       if (linkedVisit) {
         await tx.staffVisit.update({

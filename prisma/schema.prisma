@@ -322,6 +322,18 @@ model FollowUp {
   notes            String?
   reminderNotes    String?
   customerResponse String?
+  sourceModule     String         @default("TODAY_FOLLOWUPS")
+  followUpType     String?
+  summary          String?
+  detailedNotes    String?
+  recoveryAmount   Float?
+  paymentStatus    String?
+  chequeId         String?
+  chequeStatus     String?
+  promiseDate      DateTime?
+  visitId          String?
+  activitySource   String?
+  metadata         Json?
   nextFollowupDate DateTime?
   nextFollowUpDateTime DateTime?
   scheduledAt      DateTime?
@@ -351,6 +363,11 @@ model FollowUp {
   @@index([queueRank])
   @@index([shopId, scheduledAt])
   @@index([shopId, status])
+  @@index([shopId, sourceModule])
+  @@index([shopId, activitySource])
+  @@index([chequeId])
+  @@index([visitId])
+  @@index([promiseDate])
 }
 
 model StatusHistory {

@@ -195,27 +195,6 @@ export async function POST(request: Request) {
         update: { status: "ACTIVE" },
       });
 
-      if (body.nextFollowupDate) {
-        const nextDate = new Date(body.nextFollowupDate);
-        await tx.followUp.create({
-          data: {
-            shopId,
-            customerId: customer.id,
-            followupDate: new Date(),
-            status: "RESCHEDULED",
-            priority: "MEDIUM",
-            notes: body.notes ?? "Scheduled from field visit.",
-            nextFollowupDate: nextDate,
-            scheduledAt: nextDate,
-            createdById: session.id,
-          },
-        });
-        await tx.customer.update({
-          where: { id: customer.id },
-          data: { lastFollowupDate: new Date(), nextFollowupDate: nextDate },
-        });
-      }
-
       return created;
     });
 

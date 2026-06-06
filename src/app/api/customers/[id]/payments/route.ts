@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { requireShopId } from "@/lib/tenant";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const schema = z.object({
   amount: z.number().positive(),
@@ -60,7 +61,25 @@ export async function POST(
         });
       }
 
-      return { payment, customer: updated };
+      const followUp = await recordFollowUpActivity(tx, {
+        shopId,
+        customerId: id,
+        createdById: session.id,
+        status: newBalance === 0 ? "PAID" : "PARTIAL_PAID",
+        priority: "MEDIUM",
+        notes: body.notes ?? `Payment recorded: ${body.amount}`,
+        recoveryAmount: body.amount,
+        paymentStatus: newBalance === 0 ? "PAID" : "PARTIAL_PAID",
+        sourceModule: "CUSTOMER_MODULE",
+        followUpType: "PAYMENT_COLLECTED",
+        summary: `Payment recovered Rs ${body.amount}`,
+        detailedNotes: body.notes,
+        activitySource: "customer-payment",
+        recordPayment: false,
+        updateCustomerStatus: false,
+      });
+
+      return { payment, customer: updated, followUp: followUp.followUp };
     });
 
     await logActivity({

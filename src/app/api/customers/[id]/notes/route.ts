@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { requireShopId } from "@/lib/tenant";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const schema = z.object({
   note: z.string().min(1).max(2000),
@@ -22,14 +23,30 @@ export async function POST(
     const shopId = requireShopId(request, session);
     const customer = await prisma.customer.findFirst({ where: { id, shopId }, select: { id: true } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
-    const note = await prisma.customerNote.create({
-      data: {
+    const note = await prisma.$transaction(async (tx) => {
+      const created = await tx.customerNote.create({
+        data: {
+          shopId,
+          customerId: id,
+          note: body.note,
+          createdById: session.id,
+        },
+        include: { createdBy: { select: { name: true } } },
+      });
+      await recordFollowUpActivity(tx, {
         shopId,
         customerId: id,
-        note: body.note,
         createdById: session.id,
-      },
-      include: { createdBy: { select: { name: true } } },
+        status: "CONTACTED",
+        priority: "LOW",
+        notes: body.note,
+        sourceModule: "ADMIN_MANUAL",
+        followUpType: "ADMIN_NOTE",
+        summary: body.note,
+        detailedNotes: body.note,
+        activitySource: "customer-note",
+      });
+      return created;
     });
 
     await logActivity({

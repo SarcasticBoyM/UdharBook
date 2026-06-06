@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const updateSchema = z.object({
   status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "CANCELLED"]),
@@ -198,22 +199,59 @@ export async function PATCH(
       });
     }
 
+    const depositSummary = depositAccount
+      ? `${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}`
+      : body.depositBankAccount ?? existing.depositBankAccount ?? "";
+    const followUpStatus =
+      body.status === "BOUNCED"
+        ? "PENDING"
+        : body.status === "CLEARED"
+          ? existing.amount >= existing.customer.outstandingBalance
+            ? "PAID"
+            : "PARTIAL_PAID"
+          : "COMPLETED";
+    await recordFollowUpActivity(tx, {
+      shopId,
+      customerId: existing.customerId,
+      createdById: session.id,
+      status: followUpStatus,
+      priority: body.status === "BOUNCED" ? "URGENT" : "MEDIUM",
+      notes:
+        body.notes ??
+        body.bounceReason ??
+        (body.status === "DEPOSITED" || body.status === "CLEARED" ? `Cheque ${body.status.toLowerCase()} ${depositSummary}`.trim() : undefined),
+      nextFollowupDate: body.status === "BOUNCED" ? now : null,
+      scheduledAt: body.status === "BOUNCED" ? now : null,
+      recoveryAmount: existing.amount,
+      paymentStatus: body.status === "CLEARED" ? "PAID_BY_CHEQUE" : body.status,
+      chequeId: existing.id,
+      chequeStatus: body.status,
+      sourceModule: "CHEQUE_DEPOSIT",
+      followUpType: `CHEQUE_${body.status}`,
+      summary:
+        body.status === "DEPOSITED"
+          ? `Cheque deposited${depositSummary ? ` in ${depositSummary}` : ""}`
+          : body.status === "CLEARED"
+            ? `Cheque cleared Rs ${existing.amount}`
+            : body.status === "BOUNCED"
+              ? "Cheque bounced and customer follow-up required"
+              : `Cheque ${body.status.toLowerCase()}`,
+      detailedNotes: body.notes ?? body.bounceReason,
+      activitySource: "cheque-status",
+      metadata: {
+        chequeNumber: existing.chequeNumber,
+        bankName: existing.bankName,
+        fromStatus: existing.status,
+        toStatus: body.status,
+      },
+      recordPayment: false,
+      updateCustomerStatus: false,
+    });
+
     if (body.status === "BOUNCED") {
       await tx.customer.update({
         where: { id: existing.customerId },
         data: { status: "HIGH_RISK", nextFollowupDate: now },
-      });
-      await tx.followUp.create({
-        data: {
-          shopId,
-          customerId: existing.customerId,
-          status: "PENDING",
-          priority: "URGENT",
-          notes: `Cheque bounced: ${existing.chequeNumber}. ${body.bounceReason ?? body.notes ?? ""}`.trim(),
-          scheduledAt: now,
-          nextFollowupDate: now,
-          createdById: session.id,
-        },
       });
       await tx.statusHistory.create({
         data: {

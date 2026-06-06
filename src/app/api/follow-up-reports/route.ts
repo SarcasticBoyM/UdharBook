@@ -112,6 +112,10 @@ function cleanText(value?: string | null) {
   return value?.replace(/\s+/g, " ").trim() || "";
 }
 
+function reportPaymentKey(customerId: string, amount: number, at: Date) {
+  return `${customerId}:${amount}:${at.toISOString().slice(0, 10)}`;
+}
+
 function humanStatus(value: string) {
   return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
@@ -486,6 +490,9 @@ export async function GET(request: Request) {
 
   const activityRows: ReportRow[] = [];
   const pushActivity = (row: ReportRow) => activityRows.push(row);
+  const seenVisitIds = new Set<string>();
+  const seenChequeIds = new Set<string>();
+  const seenPaymentKeys = new Set<string>();
 
   followUps.forEach((followUp) => {
     const next = nextActionFor(followUp.customer, followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt);
@@ -493,8 +500,8 @@ export async function GET(request: Request) {
     const notes = cleanText(followUp.notes) || cleanText(followUp.customerResponse);
     const statusLabel = humanStatus(followUp.status);
     const latestActivityAt = followUp.actionLoggedAt ?? followUp.followupDate;
-    const recoveryAmount = followUp.customer.payments[0]?.amount ?? 0;
-    const summary = followUpSummary({
+    const recoveryAmount = followUp.recoveryAmount ?? followUp.customer.payments[0]?.amount ?? 0;
+    const fallbackSummary = followUpSummary({
       status: followUp.status,
       actor,
       notes: cleanText(followUp.notes),
@@ -502,6 +509,12 @@ export async function GET(request: Request) {
       nextDate: followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? null,
       unreachableCount: notReachableCounts.get(followUp.customerId) ?? 0,
     });
+    const summary = cleanText(followUp.summary) || fallbackSummary;
+    if (followUp.visitId) seenVisitIds.add(followUp.visitId);
+    if (followUp.chequeId) seenChequeIds.add(followUp.chequeId);
+    if (recoveryAmount > 0 && followUp.sourceModule !== "CHEQUE_COLLECTION") {
+      seenPaymentKeys.add(reportPaymentKey(followUp.customerId, recoveryAmount, latestActivityAt));
+    }
     pushActivity({
       id: `followup-${followUp.id}`,
       customerId: followUp.customerId,
@@ -509,11 +522,11 @@ export async function GET(request: Request) {
       mobileNumber: followUp.customer.contactNumber,
       currentBalance: followUp.customer.outstandingBalance,
       summary,
-      detailedNotes: [notes, cleanText(followUp.reminderNotes)].filter(Boolean).join(" | "),
-      followUpType: statusLabel,
+      detailedNotes: [cleanText(followUp.detailedNotes) || notes, cleanText(followUp.reminderNotes)].filter(Boolean).join(" | "),
+      followUpType: cleanText(followUp.followUpType) || statusLabel,
       recoveryAmount,
-      paymentStatus: paymentStatusFor(followUp.customer.outstandingBalance, recoveryAmount),
-      promiseDate: followUp.status === "PAYMENT_PROMISED" ? followUp.nextFollowupDate : null,
+      paymentStatus: cleanText(followUp.paymentStatus) || paymentStatusFor(followUp.customer.outstandingBalance, recoveryAmount),
+      promiseDate: followUp.promiseDate ?? (followUp.status === "PAYMENT_PROMISED" ? followUp.nextFollowupDate : null),
       nextAction: followUp.reminderEnabled && followUp.nextFollowUpDateTime
         ? `Reminder ${formatShortDate(followUp.nextFollowUpDateTime)}`
         : next.text,
@@ -524,8 +537,8 @@ export async function GET(request: Request) {
       createdBy: actor,
       userRole: humanStatus(followUp.createdBy.role),
       staffId: followUp.createdById,
-      visitStatus: "-",
-      chequeStatus: "-",
+      visitStatus: followUp.visitId ? "Completed" : "-",
+      chequeStatus: cleanText(followUp.chequeStatus) || "-",
       bankAccount: "-",
       depositStatus: "-",
       createdAt: followUp.createdAt,
@@ -533,13 +546,14 @@ export async function GET(request: Request) {
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
       isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < todayStart),
-      isPromise: followUp.status === "PAYMENT_PROMISED",
+      isPromise: followUp.status === "PAYMENT_PROMISED" || Boolean(followUp.promiseDate),
       notes,
-      timeline: [{ at: latestActivityAt, type: "Follow-up", summary, by: actor, status: statusLabel, notes }],
+      timeline: [{ at: latestActivityAt, type: humanStatus(followUp.sourceModule), summary, by: actor, status: statusLabel, notes }],
     });
   });
 
   completedVisits.forEach((visit) => {
+    if (seenVisitIds.has(visit.id)) return;
     const cheque = visit.cheques[0];
     const actor = visit.staff.name;
     const latestActivityAt = visit.checkOutAt ?? visit.updatedAt;
@@ -589,6 +603,7 @@ export async function GET(request: Request) {
   });
 
   payments.forEach((payment) => {
+    if (seenPaymentKeys.has(reportPaymentKey(payment.customerId, payment.amount, payment.paidAt))) return;
     const actor = payment.createdBy.name;
     const next = nextActionFor(payment.customer);
     pushActivity({
@@ -627,6 +642,7 @@ export async function GET(request: Request) {
   });
 
   cheques.forEach((cheque) => {
+    if (seenChequeIds.has(cheque.id)) return;
     const actor = cheque.collectedBy.name;
     const latestActivityAt = chequeActivityDate(cheque);
     const next = nextActionFor(cheque.customer);

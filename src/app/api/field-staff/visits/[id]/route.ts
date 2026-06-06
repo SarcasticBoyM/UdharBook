@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, startOfDay } from "@/lib/field-tracking";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const updateSchema = z.object({
   action: z.enum(["CHECK_OUT", "CANCEL"]),
@@ -105,45 +106,43 @@ export async function PATCH(request: Request, { params }: Params) {
         },
       });
 
-      if (recoveryAmount > 0) {
-        const nextBalance = Math.max(0, existing.customer.outstandingBalance - recoveryAmount);
-        await tx.customer.update({
-          where: { id: existing.customerId },
-          data: { outstandingBalance: nextBalance, status: nextBalance === 0 ? "CLEARED" : "PENDING" },
-        });
-        await tx.paymentEntry.create({
-          data: {
-            shopId,
-            customerId: existing.customerId,
-            amount: recoveryAmount,
-            method: "FIELD_VISIT",
-            notes: `Recovered during field visit: ${body.result ?? "Visit completed"}`,
-            createdById: session.id,
-            paidAt: now,
-          },
-        });
-      }
-
-      if (body.nextFollowupDate) {
-        const nextDate = new Date(body.nextFollowupDate);
-        await tx.followUp.create({
-          data: {
-            shopId,
-            customerId: existing.customerId,
-            followupDate: now,
-            status: "RESCHEDULED",
-            priority: "MEDIUM",
-            notes: body.followupNotes ?? body.notes ?? "Scheduled from field visit.",
-            nextFollowupDate: nextDate,
-            scheduledAt: nextDate,
-            createdById: session.id,
-          },
-        });
-        await tx.customer.update({
-          where: { id: existing.customerId },
-          data: { lastFollowupDate: now, nextFollowupDate: nextDate },
-        });
-      }
+      const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : null;
+      const status =
+        recoveryAmount > 0
+          ? recoveryAmount >= existing.customer.outstandingBalance
+            ? "PAID"
+            : "PARTIAL_PAID"
+          : nextDate
+            ? "RESCHEDULED"
+            : "COMPLETED";
+      await recordFollowUpActivity(tx, {
+        shopId,
+        customerId: existing.customerId,
+        createdById: session.id,
+        status,
+        priority: recoveryAmount > 0 ? "HIGH" : "MEDIUM",
+        notes: body.followupNotes ?? body.notes ?? body.result ?? "Field visit completed.",
+        customerResponse: body.result,
+        nextFollowupDate: nextDate,
+        scheduledAt: nextDate,
+        completedAt: now,
+        actionLoggedAt: now,
+        recoveryAmount,
+        paymentStatus: recoveryAmount > 0 ? (status === "PAID" ? "PAID" : "PARTIAL_PAID") : null,
+        sourceModule: "FIELD_VISIT",
+        followUpType: updated.visitType,
+        summary:
+          recoveryAmount > 0
+            ? `Field visit recovered Rs ${recoveryAmount}`
+            : body.result
+              ? `Field visit: ${body.result}`
+              : "Field visit completed",
+        detailedNotes: body.notes,
+        visitId: updated.id,
+        activitySource: "field-visit-checkout",
+        recordPayment: recoveryAmount > 0,
+        paymentMethod: "FIELD_VISIT",
+      });
 
       return updated;
     });
