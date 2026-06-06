@@ -557,14 +557,23 @@ export async function GET(request: Request) {
     const cheque = visit.cheques[0];
     const actor = visit.staff.name;
     const latestActivityAt = visit.checkOutAt ?? visit.updatedAt;
-    const visitNotes = [cleanText(visit.result), cleanText(visit.notes), visit.photos.length ? `${visit.photos.length} photo${visit.photos.length === 1 ? "" : "s"} uploaded` : ""]
+    const visitNotes = [
+      cleanText(visit.outcome),
+      cleanText(visit.result),
+      cleanText(visit.nextAction ? `Next: ${visit.nextAction}` : ""),
+      cleanText(visit.orderProductCategory ? `Product: ${visit.orderProductCategory}` : ""),
+      cleanText(visit.notes),
+      visit.photos.length ? `${visit.photos.length} photo${visit.photos.length === 1 ? "" : "s"} uploaded` : "",
+    ]
       .filter(Boolean)
       .join(" | ");
     const summary = cheque
       ? `Visited by ${actor}, cheque collected ${formatMoney(cheque.amount)}`
-      : visit.recoveryAmount > 0
-        ? `Visited by ${actor}, recovered ${formatMoney(visit.recoveryAmount)}`
-        : cleanText(visit.result) || cleanText(visit.notes) || `Visited by ${actor}, ${visit.visitType.toLowerCase()} completed`;
+      : visit.visitType === "Order Booking" && visit.orderAmount
+        ? `Order booked ${formatMoney(visit.orderAmount)} by ${actor}`
+        : visit.recoveryAmount > 0
+          ? `Visited by ${actor}, recovered ${formatMoney(visit.recoveryAmount)}`
+          : cleanText(visit.outcome) || cleanText(visit.result) || cleanText(visit.notes) || `${visit.visitType} completed by ${actor}`;
     const statusLabel = visit.recoveryAmount > 0 ? "Recovered" : "Completed";
     const next = nextActionFor(visit.customer);
     pushActivity({
@@ -576,13 +585,13 @@ export async function GET(request: Request) {
       summary,
       detailedNotes: visitNotes,
       followUpType: visit.visitType,
-      recoveryAmount: visit.recoveryAmount,
+      recoveryAmount: visit.visitType === "Order Booking" ? visit.orderAmount ?? 0 : visit.recoveryAmount,
       paymentStatus: paymentStatusFor(visit.customer.outstandingBalance, visit.recoveryAmount),
       promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,
       reminderStatus: "No reminder",
-      status: cheque ? "Cheque Collected" : statusLabel,
+      status: cheque ? "Cheque Collected" : visit.visitType === "Order Booking" ? "Order Received" : statusLabel,
       statusTone: cheque ? "blue" : toneForStatus(statusLabel),
       createdBy: actor,
       userRole: humanStatus(visit.staff.role),
@@ -598,7 +607,7 @@ export async function GET(request: Request) {
       isOverdue: Boolean(next.at && next.at < todayStart),
       isPromise: false,
       notes: visitNotes,
-      timeline: [{ at: latestActivityAt, type: "Completed Visit", summary, by: actor, status: visit.status, notes: visitNotes }],
+      timeline: [{ at: latestActivityAt, type: visit.visitType, summary, by: actor, status: visit.outcome ?? visit.status, notes: visitNotes }],
     });
   });
 

@@ -87,6 +87,13 @@ type CustomerDetail = {
     outsideWarning: boolean;
     notes: string | null;
     result: string | null;
+    visitType: string;
+    outcome: string | null;
+    nextAction: string | null;
+    nextVisitDate: string | null;
+    orderAmount: number | null;
+    orderProductCategory: string | null;
+    orderExpectedDelivery: string | null;
     recoveryAmount: number;
     travelKm: number;
     staff: { name: string; role: string };
@@ -373,7 +380,14 @@ export default function CustomerDetailPage() {
                   <p><span className="text-slate-500">Recovery:</span> {formatCurrency(visit.recoveryAmount)}</p>
                   <p><span className="text-slate-500">Travel:</span> {visit.travelKm.toFixed(1)} km</p>
                 </div>
-                {(visit.result || visit.notes) && <p className="mt-2 text-sm">{visit.result ?? visit.notes}</p>}
+                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                  <span>{visit.visitType}</span>
+                  {visit.outcome && <span>Outcome: {visit.outcome}</span>}
+                  {visit.orderAmount ? <span>Order: {formatCurrency(visit.orderAmount)}</span> : null}
+                  {visit.orderProductCategory && <span>Product: {visit.orderProductCategory}</span>}
+                  {visit.nextAction && <span>Next: {visit.nextAction}</span>}
+                </div>
+                {(visit.outcome || visit.result || visit.notes) && <p className="mt-2 text-sm">{visit.outcome ?? visit.result ?? visit.notes}</p>}
                 {visit.photos.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {visit.photos.map((photo) => (

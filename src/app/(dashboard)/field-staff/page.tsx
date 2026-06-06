@@ -41,6 +41,15 @@ type Visit = {
   outsideWarning: boolean;
   notes: string | null;
   result: string | null;
+  outcome?: string | null;
+  nextAction?: string | null;
+  nextVisitDate?: string | null;
+  orderAmount?: number | null;
+  orderExpectedDelivery?: string | null;
+  orderProductCategory?: string | null;
+  orderPriority?: string | null;
+  leadArea?: string | null;
+  leadContactPerson?: string | null;
   recoveryAmount: number;
   visitType?: string;
   staff?: { name: string; role: string };
@@ -79,8 +88,35 @@ type StaffStatus = {
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
 type CustomerSource = "recent" | "pending_recovery" | "today_followup" | "high_amount" | "new_visit";
 
-const quickResults = ["Follow-up done", "Promise to pay", "Payment collected", "Not available", "Cheque pickup"];
-const visitTypes = ["Collection", "Follow-up", "New Lead", "Complaint", "Cheque Pickup", "Payment Reminder", "Other"];
+const quickResults = [
+  "Interested",
+  "Order received",
+  "Follow-up required",
+  "Payment promised",
+  "Payment collected",
+  "Cheque collected",
+  "Customer unavailable",
+  "Revisit required",
+  "Complaint resolved",
+  "Complaint pending",
+  "New lead generated",
+  "No response",
+];
+const visitTypes = [
+  "Recovery Follow-up",
+  "Payment Collection",
+  "Cheque Pickup",
+  "Order Booking",
+  "Sales Visit",
+  "New Lead Visit",
+  "Complaint Visit",
+  "Stock Check",
+  "Relationship Visit",
+  "Service Visit",
+  "Market Survey",
+  "General Visit",
+];
+const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup"]);
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
 const customerSourceOptions: { label: string; value: CustomerSource }[] = [
   { label: "Recent Customers", value: "recent" },
@@ -122,14 +158,21 @@ export default function FieldStaffPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
   const [showNewVisit, setShowNewVisit] = useState(false);
   const [leadName, setLeadName] = useState("");
+  const [leadContactPerson, setLeadContactPerson] = useState("");
   const [leadMobile, setLeadMobile] = useState("");
   const [leadAddress, setLeadAddress] = useState("");
-  const [visitType, setVisitType] = useState("Follow-up");
+  const [leadArea, setLeadArea] = useState("");
+  const [visitType, setVisitType] = useState("Sales Visit");
   const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [staffStatuses, setStaffStatuses] = useState<StaffStatus[]>([]);
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState(quickResults[0]);
+  const [nextAction, setNextAction] = useState("");
+  const [orderAmount, setOrderAmount] = useState("");
+  const [orderExpectedDelivery, setOrderExpectedDelivery] = useState("");
+  const [orderProductCategory, setOrderProductCategory] = useState("");
+  const [orderPriority, setOrderPriority] = useState("Normal");
   const [recoveryAmount, setRecoveryAmount] = useState("");
   const [nextFollowupDate, setNextFollowupDate] = useState("");
   const [showChequeFlow, setShowChequeFlow] = useState(false);
@@ -145,7 +188,12 @@ export default function FieldStaffPage() {
     () => ({
       visits: visits.length,
       completed: visits.filter((visit) => visit.status === "COMPLETED").length,
+      ordersBooked: visits.filter((visit) => visit.visitType === "Order Booking").length,
+      orderValue: visits.reduce((sum, visit) => sum + (visit.orderAmount ?? 0), 0),
       recovered: visits.reduce((sum, visit) => sum + visit.recoveryAmount, 0),
+      newLeads: visits.filter((visit) => visit.visitType === "New Lead Visit" || visit.visitType === "New Lead").length,
+      productive: visits.filter((visit) => visit.status === "COMPLETED" && !["Customer unavailable", "No response"].includes(visit.outcome ?? visit.result ?? "")).length,
+      pendingFollowups: visits.filter((visit) => visit.nextVisitDate).length,
     }),
     [visits],
   );
@@ -180,6 +228,18 @@ export default function FieldStaffPage() {
 
   useEffect(() => {
     activeVisitRef.current = activeVisit;
+  }, [activeVisit]);
+
+  useEffect(() => {
+    if (!activeVisit) return;
+    setVisitType(activeVisit.visitType ?? "General Visit");
+    setResult(activeVisit.outcome ?? activeVisit.result ?? quickResults[0]);
+    setNextAction(activeVisit.nextAction ?? "");
+    setOrderAmount(activeVisit.orderAmount ? String(activeVisit.orderAmount) : "");
+    setOrderProductCategory(activeVisit.orderProductCategory ?? "");
+    setOrderPriority(activeVisit.orderPriority ?? "Normal");
+    setOrderExpectedDelivery(activeVisit.orderExpectedDelivery ? activeVisit.orderExpectedDelivery.slice(0, 10) : "");
+    setRecoveryAmount(activeVisit.recoveryAmount ? String(activeVisit.recoveryAmount) : "");
   }, [activeVisit]);
 
   const stopGpsWatcher = useCallback(() => {
@@ -417,11 +477,20 @@ export default function FieldStaffPage() {
         mobileNumber: selectedCustomer?.contactNumber ?? leadMobile,
         address: leadAddress || undefined,
         visitType,
+        outcome: result,
+        nextAction: nextAction || undefined,
+        nextVisitDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+        orderAmount: visitType === "Order Booking" ? Number(orderAmount || 0) : undefined,
+        orderExpectedDelivery: orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+        orderProductCategory: orderProductCategory || undefined,
+        orderPriority: orderPriority || undefined,
+        leadArea: leadArea || undefined,
+        leadContactPerson: leadContactPerson || undefined,
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
         notes,
-        recoveryAmount: Number(recoveryAmount || 0),
+        recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
         nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
       }),
     });
@@ -436,8 +505,10 @@ export default function FieldStaffPage() {
     setCustomers([]);
     setShowNewVisit(false);
     setLeadName("");
+    setLeadContactPerson("");
     setLeadMobile("");
     setLeadAddress("");
+    setLeadArea("");
     setNotes("");
     await loadVisits();
   }
@@ -463,9 +534,16 @@ export default function FieldStaffPage() {
             longitude: position.coords.longitude,
             notes,
             result,
-            recoveryAmount: Number(recoveryAmount || 0),
+            visitType,
+            outcome: result,
+            nextAction: nextAction || undefined,
+            recoveryAmount: recoveryVisitTypes.has(visitType) ? Number(recoveryAmount || 0) : 0,
             nextFollowupDate: nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
             followupNotes: notes,
+            orderAmount: visitType === "Order Booking" ? Number(orderAmount || activeVisit.orderAmount || 0) : undefined,
+            orderExpectedDelivery: orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+            orderProductCategory: orderProductCategory || undefined,
+            orderPriority: orderPriority || undefined,
           }),
         });
         const data = await res.json();
@@ -477,6 +555,11 @@ export default function FieldStaffPage() {
         setNotes("");
         setRecoveryAmount("");
         setNextFollowupDate("");
+        setNextAction("");
+        setOrderAmount("");
+        setOrderExpectedDelivery("");
+        setOrderProductCategory("");
+        setOrderPriority("Normal");
         await loadVisits();
       },
     });
@@ -487,7 +570,7 @@ export default function FieldStaffPage() {
     setShowNewVisit(true);
     setSelectedCustomer(null);
     setLeadName(prefill.trim());
-    setVisitType("New Lead");
+    setVisitType("New Lead Visit");
   }
 
   function applyChip(source: CustomerSource) {
@@ -597,7 +680,7 @@ export default function FieldStaffPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Field Operations</p>
-          <h1 className="text-2xl font-bold md:text-3xl">Field Staff</h1>
+          <h1 className="text-2xl font-bold md:text-3xl">Field Operations</h1>
           <p className="text-sm text-slate-500">
             {isStaff ? "Search customer or start a new visit instantly." : "Monitor live staff status, active visits, GPS, and today timeline."}
           </p>
@@ -649,10 +732,15 @@ export default function FieldStaffPage() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Visits today" value={summary.visits} />
         <Stat label="Completed" value={summary.completed} />
+        <Stat label="Orders booked" value={summary.ordersBooked} />
+        <Stat label="Order value" value={money(summary.orderValue)} />
         <Stat label="Recovered" value={money(summary.recovered)} />
+        <Stat label="New leads" value={summary.newLeads} />
+        <Stat label="Productive visits" value={summary.productive} />
+        <Stat label="Pending follow-ups" value={summary.pendingFollowups} />
       </div>
 
       {isAdmin && <StaffStatusPanel staff={staffStatuses} />}
@@ -660,15 +748,27 @@ export default function FieldStaffPage() {
       {isStaff && activeVisit ? (
         <ActiveVisitCard
           visit={activeVisit}
+          visitType={visitType}
           notes={notes}
           result={result}
           recoveryAmount={recoveryAmount}
           nextFollowupDate={nextFollowupDate}
+          nextAction={nextAction}
+          orderAmount={orderAmount}
+          orderExpectedDelivery={orderExpectedDelivery}
+          orderProductCategory={orderProductCategory}
+          orderPriority={orderPriority}
           gpsChecking={gpsState === "checking"}
           onNotes={setNotes}
+          onVisitType={setVisitType}
           onResult={setResult}
           onRecovery={setRecoveryAmount}
           onNextFollowup={setNextFollowupDate}
+          onNextAction={setNextAction}
+          onOrderAmount={setOrderAmount}
+          onOrderExpectedDelivery={setOrderExpectedDelivery}
+          onOrderProductCategory={setOrderProductCategory}
+          onOrderPriority={setOrderPriority}
           onCheckOut={checkOut}
           showChequeFlow={showChequeFlow}
           onToggleChequeFlow={setShowChequeFlow}
@@ -748,6 +848,29 @@ export default function FieldStaffPage() {
             </div>
           )}
 
+          {selectedCustomer && !showNewVisit && (
+            <VisitDetailFields
+              visitType={visitType}
+              result={result}
+              nextAction={nextAction}
+              recoveryAmount={recoveryAmount}
+              nextFollowupDate={nextFollowupDate}
+              orderAmount={orderAmount}
+              orderExpectedDelivery={orderExpectedDelivery}
+              orderProductCategory={orderProductCategory}
+              orderPriority={orderPriority}
+              onVisitType={setVisitType}
+              onResult={setResult}
+              onNextAction={setNextAction}
+              onRecovery={setRecoveryAmount}
+              onNextFollowup={setNextFollowupDate}
+              onOrderAmount={setOrderAmount}
+              onOrderExpectedDelivery={setOrderExpectedDelivery}
+              onOrderProductCategory={setOrderProductCategory}
+              onOrderPriority={setOrderPriority}
+            />
+          )}
+
           {showNotFound && (
             <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-4 text-center">
               <p className="font-semibold">Customer not found</p>
@@ -762,12 +885,32 @@ export default function FieldStaffPage() {
               <h3 className="font-bold">New Visit</h3>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <input value={leadName} onChange={(e) => setLeadName(e.target.value)} placeholder="Customer name *" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                <input value={leadContactPerson} onChange={(e) => setLeadContactPerson(e.target.value)} placeholder="Contact person" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 <input value={leadMobile} onChange={(e) => setLeadMobile(e.target.value)} inputMode="tel" placeholder="Mobile number" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                <input value={leadArea} onChange={(e) => setLeadArea(e.target.value)} placeholder="Area / market" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 <input value={leadAddress} onChange={(e) => setLeadAddress(e.target.value)} placeholder="Address/location" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 <select value={visitType} onChange={(e) => setVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                   {visitTypes.map((type) => <option key={type}>{type}</option>)}
                 </select>
-                <input value={recoveryAmount} onChange={(e) => setRecoveryAmount(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                <select value={result} onChange={(e) => setResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+                  {quickResults.map((item) => <option key={item}>{item}</option>)}
+                </select>
+                <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                {visitType === "Order Booking" && (
+                  <>
+                    <input value={orderAmount} onChange={(e) => setOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <input value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <select value={orderPriority} onChange={(e) => setOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+                      <option>Normal</option>
+                      <option>High</option>
+                      <option>Urgent</option>
+                    </select>
+                  </>
+                )}
+                {recoveryVisitTypes.has(visitType) && (
+                  <input value={recoveryAmount} onChange={(e) => setRecoveryAmount(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                )}
                 <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
               </div>
             </div>
@@ -792,14 +935,16 @@ export default function FieldStaffPage() {
                 <div>
                   <p className="font-semibold">{visit.customer.partyName}</p>
                   <p className="text-xs text-slate-500">{formatDateTime(visit.checkInAt)} · {visit.staff?.name ?? "Staff"}</p>
-                  <p className="mt-1 text-sm line-clamp-2">{visit.result ?? visit.notes ?? "Visit recorded"}</p>
+                  <p className="mt-1 text-sm line-clamp-2">{visit.outcome ?? visit.result ?? visit.notes ?? "Visit recorded"}</p>
                 </div>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {visit.verified ? "GPS captured" : "GPS saved"}</span>
                 <span>{visit.visitType ?? "Visit"}</span>
+                {visit.orderAmount ? <span>Order {money(visit.orderAmount)}</span> : null}
                 {visit.recoveryAmount > 0 && <span className="flex items-center gap-1"><IndianRupee className="h-3.5 w-3.5" /> {money(visit.recoveryAmount)}</span>}
+                {visit.nextAction && <span>Next: {visit.nextAction}</span>}
               </div>
             </div>
           ))}
@@ -809,38 +954,132 @@ export default function FieldStaffPage() {
   );
 }
 
+function VisitDetailFields({
+  visitType,
+  result,
+  nextAction,
+  recoveryAmount,
+  nextFollowupDate,
+  orderAmount,
+  orderExpectedDelivery,
+  orderProductCategory,
+  orderPriority,
+  onVisitType,
+  onResult,
+  onNextAction,
+  onRecovery,
+  onNextFollowup,
+  onOrderAmount,
+  onOrderExpectedDelivery,
+  onOrderProductCategory,
+  onOrderPriority,
+}: {
+  visitType: string;
+  result: string;
+  nextAction: string;
+  recoveryAmount: string;
+  nextFollowupDate: string;
+  orderAmount: string;
+  orderExpectedDelivery: string;
+  orderProductCategory: string;
+  orderPriority: string;
+  onVisitType: (value: string) => void;
+  onResult: (value: string) => void;
+  onNextAction: (value: string) => void;
+  onRecovery: (value: string) => void;
+  onNextFollowup: (value: string) => void;
+  onOrderAmount: (value: string) => void;
+  onOrderExpectedDelivery: (value: string) => void;
+  onOrderProductCategory: (value: string) => void;
+  onOrderPriority: (value: string) => void;
+}) {
+  return (
+    <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
+      <select value={visitType} onChange={(e) => onVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+        {visitTypes.map((type) => <option key={type}>{type}</option>)}
+      </select>
+      <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+        {quickResults.map((item) => <option key={item}>{item}</option>)}
+      </select>
+      <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      {recoveryVisitTypes.has(visitType) && (
+        <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      )}
+      {visitType === "Order Booking" && (
+        <>
+          <input value={orderAmount} onChange={(e) => onOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+            <option>Normal</option>
+            <option>High</option>
+            <option>Urgent</option>
+          </select>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ActiveVisitCard({
   visit,
+  visitType,
   notes,
   result,
   recoveryAmount,
   nextFollowupDate,
+  nextAction,
+  orderAmount,
+  orderExpectedDelivery,
+  orderProductCategory,
+  orderPriority,
   gpsChecking,
   onNotes,
+  onVisitType,
   onResult,
   onRecovery,
   onNextFollowup,
+  onNextAction,
+  onOrderAmount,
+  onOrderExpectedDelivery,
+  onOrderProductCategory,
+  onOrderPriority,
   onCheckOut,
   showChequeFlow,
   onToggleChequeFlow,
   onSavedCheque,
 }: {
   visit: Visit;
+  visitType: string;
   notes: string;
   result: string;
   recoveryAmount: string;
   nextFollowupDate: string;
+  nextAction: string;
+  orderAmount: string;
+  orderExpectedDelivery: string;
+  orderProductCategory: string;
+  orderPriority: string;
   gpsChecking: boolean;
   onNotes: (value: string) => void;
+  onVisitType: (value: string) => void;
   onResult: (value: string) => void;
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
+  onNextAction: (value: string) => void;
+  onOrderAmount: (value: string) => void;
+  onOrderExpectedDelivery: (value: string) => void;
+  onOrderProductCategory: (value: string) => void;
+  onOrderPriority: (value: string) => void;
   onCheckOut: () => void;
   showChequeFlow: boolean;
   onToggleChequeFlow: (value: boolean) => void;
   onSavedCheque: () => void;
 }) {
   const latestCheque = visit.cheques?.[0];
+  const isRecoveryVisit = recoveryVisitTypes.has(visitType);
+  const isOrderVisit = visitType === "Order Booking";
   return (
     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
       <div className="flex items-start justify-between gap-3">
@@ -855,10 +1094,28 @@ function ActiveVisitCard({
         </span>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <select value={visitType} onChange={(e) => onVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+          {visitTypes.map((type) => <option key={type}>{type}</option>)}
+        </select>
         <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
           {quickResults.map((item) => <option key={item}>{item}</option>)}
         </select>
-        <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        {isRecoveryVisit && (
+          <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        )}
+        {isOrderVisit && (
+          <>
+            <input value={orderAmount} onChange={(e) => onOrderAmount(e.target.value)} inputMode="decimal" placeholder="Order amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Product/category" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+              <option>Normal</option>
+              <option>High</option>
+              <option>Urgent</option>
+            </select>
+          </>
+        )}
         <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
           <Camera className="h-5 w-5" /> Add photo
@@ -879,7 +1136,7 @@ function ActiveVisitCard({
           </div>
         </div>
       )}
-      {(result === "Cheque pickup" || result === "Cheque pickup" || result === "Cheque Pickup" || visit.visitType === "Cheque Pickup") && (
+      {(result === "Cheque collected" || visitType === "Cheque Pickup") && (
         <button
           type="button"
           onClick={() => onToggleChequeFlow(!showChequeFlow)}
