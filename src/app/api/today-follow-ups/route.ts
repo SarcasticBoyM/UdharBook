@@ -7,7 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 const RECENT_CONTACT_HOURS = 6;
 const AUTO_QUEUE_NOTE = "Auto-created for daily recovery queue.";
-const SCHEDULED_STATUSES: FollowUpStatus[] = ["CALLBACK", "FOLLOW_UP_REQUIRED", "PAYMENT_PROMISED", "RESCHEDULED"];
+const ACTIVE_SCHEDULED_STATUSES: FollowUpStatus[] = ["PENDING", "CALLBACK", "FOLLOW_UP_REQUIRED", "PAYMENT_PROMISED", "PARTIAL_PAID", "NOT_REACHABLE", "RESCHEDULED"];
 const CLOSED_STATUSES: FollowUpStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
 
 function startOfToday() {
@@ -82,7 +82,7 @@ function scheduledDateFor(followUp: {
   nextFollowupDate: Date | null;
   scheduledAt: Date | null;
 }) {
-  return followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt;
+  return followUp.nextFollowUpDateTime ?? followUp.scheduledAt ?? followUp.nextFollowupDate;
 }
 
 function isExplicitlyScheduled(followUp: {
@@ -98,11 +98,22 @@ function isExplicitlyScheduled(followUp: {
   if (CLOSED_STATUSES.includes(followUp.status)) return false;
   if (followUp.status === "PENDING" && followUp.notes === AUTO_QUEUE_NOTE) return false;
   return (
-    followUp.manualReminder ||
-    followUp.reminderEnabled ||
-    Boolean(followUp.nextFollowUpDateTime) ||
-    SCHEDULED_STATUSES.includes(followUp.status)
+    ACTIVE_SCHEDULED_STATUSES.includes(followUp.status) &&
+    (followUp.manualReminder || followUp.reminderEnabled || Boolean(followUp.nextFollowUpDateTime) || Boolean(followUp.scheduledAt))
   );
+}
+
+function latestFollowUpStatus(customer: { followUps: { id: string; status: FollowUpStatus }[] }) {
+  return customer.followUps[0]?.status ?? null;
+}
+
+function latestFollowUpId(customer: { followUps: { id: string; status: FollowUpStatus }[] }) {
+  return customer.followUps[0]?.id ?? null;
+}
+
+function isClosedForActiveQueue(customer: { status: string; outstandingBalance: number; followUps: { id: string; status: FollowUpStatus }[] }) {
+  const latestStatus = latestFollowUpStatus(customer);
+  return customer.status === "CLEARED" || customer.outstandingBalance <= 0 || Boolean(latestStatus && CLOSED_STATUSES.includes(latestStatus));
 }
 
 function queueScore(customer: QueueCustomer) {
@@ -364,7 +375,7 @@ export async function GET(request: Request) {
   };
   const pageWindow = skip + Math.min(take * 3, 300);
 
-  const [customers, pendingTotal, pendingAmount, doneCustomers, todayRecovery, staffActivity, overdueCount] = await prisma.$transaction([
+  const [customers, pendingTotal, pendingAmount, doneCustomers, todayRecovery, staffActivity] = await prisma.$transaction([
     prisma.customer.findMany({
       where: pendingWhere,
       include,
@@ -395,7 +406,6 @@ export async function GET(request: Request) {
       orderBy: { createdById: "asc" },
       _count: { _all: true },
     }),
-    prisma.customer.count({ where: { shopId, outstandingBalance: { gt: 0 }, nextFollowupDate: { lt: new Date() } } }),
   ]);
 
   const scheduledRows = await prisma.followUp.findMany({
@@ -407,20 +417,23 @@ export async function GET(request: Request) {
         { manualReminder: true },
         { reminderEnabled: true },
         { nextFollowUpDateTime: { not: null } },
-        { status: { in: SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
+        { scheduledAt: { not: null } },
+        { status: { in: ACTIVE_SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
       ],
     },
     include: {
       createdBy: { select: { name: true } },
       customer: { include },
     },
-    orderBy: [{ nextFollowUpDateTime: "asc" }, { nextFollowupDate: "asc" }, { scheduledAt: "asc" }, { followupDate: "desc" }],
+    orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
     take: 300,
   });
 
   const scheduledByCustomer = new Map<string, ScheduledFollowUp>();
   for (const row of scheduledRows) {
     if (!isExplicitlyScheduled(row)) continue;
+    if (latestFollowUpId(row.customer) !== row.id) continue;
+    if (isClosedForActiveQueue(row.customer)) continue;
     const scheduledAt = scheduledDateFor(row);
     if (!scheduledAt) continue;
     const smart = smartPriority(row.customer);
@@ -445,17 +458,7 @@ export async function GET(request: Request) {
       },
     };
     candidate.queueScore = queueScore(candidate);
-    const existing = scheduledByCustomer.get(row.customerId);
-    if (!existing) {
-      scheduledByCustomer.set(row.customerId, candidate);
-      continue;
-    }
-    const now = Date.now();
-    const existingAt = existing.scheduledFollowUp.scheduledAt.getTime();
-    const candidateAt = candidate.scheduledFollowUp.scheduledAt.getTime();
-    if ((candidateAt < now && existingAt >= now) || Math.abs(candidateAt - now) < Math.abs(existingAt - now)) {
-      scheduledByCustomer.set(row.customerId, candidate);
-    }
+    if (!scheduledByCustomer.has(row.customerId)) scheduledByCustomer.set(row.customerId, candidate);
   }
 
   const scheduled = Array.from(scheduledByCustomer.values()).sort((a, b) => {
@@ -492,11 +495,15 @@ export async function GET(request: Request) {
     return item;
   });
 
-  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id) && !scheduledIds.has(customer.id));
+  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id) && !scheduledIds.has(customer.id) && !isClosedForActiveQueue(customer));
   const filteredPool =
     filter === "done" ? [] : pendingPool.filter((customer) => matchesFilter(filter, customer, todayStart, todayEnd));
   const sorted = filteredPool.sort((a, b) => compareBy(sort, a, b) || b.queueScore - a.queueScore);
   const pending = sorted.slice(skip, skip + take);
+  const activeQueueAmount = [...scheduled, ...pendingPool].reduce((sum, customer) => sum + customer.outstandingBalance, 0);
+  const activeOverdueCount =
+    scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length +
+    pendingPool.filter((customer) => isPastDue(customer.nextFollowupDate)).length;
 
   const done = doneCustomers.map((customer) => {
     const smart = smartPriority(customer);
@@ -538,15 +545,15 @@ export async function GET(request: Request) {
     done,
     summary: {
       totalCustomers: enriched.length,
-      totalPendingCustomers: pendingTotal,
-      totalPendingAmount: pendingAmount._sum.outstandingBalance ?? 0,
-      totalToday: pendingTotal + done.length,
-      pending: pendingTotal,
+      totalPendingCustomers: scheduled.length + pendingPool.length,
+      totalPendingAmount: activeQueueAmount || pendingAmount._sum.outstandingBalance || 0,
+      totalToday: scheduled.length + pendingPool.length + done.length,
+      pending: scheduled.length + pendingPool.length,
       completed: done.length,
       actionedToday: done.length,
       callsCompleted,
       recoveryToday: todayRecovery._sum.amount ?? 0,
-      overdue: overdueCount,
+      overdue: activeOverdueCount,
       scheduled: scheduled.length,
       scheduledOverdue: scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length,
       autoCreated,

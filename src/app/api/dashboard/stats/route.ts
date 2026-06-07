@@ -29,6 +29,7 @@ const emptyStats: DashboardStats = {
     { label: "90+", amount: 0 },
   ],
 };
+const CLOSED_FOLLOW_UP_STATUSES = new Set(["PAID", "COMPLETED", "WRONG_NUMBER"]);
 
 async function resolveDashboardShopId(request: Request, session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
   if (!isSuperAdmin(session)) return session.shopId;
@@ -71,8 +72,11 @@ export async function GET(request: Request) {
   nextWeek.setDate(nextWeek.getDate() + 7);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
-  const customers = await prisma.customer.findMany({ where: { shopId } });
-  const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0);
+  const customers = await prisma.customer.findMany({
+    where: { shopId },
+    include: { followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } } },
+  });
+  const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0 && !CLOSED_FOLLOW_UP_STATUSES.has(c.followUps[0]?.status ?? ""));
 
   const totalOutstanding = active.reduce((s, c) => s + c.outstandingBalance, 0);
   const pendingFollowup = active.filter(

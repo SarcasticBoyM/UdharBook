@@ -346,6 +346,13 @@ function matchesScheduledFilter(item: ScheduledQueueCustomer, filter: ScheduledF
   return true;
 }
 
+function scheduledGroupFor(item: ScheduledQueueCustomer): "overdue" | "today" | "upcoming" {
+  const scheduledAt = new Date(item.scheduledFollowUp.scheduledAt);
+  if (isPastDue(scheduledAt)) return "overdue";
+  if (scheduledAt >= startOfToday() && scheduledAt <= endOfToday()) return "today";
+  return "upcoming";
+}
+
 export default function TodayFollowUpsPage() {
   const [scheduled, setScheduled] = useState<ScheduledQueueCustomer[]>([]);
   const [pending, setPending] = useState<QueueCustomer[]>([]);
@@ -828,6 +835,12 @@ function ScheduledQueueSection({
   onSelect: (id: string) => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
 }) {
+  const grouped = {
+    overdue: customers.filter((customer) => scheduledGroupFor(customer) === "overdue"),
+    today: customers.filter((customer) => scheduledGroupFor(customer) === "today"),
+    upcoming: customers.filter((customer) => scheduledGroupFor(customer) === "upcoming"),
+  };
+
   return (
     <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm dark:border-blue-900 dark:bg-blue-950/30">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -875,21 +888,76 @@ function ScheduledQueueSection({
               No scheduled follow-ups match this view.
             </div>
           ) : (
-            <div className="mt-3 space-y-3">
-              {customers.map((customer) => (
-                <ScheduledFollowUpCard
-                  key={customer.scheduledFollowUp.id}
-                  customer={customer}
-                  active={selectedId === customer.id}
-                  onOpen={() => onSelect(customer.id)}
-                  onQuickSave={onQuickSave}
-                />
-              ))}
+            <div className="mt-3 space-y-4">
+              <ScheduledGroup
+                title="Overdue"
+                description="Missed reminder time. Work these first."
+                customers={grouped.overdue}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onQuickSave={onQuickSave}
+              />
+              <ScheduledGroup
+                title="Due Today"
+                description="Sorted by nearest reminder time."
+                customers={grouped.today}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onQuickSave={onQuickSave}
+              />
+              <ScheduledGroup
+                title="Upcoming"
+                description="Future reminders stay here until due."
+                customers={grouped.upcoming}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onQuickSave={onQuickSave}
+              />
             </div>
           )}
         </>
       )}
     </section>
+  );
+}
+
+function ScheduledGroup({
+  title,
+  description,
+  customers,
+  selectedId,
+  onSelect,
+  onQuickSave,
+}: {
+  title: string;
+  description: string;
+  customers: ScheduledQueueCustomer[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  if (customers.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-bold uppercase tracking-wide text-blue-950 dark:text-blue-100">{title}</h3>
+          <p className="text-xs text-blue-900/70 dark:text-blue-100/70">{description}</p>
+        </div>
+        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-blue-900 dark:bg-blue-950 dark:text-blue-100">{customers.length}</span>
+      </div>
+      <div className="space-y-3">
+        {customers.map((customer) => (
+          <ScheduledFollowUpCard
+            key={customer.scheduledFollowUp.id}
+            customer={customer}
+            active={selectedId === customer.id}
+            onOpen={() => onSelect(customer.id)}
+            onQuickSave={onQuickSave}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1216,13 +1284,14 @@ function ActionPanel({
 
   const latest = latestFollowUp(customer);
   const selectedTone = STATUS_OPTIONS.find((option) => option.value === status)?.tone ?? "border-slate-200 bg-slate-50 text-slate-800";
-  const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || status === "PAYMENT_PROMISED";
+  const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || primaryAction === "NO_RESPONSE" || status === "PAYMENT_PROMISED";
 
   const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
     setPrimaryAction(action);
     if (action === "PAYMENT_UPDATE") {
       setStatus("PAYMENT_PROMISED");
-      setSetReminder(false);
+      setSetReminder(true);
+      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
     }
     if (action === "FOLLOW_UP_LATER") {
       setStatus("RESCHEDULED");
@@ -1231,7 +1300,8 @@ function ActionPanel({
     }
     if (action === "NO_RESPONSE") {
       setStatus("NOT_REACHABLE");
-      setSetReminder(false);
+      setSetReminder(true);
+      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
     }
     if (action === "COMPLETED") {
       setStatus("COMPLETED");
@@ -1243,12 +1313,17 @@ function ActionPanel({
     setStatus(outcome.value);
     if (!notes) setNotes(outcome.notes);
     if (outcome.response && !customerResponse) setCustomerResponse(outcome.response);
+    if (outcome.value === "PAYMENT_PROMISED" || outcome.value === "CALLBACK" || outcome.value === "NOT_REACHABLE") {
+      setSetReminder(true);
+      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+    }
   };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
-    const scheduledAt = nextDate ? new Date(nextDate).toISOString() : null;
+    const closesQueue = COMPLETE_STATUSES.includes(status);
+    const scheduledAt = !closesQueue && nextDate ? new Date(nextDate).toISOString() : null;
     const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
     const finalNotes =
       notes ||

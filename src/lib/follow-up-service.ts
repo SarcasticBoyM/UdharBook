@@ -61,23 +61,31 @@ function customerStatusFromFollowUp(status: FollowUpStatus, balance: number) {
   return "PENDING";
 }
 
+const CLOSED_FOLLOW_UP_STATUSES: FollowUpStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
+const REMINDER_ALLOWED_STATUSES: FollowUpStatus[] = [
+  "PENDING",
+  "CALLBACK",
+  "FOLLOW_UP_REQUIRED",
+  "PAYMENT_PROMISED",
+  "PARTIAL_PAID",
+  "NOT_REACHABLE",
+  "RESCHEDULED",
+];
+
 export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUpInput) {
   const customer = await tx.customer.findFirst({ where: { id: input.customerId, shopId: input.shopId } });
   if (!customer) throw new Error("CUSTOMER_NOT_FOUND");
 
+  const isClosedFollowUp = CLOSED_FOLLOW_UP_STATUSES.includes(input.status);
   const requestedReminderAt = input.nextFollowUpDateTime ?? input.scheduledAt ?? input.nextFollowupDate;
-  const reminderDateTime = toDate(requestedReminderAt);
-  const reminderStatusAllowed =
-    input.status === "CALLBACK" ||
-    input.status === "FOLLOW_UP_REQUIRED" ||
-    input.status === "PAYMENT_PROMISED" ||
-    input.status === "RESCHEDULED" ||
-    input.status === "PENDING";
-  const reminderEnabled = Boolean(input.manualReminder && input.reminderEnabled !== false && reminderDateTime && reminderStatusAllowed);
-  const scheduledAt = reminderEnabled ? reminderDateTime : toDate(input.scheduledAt);
-  const nextDate = toDate(input.nextFollowupDate) ?? reminderDateTime ?? scheduledAt;
+  const reminderDateTime = isClosedFollowUp ? null : toDate(requestedReminderAt);
+  const reminderStatusAllowed = REMINDER_ALLOWED_STATUSES.includes(input.status);
+  const shouldSchedule = Boolean(reminderDateTime && reminderStatusAllowed);
+  const reminderEnabled = Boolean(shouldSchedule && (input.manualReminder || input.reminderEnabled));
+  const scheduledAt = shouldSchedule ? reminderDateTime : null;
+  const nextDate = shouldSchedule ? reminderDateTime : null;
   const now = toDate(input.actionLoggedAt) ?? new Date();
-  const completedAt = toDate(input.completedAt) ?? (input.status === "COMPLETED" || input.status === "PAID" ? now : null);
+  const completedAt = toDate(input.completedAt) ?? (isClosedFollowUp ? now : null);
   const rescheduledAt = toDate(input.rescheduledAt) ?? (input.status === "RESCHEDULED" ? now : null);
   const recoveryAmount = Math.max(0, input.recoveryAmount ?? 0);
   const paidAmount =
@@ -102,7 +110,7 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
       customerResponse: input.customerResponse,
       manualReminder: reminderEnabled,
       reminderEnabled,
-      nextFollowUpDateTime: reminderEnabled ? reminderDateTime : toDate(input.nextFollowUpDateTime),
+      nextFollowUpDateTime: shouldSchedule ? reminderDateTime : null,
       scheduledAt,
       completedAt,
       rescheduledAt,
