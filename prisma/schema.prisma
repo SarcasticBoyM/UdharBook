@@ -153,9 +153,15 @@ model QRVCard {
   email           String?
   address         String?
   mapUrl          String?
+  mapsLink        String?
   website         String?
+  instagram       String?
+  facebook        String?
+  youtube         String?
   logoUrl         String?
   bannerUrl       String?
+  category        String?
+  aboutBusiness   String?
   categories      String[] @default([])
   socialLinks     Json?
   products        Json?
@@ -166,10 +172,54 @@ model QRVCard {
   clickCount      Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  gallery         QRVCardGallery[]
+  brands          QRVCardBrand[]
+  analytics       QRVCardAnalytics[]
 
   @@index([shopId])
   @@index([slug])
   @@index([isPublic])
+}
+
+model QRVCardGallery {
+  id        String   @id @default(cuid())
+  cardId    String
+  card      QRVCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  imageUrl  String
+  title     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([cardId])
+  @@index([cardId, sortOrder])
+}
+
+model QRVCardBrand {
+  id        String   @id @default(cuid())
+  cardId    String
+  card      QRVCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  name      String
+  logoUrl   String?
+  website   String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([cardId])
+  @@index([cardId, sortOrder])
+}
+
+model QRVCardAnalytics {
+  id        String   @id @default(cuid())
+  cardId    String
+  card      QRVCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  eventType String
+  metadata  Json?
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([cardId, eventType])
+  @@index([cardId, createdAt])
 }
 
 model User {

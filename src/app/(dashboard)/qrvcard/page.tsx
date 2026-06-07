@@ -16,9 +16,15 @@ type CardForm = {
   email: string;
   address: string;
   mapUrl: string;
+  mapsLink: string;
   website: string;
+  instagram: string;
+  facebook: string;
+  youtube: string;
   logoUrl: string;
   bannerUrl: string;
+  category: string;
+  aboutBusiness: string;
   categories: string[];
   socialLinks: { instagram: string; facebook: string; youtube: string; website: string };
   products: string[];
@@ -39,9 +45,15 @@ const emptyForm: CardForm = {
   email: "",
   address: "",
   mapUrl: "",
+  mapsLink: "",
   website: "",
+  instagram: "",
+  facebook: "",
+  youtube: "",
   logoUrl: "",
   bannerUrl: "",
+  category: "",
+  aboutBusiness: "",
   categories: [],
   socialLinks: { instagram: "", facebook: "", youtube: "", website: "" },
   products: [],
@@ -88,10 +100,16 @@ export default function QRVCardPage() {
           whatsappNumber: data.card.whatsappNumber ?? "",
           email: data.card.email ?? "",
           address: data.card.address ?? "",
-          mapUrl: data.card.mapUrl ?? "",
+          mapUrl: data.card.mapsLink ?? data.card.mapUrl ?? "",
+          mapsLink: data.card.mapsLink ?? data.card.mapUrl ?? "",
           website: data.card.website ?? "",
+          instagram: data.card.instagram ?? data.card.socialLinks?.instagram ?? "",
+          facebook: data.card.facebook ?? data.card.socialLinks?.facebook ?? "",
+          youtube: data.card.youtube ?? data.card.socialLinks?.youtube ?? "",
           logoUrl: data.card.logoUrl ?? "",
           bannerUrl: data.card.bannerUrl ?? "",
+          category: data.card.category ?? "",
+          aboutBusiness: data.card.aboutBusiness ?? "",
           categories: data.card.categories ?? [],
           socialLinks: { ...emptyForm.socialLinks, ...(data.card.socialLinks ?? {}) },
           products: data.card.products ?? [],
@@ -145,7 +163,7 @@ export default function QRVCardPage() {
       const res = await fetch("/api/qrvcard", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, products }),
+        body: JSON.stringify({ ...form, mapUrl: form.mapsLink || form.mapUrl, products }),
       });
       const data = await res.json().catch(() => ({}));
       setSaving(false);
@@ -196,10 +214,15 @@ export default function QRVCardPage() {
             <Input label="WhatsApp Number" value={form.whatsappNumber} onChange={(v) => setValue("whatsappNumber", v)} />
             <Input label="Email" value={form.email} onChange={(v) => setValue("email", v)} />
             <Input label="Website" value={form.website} onChange={(v) => setValue("website", v)} />
-            <Input label="Google Maps Link" value={form.mapUrl} onChange={(v) => setValue("mapUrl", v)} />
+            <Input label="Google Maps Link" value={form.mapsLink || form.mapUrl} onChange={(v) => { setValue("mapsLink", v); setValue("mapUrl", v); }} />
+            <Input label="Primary Category" value={form.category} onChange={(v) => setValue("category", v)} />
             <label className="text-sm md:col-span-2">
               <span className="mb-1 block font-medium">Address</span>
               <textarea value={form.address} onChange={(e) => setValue("address", e.target.value)} rows={3} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+            </label>
+            <label className="text-sm md:col-span-2">
+              <span className="mb-1 block font-medium">About Business</span>
+              <textarea value={form.aboutBusiness} onChange={(e) => setValue("aboutBusiness", e.target.value)} rows={4} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
             </label>
           </div>
         </section>
@@ -236,9 +259,9 @@ export default function QRVCardPage() {
             <textarea value={productText} onChange={(e) => setProductText(e.target.value)} rows={5} placeholder={"UltraTech Cement\nAsian Paints\nTMT Steel"} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
           </label>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <Input label="Instagram" value={form.socialLinks.instagram} onChange={(v) => setValue("socialLinks", { ...form.socialLinks, instagram: v })} />
-            <Input label="Facebook" value={form.socialLinks.facebook} onChange={(v) => setValue("socialLinks", { ...form.socialLinks, facebook: v })} />
-            <Input label="YouTube" value={form.socialLinks.youtube} onChange={(v) => setValue("socialLinks", { ...form.socialLinks, youtube: v })} />
+            <Input label="Instagram" value={form.instagram || form.socialLinks.instagram} onChange={(v) => { setValue("instagram", v); setValue("socialLinks", { ...form.socialLinks, instagram: v }); }} />
+            <Input label="Facebook" value={form.facebook || form.socialLinks.facebook} onChange={(v) => { setValue("facebook", v); setValue("socialLinks", { ...form.socialLinks, facebook: v }); }} />
+            <Input label="YouTube" value={form.youtube || form.socialLinks.youtube} onChange={(v) => { setValue("youtube", v); setValue("socialLinks", { ...form.socialLinks, youtube: v }); }} />
             <Input label="Website Social Link" value={form.socialLinks.website} onChange={(v) => setValue("socialLinks", { ...form.socialLinks, website: v })} />
           </div>
         </section>
@@ -333,12 +356,14 @@ function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string })
         <div className="grid grid-cols-2 gap-2">
           <a href={phone ? `tel:+${phone}` : undefined} className="rounded-lg bg-slate-950 px-3 py-3 text-center text-sm font-semibold text-white"><Phone className="mx-auto mb-1 h-4 w-4" />Call Now</a>
           <a href={whatsapp ? `https://wa.me/${whatsapp}` : undefined} className="rounded-lg bg-emerald-600 px-3 py-3 text-center text-sm font-semibold text-white"><Share2 className="mx-auto mb-1 h-4 w-4" />WhatsApp</a>
-          <a href={form.mapUrl || undefined} target="_blank" rel="noreferrer" className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><MapPin className="mx-auto mb-1 h-4 w-4" />Navigate</a>
+          <a href={form.mapsLink || form.mapUrl || undefined} target="_blank" rel="noreferrer" className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><MapPin className="mx-auto mb-1 h-4 w-4" />Navigate</a>
           <a href={form.email ? `mailto:${form.email}` : undefined} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><Mail className="mx-auto mb-1 h-4 w-4" />Email</a>
         </div>
         <div className="rounded-lg bg-white/70 p-3 text-sm dark:bg-slate-900/70">
           <p className="font-semibold">{form.ownerName || "Owner Name"}</p>
+          {form.category && <p className="text-xs font-bold uppercase text-slate-500">{form.category}</p>}
           <p className="text-slate-600 dark:text-slate-300">{form.address || "Business address will appear here"}</p>
+          {form.aboutBusiness && <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{form.aboutBusiness}</p>}
           {form.gstNumber && <p className="mt-1 text-xs text-slate-500">GST: {form.gstNumber}</p>}
         </div>
         {form.categories.length > 0 && <div className="flex flex-wrap gap-2">{form.categories.map((item) => <span key={item} className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold dark:bg-slate-900/70">{item}</span>)}</div>}

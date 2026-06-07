@@ -18,9 +18,15 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal("")).nullable(),
   address: z.string().max(700).optional().nullable(),
   mapUrl: z.string().max(700).optional().nullable(),
+  mapsLink: z.string().max(700).optional().nullable(),
   website: z.string().max(250).optional().nullable(),
+  instagram: z.string().max(250).optional().nullable(),
+  facebook: z.string().max(250).optional().nullable(),
+  youtube: z.string().max(250).optional().nullable(),
   logoUrl: z.string().max(1000).optional().nullable(),
   bannerUrl: z.string().max(1000).optional().nullable(),
+  category: z.string().max(80).optional().nullable(),
+  aboutBusiness: z.string().max(1200).optional().nullable(),
   categories: z.array(z.string().max(40)).max(30).default([]),
   socialLinks: z.object({
     instagram: z.string().max(250).optional(),
@@ -53,8 +59,14 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const shopId = requireShopId(request, session);
-    const card = await prisma.qRVCard.findUnique({ where: { shopId } });
-    return NextResponse.json({ card });
+    const card = await prisma.qRVCard.findUnique({
+      where: { shopId },
+      include: {
+        gallery: { orderBy: { sortOrder: "asc" } },
+        brands: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+    return NextResponse.json({ card: serializeCard(card) });
   } catch (error) {
     logger.error("qrvcard_load_failed", {
       userId: session.id,
@@ -99,25 +111,60 @@ export async function PUT(request: Request) {
       email: clean(body.email),
       address: clean(body.address),
       mapUrl: clean(body.mapUrl),
+      mapsLink: clean(body.mapsLink ?? body.mapUrl),
       website: clean(ensureUrl(body.website)),
+      instagram: clean(body.instagram ?? body.socialLinks?.instagram),
+      facebook: clean(body.facebook ?? body.socialLinks?.facebook),
+      youtube: clean(body.youtube ?? body.socialLinks?.youtube),
       logoUrl: clean(body.logoUrl),
       bannerUrl: clean(body.bannerUrl),
+      category: clean(body.category),
+      aboutBusiness: clean(body.aboutBusiness),
       categories: body.categories.map((item) => item.trim()).filter(Boolean),
-      socialLinks: body.socialLinks ?? {},
-      products: body.products ?? [],
-      galleryImages: body.galleryImages ?? [],
+      socialLinks: {
+        ...(body.socialLinks ?? {}),
+        instagram: body.instagram ?? body.socialLinks?.instagram ?? "",
+        facebook: body.facebook ?? body.socialLinks?.facebook ?? "",
+        youtube: body.youtube ?? body.socialLinks?.youtube ?? "",
+        website: body.socialLinks?.website ?? body.website ?? "",
+      },
+      products: cleanList(body.products),
+      galleryImages: cleanList(body.galleryImages),
       theme: body.theme,
       isPublic: body.isPublic,
     };
 
     logger.info("qrvcard_save_db_upsert_start", { userId: session.id, shopId, existingId: existing?.id ?? null, slug });
-    const card = await prisma.qRVCard.upsert({
-      where: { shopId },
-      create: { shopId, slug, ...data },
-      update: { ...data },
+    const card = await prisma.$transaction(async (tx) => {
+      const saved = await tx.qRVCard.upsert({
+        where: { shopId },
+        create: { shopId, slug, ...data },
+        update: { ...data },
+      });
+      await tx.qRVCardBrand.deleteMany({ where: { cardId: saved.id } });
+      await tx.qRVCardGallery.deleteMany({ where: { cardId: saved.id } });
+      const products = cleanList(body.products);
+      const galleryImages = cleanList(body.galleryImages);
+      if (products.length) {
+        await tx.qRVCardBrand.createMany({
+          data: products.map((name, index) => ({ cardId: saved.id, name, sortOrder: index })),
+        });
+      }
+      if (galleryImages.length) {
+        await tx.qRVCardGallery.createMany({
+          data: galleryImages.map((imageUrl, index) => ({ cardId: saved.id, imageUrl, sortOrder: index })),
+        });
+      }
+      return tx.qRVCard.findUnique({
+        where: { id: saved.id },
+        include: {
+          gallery: { orderBy: { sortOrder: "asc" } },
+          brands: { orderBy: { sortOrder: "asc" } },
+        },
+      });
     });
-    logger.info("qrvcard_save_success", { userId: session.id, shopId, cardId: card.id, slug: card.slug });
-    return NextResponse.json({ card });
+    logger.info("qrvcard_save_success", { userId: session.id, shopId, cardId: card?.id, slug: card?.slug });
+    return NextResponse.json({ card: serializeCard(card) });
   } catch (error) {
     if (error instanceof z.ZodError) {
       logger.warn("qrvcard_save_validation_failed", { userId: session.id, shopId: session.shopId, issues: error.issues });
@@ -131,6 +178,29 @@ export async function PUT(request: Request) {
     });
     return NextResponse.json({ error: qrvcardDbErrorMessage(error, "Could not save QRVCard") }, { status: qrvcardDbErrorStatus(error) });
   }
+}
+
+function cleanList(values?: string[] | null) {
+  return Array.from(new Set((values ?? []).map((item) => item.trim()).filter(Boolean)));
+}
+
+function serializeCard<T extends ({
+  gallery?: { imageUrl: string }[];
+  brands?: { name: string }[];
+  products?: unknown;
+  galleryImages?: unknown;
+  socialLinks?: unknown;
+} | null)>(card: T) {
+  if (!card) return null;
+  const socialLinks = typeof card.socialLinks === "object" && card.socialLinks ? card.socialLinks : {};
+  const products = Array.isArray(card.products) ? card.products : card.brands?.map((brand) => brand.name) ?? [];
+  const galleryImages = Array.isArray(card.galleryImages) ? card.galleryImages : card.gallery?.map((image) => image.imageUrl) ?? [];
+  return {
+    ...card,
+    socialLinks,
+    products,
+    galleryImages,
+  };
 }
 
 function qrvcardDbErrorStatus(error: unknown) {

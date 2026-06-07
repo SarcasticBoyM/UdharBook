@@ -81,19 +81,28 @@ export async function uploadQRVCardAsset({
   const bucket = bucketFor(kind);
   const path = qrvcardAssetPath(shopId, kind, fileName);
   const body = new Uint8Array(file).buffer;
-  const res = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      apikey: key,
-      "Content-Type": contentType,
-      "x-upsert": "true",
-    },
-    body,
-  });
+  let res = await uploadOnce(url, key, bucket, path, contentType, body);
+  if (!res.ok && [408, 429, 500, 502, 503, 504].includes(res.status)) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    res = await uploadOnce(url, key, bucket, path, contentType, body);
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`QRVCard asset upload failed: ${res.status}${detail ? ` ${detail}` : ""}`);
   }
   return `${url}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+function uploadOnce(url: string, key: string, bucket: string, path: string, contentType: string, body: ArrayBuffer) {
+  return fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      apikey: key,
+      "Content-Type": contentType,
+      "Cache-Control": "31536000",
+      "x-upsert": "true",
+    },
+    body,
+  });
 }

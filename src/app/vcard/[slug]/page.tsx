@@ -10,14 +10,26 @@ export const dynamic = "force-dynamic";
 type Params = { params: Promise<{ slug: string }> };
 
 async function loadCard(slug: string) {
-  const card = await prisma.qRVCard.findFirst({ where: { slug, isPublic: true } });
+  const card = await prisma.qRVCard.findFirst({
+    where: { slug, isPublic: true },
+    include: {
+      gallery: { orderBy: { sortOrder: "asc" } },
+      brands: { orderBy: { sortOrder: "asc" } },
+    },
+  });
   if (!card) return null;
   prisma.qRVCard.update({ where: { id: card.id }, data: { viewCount: { increment: 1 } } }).catch(() => {});
   return {
     ...card,
-    socialLinks: (card.socialLinks ?? {}) as Record<string, string>,
-    products: (card.products ?? []) as string[],
-    galleryImages: (card.galleryImages ?? []) as string[],
+    socialLinks: {
+      ...((card.socialLinks ?? {}) as Record<string, string>),
+      instagram: card.instagram ?? ((card.socialLinks ?? {}) as Record<string, string>).instagram ?? "",
+      facebook: card.facebook ?? ((card.socialLinks ?? {}) as Record<string, string>).facebook ?? "",
+      youtube: card.youtube ?? ((card.socialLinks ?? {}) as Record<string, string>).youtube ?? "",
+      website: card.website ?? ((card.socialLinks ?? {}) as Record<string, string>).website ?? "",
+    },
+    products: Array.isArray(card.products) ? card.products as string[] : card.brands.map((brand) => brand.name),
+    galleryImages: Array.isArray(card.galleryImages) ? card.galleryImages as string[] : card.gallery.map((image) => image.imageUrl),
   };
 }
 
@@ -77,7 +89,7 @@ export default async function PublicQRVCardPage({ params }: Params) {
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 <Action href={phone ? `tel:+${phone}` : "#"} icon={<Phone className="h-5 w-5" />} label="Call Now" primary />
                 <Action href={whatsapp ? `https://wa.me/${whatsapp}` : "#"} icon={<Share2 className="h-5 w-5" />} label="WhatsApp" primary />
-                <Action href={card.mapUrl || "#"} icon={<MapPin className="h-5 w-5" />} label="Navigate" />
+                <Action href={card.mapsLink || card.mapUrl || "#"} icon={<MapPin className="h-5 w-5" />} label="Navigate" />
                 <Action href={`/vcard/${card.slug}/contact.vcf`} icon={<UserPlus className="h-5 w-5" />} label="Save Contact" />
                 <Action href={`https://wa.me/?text=${encodeURIComponent(pageUrl)}`} icon={<ExternalLink className="h-5 w-5" />} label="Share Card" />
               </div>
@@ -88,12 +100,19 @@ export default async function PublicQRVCardPage({ params }: Params) {
                 <InfoLine label="Email" value={card.email ?? ""} href={card.email ? `mailto:${card.email}` : undefined} />
                 <InfoLine label="Website" value={card.website ?? ""} href={card.website ? ensureUrl(card.website) : undefined} />
                 <InfoLine label="GST" value={card.gstNumber ?? ""} />
+                <InfoLine label="Category" value={card.category ?? ""} />
               </InfoBlock>
+
+              {card.aboutBusiness && (
+                <InfoBlock title="About Business">
+                  <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{card.aboutBusiness}</p>
+                </InfoBlock>
+              )}
 
               {card.address && (
                 <InfoBlock title="Address">
                   <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{card.address}</p>
-                  {card.mapUrl && <a href={card.mapUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-700"><MapPin className="h-4 w-4" /> Open in Google Maps</a>}
+                  {(card.mapsLink || card.mapUrl) && <a href={card.mapsLink || card.mapUrl || "#"} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-blue-700"><MapPin className="h-4 w-4" /> Open in Google Maps</a>}
                 </InfoBlock>
               )}
 
