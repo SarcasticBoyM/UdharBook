@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Download, FileSpreadsheet, FileText, Landmark, Printer, Search, ShieldAlert, WalletCards } from "lucide-react";
-import type { ChequeStatus } from "@prisma/client";
+import { CalendarDays, Clock3, Download, FileSpreadsheet, FileText, Landmark, MapPinned, Printer, Search, ShieldAlert, ShoppingBag, UserCheck, WalletCards } from "lucide-react";
+import type { ChequeStatus, UserRole } from "@prisma/client";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 
 type UserOption = { id: string; name: string; role: string };
@@ -50,6 +50,37 @@ type ChequeResponse = {
   };
   pagination: { page: number; limit: number; total: number; pages: number };
 };
+type StaffAttendanceRow = {
+  staffId: string;
+  staffName: string;
+  role: UserRole;
+  loginTime: string | null;
+  logoutTime: string | null;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  totalActiveMinutes: number;
+  totalVisits: number;
+  completedVisits: number;
+  ordersTaken: number;
+  paymentsCollected: number;
+  chequesCollected: number;
+  followUpsHandled: number;
+  chequeProcessing: number;
+  gpsActiveStatus: string;
+  currentStatus: "ACTIVE" | "IDLE" | "OFFLINE" | "LOGGED_OUT";
+};
+type StaffAttendanceResponse = {
+  success: boolean;
+  rows: StaffAttendanceRow[];
+  summary: {
+    staffPresentToday: number;
+    activeInField: number;
+    totalVisits: number;
+    ordersTakenToday: number;
+    paymentsCollectedToday: number;
+    pendingStaffCheckouts: number;
+  };
+};
 
 const baseReports = [
   { type: "outstanding", label: "Outstanding Report", description: "Customer-wise pending balance report." },
@@ -93,6 +124,14 @@ export default function ReportsPage() {
   const [data, setData] = useState<ChequeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [attendancePreset, setAttendancePreset] = useState("today");
+  const [attendanceFrom, setAttendanceFrom] = useState("");
+  const [attendanceTo, setAttendanceTo] = useState("");
+  const [attendanceStaff, setAttendanceStaff] = useState("");
+  const [attendanceRole, setAttendanceRole] = useState("");
+  const [attendanceActive, setAttendanceActive] = useState("");
+  const [attendanceData, setAttendanceData] = useState<StaffAttendanceResponse | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(true);
 
   const chequeParams = useMemo(() => {
     const params = new URLSearchParams();
@@ -108,6 +147,17 @@ export default function ReportsPage() {
     params.set("limit", "50");
     return params;
   }, [bankName, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
+  const attendanceParams = useMemo(() => {
+    const params = new URLSearchParams({ preset: attendancePreset });
+    if (attendancePreset === "custom") {
+      if (attendanceFrom) params.set("from", attendanceFrom);
+      if (attendanceTo) params.set("to", attendanceTo);
+    }
+    if (attendanceStaff) params.set("staffName", attendanceStaff);
+    if (attendanceRole) params.set("role", attendanceRole);
+    if (attendanceActive) params.set("active", attendanceActive);
+    return params;
+  }, [attendanceActive, attendanceFrom, attendancePreset, attendanceRole, attendanceStaff, attendanceTo]);
 
   useEffect(() => {
     let alive = true;
@@ -124,6 +174,21 @@ export default function ReportsPage() {
       alive = false;
     };
   }, [chequeParams]);
+  useEffect(() => {
+    let alive = true;
+    setAttendanceLoading(true);
+    fetch(`/api/reports/staff-attendance?${attendanceParams.toString()}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: StaffAttendanceResponse | null) => {
+        if (alive) setAttendanceData(payload);
+      })
+      .finally(() => {
+        if (alive) setAttendanceLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [attendanceParams]);
 
   const downloadBase = (type: string, format: "xlsx" | "csv" | "pdf") => {
     const params = new URLSearchParams({ format });
@@ -136,6 +201,11 @@ export default function ReportsPage() {
     const params = new URLSearchParams(chequeParams);
     params.set("format", format);
     window.open(`/api/cheques?${params.toString()}`, "_blank");
+  };
+  const downloadAttendance = (format: "xlsx" | "csv") => {
+    const params = new URLSearchParams(attendanceParams);
+    params.set("format", format);
+    window.open(`/api/reports/staff-attendance?${params.toString()}`, "_blank");
   };
 
   return (
@@ -261,6 +331,131 @@ export default function ReportsPage() {
         </div>
       </section>
 
+      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold">Staff Attendance Report</h2>
+            <p className="text-sm text-slate-500">Attendance, activity, GPS freshness, visit productivity, and operational staff visibility.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <ExportButton label="Excel" icon={FileSpreadsheet} onClick={() => downloadAttendance("xlsx")} />
+            <ExportButton label="CSV" icon={Download} onClick={() => downloadAttendance("csv")} />
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          <SummaryCard label="Staff Present Today" value={attendanceData?.summary.staffPresentToday ?? 0} icon={UserCheck} tone="green" />
+          <SummaryCard label="Active in Field" value={attendanceData?.summary.activeInField ?? 0} icon={MapPinned} />
+          <SummaryCard label="Total Visits" value={attendanceData?.summary.totalVisits ?? 0} icon={CalendarDays} />
+          <SummaryCard label="Orders Taken Today" value={attendanceData?.summary.ordersTakenToday ?? 0} icon={ShoppingBag} />
+          <SummaryCard label="Payments Collected Today" value={attendanceData?.summary.paymentsCollectedToday ?? 0} icon={WalletCards} />
+          <SummaryCard label="Pending Staff Checkouts" value={attendanceData?.summary.pendingStaffCheckouts ?? 0} icon={Clock3} tone="yellow" />
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Date Filter</span>
+            <select value={attendancePreset} onChange={(event) => setAttendancePreset(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950">
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="custom">Custom Date Range</option>
+            </select>
+          </label>
+          <Input label="Staff Name" value={attendanceStaff} onChange={setAttendanceStaff} placeholder="Search staff" />
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Role</span>
+            <select value={attendanceRole} onChange={(event) => setAttendanceRole(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950">
+              <option value="">All roles</option>
+              <option value="SHOP_ADMIN">Shop Admin</option>
+              <option value="STAFF">Accounting Staff</option>
+              <option value="FIELD_SALES">Field Sales Person</option>
+              <option value="SUPER_ADMIN">Super Admin</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Active/Inactive</span>
+            <select value={attendanceActive} onChange={(event) => setAttendanceActive(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950">
+              <option value="">All staff</option>
+              <option value="active">Active users</option>
+              <option value="inactive">Inactive users</option>
+            </select>
+          </label>
+          {attendancePreset === "custom" && (
+            <div className="grid grid-cols-2 gap-3">
+              <DateInput label="From" value={attendanceFrom} onChange={setAttendanceFrom} />
+              <DateInput label="To" value={attendanceTo} onChange={setAttendanceTo} />
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+          <table className="hidden min-w-[1240px] text-left text-sm lg:table">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
+              <tr>
+                {["Staff Name", "Role", "Login Time", "Logout Time", "First Activity", "Last Activity", "Total Active Hours", "Total Visits", "Completed Visits", "Orders Taken", "Payments Collected", "Cheques Collected", "GPS Active Status", "Current Status"].map((header) => (
+                  <th key={header} className="px-3 py-2">{header}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {attendanceLoading ? (
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
+              ) : attendanceData?.rows.length ? (
+                attendanceData.rows.map((row) => (
+                  <tr key={row.staffId} className="border-t border-slate-200 dark:border-slate-800">
+                    <td className="px-3 py-2 font-semibold">{row.staffName}</td>
+                    <td className="px-3 py-2">{statusLabel(row.role)}</td>
+                    <td className="px-3 py-2">{formatDate(row.loginTime)}</td>
+                    <td className="px-3 py-2">{formatDate(row.logoutTime)}</td>
+                    <td className="px-3 py-2">{formatDate(row.firstActivity)}</td>
+                    <td className="px-3 py-2">{formatDate(row.lastActivity)}</td>
+                    <td className="px-3 py-2">{minutesToHours(row.totalActiveMinutes)}</td>
+                    <td className="px-3 py-2">{row.totalVisits}</td>
+                    <td className="px-3 py-2">{row.completedVisits}</td>
+                    <td className="px-3 py-2">{row.ordersTaken}</td>
+                    <td className="px-3 py-2">{row.paymentsCollected}</td>
+                    <td className="px-3 py-2">{row.chequesCollected}</td>
+                    <td className="px-3 py-2">{row.gpsActiveStatus}</td>
+                    <td className="px-3 py-2"><AttendanceStatusBadge status={row.currentStatus} /></td>
+                  </tr>
+                ))
+              ) : (
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">No staff activity matches this report.</td></tr>
+              )}
+            </tbody>
+          </table>
+          <div className="space-y-3 p-3 lg:hidden">
+            {attendanceLoading ? (
+              <p className="py-6 text-center text-sm text-slate-500">Loading attendance report...</p>
+            ) : attendanceData?.rows.length ? (
+              attendanceData.rows.map((row) => (
+                <article key={row.staffId} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold">{row.staffName}</h3>
+                      <p className="text-sm text-slate-500">{statusLabel(row.role)}</p>
+                    </div>
+                    <AttendanceStatusBadge status={row.currentStatus} />
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <Info label="Active Hours" value={minutesToHours(row.totalActiveMinutes)} />
+                    <Info label="Visits" value={`${row.completedVisits}/${row.totalVisits}`} />
+                    <Info label="Orders" value={String(row.ordersTaken)} />
+                    <Info label="Cheques" value={String(row.chequesCollected)} />
+                    <Info label="First Activity" value={formatDate(row.firstActivity)} />
+                    <Info label="Last Activity" value={formatDate(row.lastActivity)} />
+                  </div>
+                </article>
+              ))
+            ) : (
+              <p className="py-6 text-center text-sm text-slate-500">No staff activity matches this report.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
       <section className="mt-5 grid gap-4 md:grid-cols-3">
         {baseReports.map((report) => (
           <div key={report.type} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -348,6 +543,22 @@ function SummaryCard({ label, value, icon: Icon, tone = "slate" }: { label: stri
 
 function StatusBadge({ status }: { status: ChequeStatus }) {
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-bold", statusTone(status))}>{statusLabel(status)}</span>;
+}
+
+function minutesToHours(minutes: number) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}h ${m}m`;
+}
+
+function AttendanceStatusBadge({ status }: { status: StaffAttendanceRow["currentStatus"] }) {
+  const classes = {
+    ACTIVE: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100",
+    IDLE: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-100",
+    OFFLINE: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+    LOGGED_OUT: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100",
+  }[status];
+  return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-bold", classes)}>{statusLabel(status)}</span>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {
