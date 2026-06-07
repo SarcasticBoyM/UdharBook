@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, endOfDay, isFieldWorker, startOfDay, visibleStaffId } from "@/lib/field-tracking";
+import { logger } from "@/lib/logger";
 
 const visitSchema = z.object({
   customerId: z.string().optional(),
@@ -61,6 +62,16 @@ function temporaryLeadPhone() {
   return `LEAD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+const staleActiveVisitHours = 12;
+
+function staleActiveVisitCutoff() {
+  return new Date(Date.now() - staleActiveVisitHours * 60 * 60 * 1000);
+}
+
+function appendSystemNote(existing: string | null | undefined, note: string) {
+  return [existing, note].filter(Boolean).join("\n");
+}
+
 export async function GET(request: Request) {
   try {
     const session = await getSession();
@@ -73,6 +84,39 @@ export async function GET(request: Request) {
     const date = searchParams.get("date") ? new Date(searchParams.get("date") as string) : new Date();
     const from = searchParams.get("from") ? new Date(searchParams.get("from") as string) : startOfDay(date);
     const to = searchParams.get("to") ? new Date(searchParams.get("to") as string) : endOfDay(date);
+    const staleCutoff = staleActiveVisitCutoff();
+
+    if (isFieldWorker(session)) {
+      const staleVisits = await prisma.staffVisit.findMany({
+        where: {
+          shopId,
+          staffId: session.id,
+          status: "CHECKED_IN",
+          checkInAt: { lt: staleCutoff },
+        },
+        select: { id: true, notes: true },
+      });
+      if (staleVisits.length > 0) {
+        await prisma.$transaction(
+          staleVisits.map((visit) =>
+            prisma.staffVisit.update({
+              where: { id: visit.id },
+              data: {
+                status: "CANCELLED",
+                checkOutAt: new Date(),
+                notes: appendSystemNote(visit.notes, `Auto-closed stale active visit after ${staleActiveVisitHours} hours.`),
+              },
+            }),
+          ),
+        );
+        logger.warn("field_visit_stale_active_auto_closed", {
+          shopId,
+          staffId: session.id,
+          visitIds: staleVisits.map((visit) => visit.id),
+          reason: "load_visits",
+        });
+      }
+    }
 
     const visits = await prisma.staffVisit.findMany({
       where: {
@@ -111,6 +155,39 @@ export async function GET(request: Request) {
       orderBy: { checkInAt: "desc" },
       take: 200,
     });
+    const activeVisit = isFieldWorker(session)
+      ? await prisma.staffVisit.findFirst({
+          where: { shopId, staffId: session.id, status: "CHECKED_IN" },
+          include: {
+            staff: { select: { id: true, name: true, role: true } },
+            customer: {
+              select: {
+                id: true,
+                partyName: true,
+                contactNumber: true,
+                outstandingBalance: true,
+                latitude: true,
+                longitude: true,
+              },
+            },
+            photos: { orderBy: { createdAt: "desc" }, take: 6 },
+            cheques: {
+              orderBy: { createdAt: "desc" },
+              take: 6,
+              select: {
+                id: true,
+                chequeNumber: true,
+                bankName: true,
+                amount: true,
+                status: true,
+                collectionDateTime: true,
+                frontImageUrl: true,
+              },
+            },
+          },
+          orderBy: { checkInAt: "desc" },
+        })
+      : null;
 
     const summary = {
       totalVisits: visits.length,
@@ -126,9 +203,12 @@ export async function GET(request: Request) {
       totalKm: visits.reduce((sum, visit) => sum + visit.travelKm, 0),
     };
 
-    return NextResponse.json({ success: true, visits, summary });
+    return NextResponse.json({ success: true, visits, summary, activeVisit });
   } catch (error) {
-    console.error("Visits load failed", error);
+    logger.error("field_visits_load_failed", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return NextResponse.json({ success: false, error: "Could not load visits" }, { status: 500 });
   }
 }
@@ -143,7 +223,51 @@ export async function POST(request: Request) {
 
     const shopId = requireShopId(request, session);
     const body = visitSchema.parse(await request.json());
+    logger.info("field_visit_start_requested", {
+      shopId,
+      staffId: session.id,
+      customerId: body.customerId,
+      visitType: body.visitType,
+      outcome: body.outcome,
+    });
     const visit = await prisma.$transaction(async (tx) => {
+      const activeVisits = await tx.staffVisit.findMany({
+        where: { shopId, staffId: session.id, status: "CHECKED_IN" },
+        orderBy: { checkInAt: "desc" },
+        select: { id: true, checkInAt: true, notes: true },
+      });
+      const staleCutoff = staleActiveVisitCutoff();
+      const staleVisits = activeVisits.filter((visit) => visit.checkInAt < staleCutoff);
+      const liveActiveVisit = activeVisits.find((visit) => visit.checkInAt >= staleCutoff);
+
+      for (const staleVisit of staleVisits) {
+        await tx.staffVisit.update({
+          where: { id: staleVisit.id },
+          data: {
+            status: "CANCELLED",
+            checkOutAt: new Date(),
+            notes: appendSystemNote(staleVisit.notes, `Auto-closed stale active visit before starting a new visit after ${staleActiveVisitHours} hours.`),
+          },
+        });
+      }
+      if (staleVisits.length > 0) {
+        logger.warn("field_visit_stale_active_auto_closed", {
+          shopId,
+          staffId: session.id,
+          visitIds: staleVisits.map((visit) => visit.id),
+          reason: "start_visit",
+        });
+      }
+      if (liveActiveVisit) {
+        logger.warn("field_visit_start_blocked_active_exists", {
+          shopId,
+          staffId: session.id,
+          activeVisitId: liveActiveVisit.id,
+          activeSince: liveActiveVisit.checkInAt.toISOString(),
+        });
+        throw new Error("ACTIVE_VISIT_EXISTS");
+      }
+
       let customer = body.customerId
         ? await tx.customer.findFirst({
             where: { id: body.customerId, shopId },
@@ -250,14 +374,32 @@ export async function POST(request: Request) {
         update: { status: "ACTIVE" },
       });
 
+      logger.info("field_visit_start_created", {
+        shopId,
+        staffId: session.id,
+        visitId: created.id,
+        customerId: customer.id,
+        visitType: created.visitType,
+      });
       return created;
     });
 
     return NextResponse.json({ success: true, visit });
   } catch (error) {
-    console.error("Visit check-in failed", error);
+    logger.error("field_visit_start_failed", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return NextResponse.json(
-      { success: false, error: error instanceof Error && error.message === "CUSTOMER_OR_LEAD_REQUIRED" ? "Customer name is required for a new visit" : "Could not check in visit" },
+      {
+        success: false,
+        error:
+          error instanceof Error && error.message === "CUSTOMER_OR_LEAD_REQUIRED"
+            ? "Customer name is required for a new visit"
+            : error instanceof Error && error.message === "ACTIVE_VISIT_EXISTS"
+              ? "You already have an active visit. Please check out before starting a new visit."
+              : "Could not check in visit",
+      },
       { status: 400 },
     );
   }

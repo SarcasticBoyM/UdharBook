@@ -406,9 +406,15 @@ export default function FieldStaffPage() {
     const data = await res.json();
     if (data.success) {
       setVisits(data.visits);
-      const openVisit = isFieldWorker ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
+      const openVisit = isFieldWorker ? data.activeVisit ?? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
       setActiveVisit(openVisit);
+      activeVisitRef.current = openVisit;
       setShowChequeFlow(openVisit?.paymentMode === "Cheque Collected");
+      console.info("[Field Visit] active state refreshed", {
+        activeVisitId: openVisit?.id ?? null,
+        activeVisitStatus: openVisit?.status ?? null,
+        visits: data.visits?.length ?? 0,
+      });
     }
   }, [isFieldWorker]);
 
@@ -686,6 +692,7 @@ export default function FieldStaffPage() {
             return;
           }
           setActiveVisit(null);
+          activeVisitRef.current = null;
           setNotes("");
           setRecoveryAmount("");
           setNextFollowupDate("");
@@ -698,6 +705,7 @@ export default function FieldStaffPage() {
           setPaymentBankName("");
           setPaymentScreenshotUrl("");
           setVisitOutcomes([]);
+          setMessage("Visit completed successfully.");
           await loadVisits();
         } catch (error) {
           console.error("[Field Visit] checkout request failed", error);

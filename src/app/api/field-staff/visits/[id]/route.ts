@@ -81,6 +81,10 @@ function clientError(error: unknown) {
   return `Visit save failed: ${message}`;
 }
 
+function appendSystemNote(existing: string | null | undefined, note: string) {
+  return [existing, note].filter(Boolean).join("\n");
+}
+
 export async function PATCH(request: Request, { params }: Params) {
   const requestId = crypto.randomUUID();
   let sessionId: string | undefined;
@@ -121,6 +125,13 @@ export async function PATCH(request: Request, { params }: Params) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (existing.status !== "CHECKED_IN") {
+      logger.warn("field_visit_checkout_blocked_closed_visit", {
+        requestId,
+        visitId: id,
+        shopId,
+        userId: session.id,
+        currentStatus: existing.status,
+      });
       return NextResponse.json({ error: "Visit already closed" }, { status: 409 });
     }
 
@@ -155,6 +166,35 @@ export async function PATCH(request: Request, { params }: Params) {
 
     const visit = await prisma.$transaction(async (tx) => {
       logger.info("field_visit_checkout_transaction_start", { requestId, visitId: id, shopId, userId: session.id });
+      const duplicateActiveVisits = await tx.staffVisit.findMany({
+        where: {
+          shopId,
+          staffId: existing.staffId,
+          status: "CHECKED_IN",
+          id: { not: id },
+        },
+        select: { id: true, notes: true, checkInAt: true },
+      });
+      for (const duplicate of duplicateActiveVisits) {
+        await tx.staffVisit.update({
+          where: { id: duplicate.id },
+          data: {
+            status: "CANCELLED",
+            checkOutAt: now,
+            notes: appendSystemNote(duplicate.notes, "Auto-closed duplicate active visit while completing another visit."),
+          },
+        });
+      }
+      if (duplicateActiveVisits.length > 0) {
+        logger.warn("field_visit_duplicate_active_auto_closed", {
+          requestId,
+          visitId: id,
+          shopId,
+          staffId: existing.staffId,
+          duplicateVisitIds: duplicateActiveVisits.map((visit) => visit.id),
+        });
+      }
+
       const updated = await tx.staffVisit.update({
         where: { id },
         data: {
@@ -346,7 +386,15 @@ export async function PATCH(request: Request, { params }: Params) {
       return updated;
     });
 
-    return NextResponse.json({ success: true, visit });
+    logger.info("field_visit_active_state_cleared", {
+      requestId,
+      visitId: visit.id,
+      shopId,
+      userId: session.id,
+      status: visit.status,
+      checkOutAt: visit.checkOutAt?.toISOString() ?? null,
+    });
+    return NextResponse.json({ success: true, visit, activeVisit: null });
   } catch (error) {
     logger.error("field_visit_checkout_failed", {
       requestId,
