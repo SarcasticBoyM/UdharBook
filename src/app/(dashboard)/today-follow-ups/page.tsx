@@ -204,6 +204,29 @@ const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
   { value: "COMPLETED", label: "Done", tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
 ];
 
+type PrimaryFollowUpAction = "PAYMENT_UPDATE" | "FOLLOW_UP_LATER" | "NO_RESPONSE" | "COMPLETED";
+
+const PRIMARY_ACTIONS: { value: PrimaryFollowUpAction; label: string; description: string }[] = [
+  { value: "PAYMENT_UPDATE", label: "Payment Update", description: "Promise, payment, or cheque" },
+  { value: "FOLLOW_UP_LATER", label: "Follow-up Later", description: "Reschedule with reminder" },
+  { value: "NO_RESPONSE", label: "No Response", description: "Not reachable or busy" },
+  { value: "COMPLETED", label: "Completed", description: "Close this follow-up" },
+];
+
+const PAYMENT_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
+  { value: "PAYMENT_PROMISED", label: "Payment Promised", notes: "Customer promised payment.", response: "Payment promised" },
+  { value: "PARTIAL_PAID", label: "Paid Partially", notes: "Partial payment received." },
+  { value: "PAID", label: "Paid Fully", notes: "Full payment received." },
+  { value: "FOLLOW_UP_REQUIRED", label: "Cheque Collected", notes: "Cheque collected during follow-up.", response: "Cheque collected" },
+];
+
+const NO_RESPONSE_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
+  { value: "NOT_REACHABLE", label: "Not Reachable", notes: "Customer was not reachable." },
+  { value: "WRONG_NUMBER", label: "Wrong Number", notes: "Wrong number confirmed." },
+  { value: "CALLBACK", label: "Customer Busy", notes: "Customer was busy; callback required.", response: "Customer busy" },
+  { value: "CALLBACK", label: "Call Back Requested", notes: "Customer requested callback.", response: "Callback requested" },
+];
+
 const NOTE_TEMPLATES = [
   "Customer promised payment today.",
   "Asked to call again in evening.",
@@ -909,10 +932,8 @@ function ScheduledFollowUpCard({
             {scheduledCountdown(dueAt)}
           </span>
           <div className="grid grid-cols-2 gap-2">
-            <QuickButton label="Open" onClick={onOpen} />
-            <QuickButton label="Called" onClick={() => onQuickSave(customer, "CONTACTED", "Marked called from scheduled queue.")} />
-            <QuickButton label="Reschedule" onClick={onOpen} />
-            <QuickButton label="Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
+            <QuickButton label="Open Follow-up" onClick={onOpen} />
+            <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
           </div>
         </div>
       </div>
@@ -999,7 +1020,7 @@ function CustomerCard({
     const dy = Math.abs(touch.clientY - start.y);
     if (dy > 45 || Math.abs(dx) < 80) return;
     if (dx > 0) onQuickSave(customer, "COMPLETED", "Marked done from mobile swipe.");
-    else onQuickSave(customer, "RESCHEDULED", "Rescheduled from mobile swipe.");
+    else onOpen();
   };
 
   return (
@@ -1061,46 +1082,30 @@ function CustomerCard({
             </div>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            <a
-              href={telHref(customer.contactNumber)}
-              onClick={(event) => event.stopPropagation()}
-              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white dark:bg-white dark:text-slate-950 sm:flex-none"
-            >
-              <Phone className="h-4 w-4" />
-              Call
-            </a>
-            <a
-              href={whatsappHref(customer.contactNumber, paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate))}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(event) => event.stopPropagation()}
-              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white sm:flex-none"
-            >
-              <MessageCircle className="h-4 w-4" />
-              WhatsApp
-            </a>
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                onQuickSave(customer, "COMPLETED", "Marked done from queue.");
+                onOpen();
               }}
-              className="hidden min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700 sm:inline-flex"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white"
+            >
+              Open Follow-up
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onQuickSave(customer, "COMPLETED", "Marked completed from queue.");
+              }}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"
             >
               <CheckCircle2 className="h-4 w-4" />
-              Done
+              Quick Complete
             </button>
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <QuickButton label="Paid" onClick={() => onQuickSave(customer, "PAID", "Paid from quick action.")} />
-            <QuickButton label="Call Later" onClick={() => onQuickSave(customer, "RESCHEDULED", "Customer asked to call later.")} />
-            <QuickButton label="Promise" onClick={() => onQuickSave(customer, "PAYMENT_PROMISED", "Customer promised payment.")} />
-            <QuickButton label="No Answer" onClick={() => onQuickSave(customer, "NOT_REACHABLE", "Customer not responding.")} />
-            <QuickButton label="Reschedule" onClick={() => onQuickSave(customer, "RESCHEDULED", "Rescheduled from queue.")} />
-            <QuickButton label="Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Marked completed from queue.")} />
-          </div>
-          <p className="mt-2 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to mark done, left to reschedule.</p>
+          <p className="mt-2 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to quick complete, left to open details.</p>
         </div>
       </div>
     </article>
@@ -1169,6 +1174,7 @@ function ActionPanel({
   onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number) => void;
   onSaved: () => void;
 }) {
+  const [primaryAction, setPrimaryAction] = useState<PrimaryFollowUpAction>("PAYMENT_UPDATE");
   const [status, setStatus] = useState<QueueStatus>("CONTACTED");
   const [notes, setNotes] = useState("");
   const [customerResponse, setCustomerResponse] = useState("");
@@ -1180,7 +1186,8 @@ function ActionPanel({
 
   useEffect(() => {
     if (!customer) return;
-    setStatus("CONTACTED");
+    setPrimaryAction("PAYMENT_UPDATE");
+    setStatus("PAYMENT_PROMISED");
     setNotes("");
     setCustomerResponse("");
     setPaidAmount("");
@@ -1198,12 +1205,49 @@ function ActionPanel({
   }
 
   const latest = latestFollowUp(customer);
+  const selectedTone = STATUS_OPTIONS.find((option) => option.value === status)?.tone ?? "border-slate-200 bg-slate-50 text-slate-800";
+  const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || status === "PAYMENT_PROMISED";
+
+  const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
+    setPrimaryAction(action);
+    if (action === "PAYMENT_UPDATE") {
+      setStatus("PAYMENT_PROMISED");
+      setSetReminder(false);
+    }
+    if (action === "FOLLOW_UP_LATER") {
+      setStatus("RESCHEDULED");
+      setSetReminder(true);
+      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+    }
+    if (action === "NO_RESPONSE") {
+      setStatus("NOT_REACHABLE");
+      setSetReminder(false);
+    }
+    if (action === "COMPLETED") {
+      setStatus("COMPLETED");
+      setSetReminder(false);
+    }
+  };
+
+  const applyOutcome = (outcome: { value: QueueStatus; notes: string; response?: string }) => {
+    setStatus(outcome.value);
+    if (!notes) setNotes(outcome.notes);
+    if (outcome.response && !customerResponse) setCustomerResponse(outcome.response);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
     const scheduledAt = nextDate ? new Date(nextDate).toISOString() : null;
     const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
-    onOptimistic(customer, status, notes, scheduledAt, amount);
+    const finalNotes =
+      notes ||
+      (status === "RESCHEDULED" && scheduledAt ? `Follow-up rescheduled to ${formatDateTime(scheduledAt)}.` : "") ||
+      (status === "COMPLETED" ? "Follow-up completed." : "") ||
+      (status === "PAYMENT_PROMISED" ? "Customer promised payment." : "") ||
+      (status === "NOT_REACHABLE" ? "Customer was not reachable." : "") ||
+      "Follow-up action recorded.";
+    onOptimistic(customer, status, finalNotes, scheduledAt, amount);
     try {
       const res = await fetch("/api/follow-ups", {
         method: "POST",
@@ -1212,7 +1256,7 @@ function ActionPanel({
           customerId: customer.id,
           status,
           priority,
-          notes: notes || undefined,
+          notes: finalNotes,
           reminderNotes: setReminder && nextDate ? `Callback reminder set for ${formatDateTime(scheduledAt)}` : undefined,
           customerResponse: customerResponse || undefined,
           manualReminder: setReminder,
@@ -1265,25 +1309,81 @@ function ActionPanel({
             </div>
 
             <div>
-              <p className="mb-2 text-sm font-semibold">Quick status</p>
+              <p className="mb-2 text-sm font-semibold">What happened?</p>
               <div className="grid grid-cols-2 gap-2">
-                {STATUS_OPTIONS.map((option) => (
+                {PRIMARY_ACTIONS.map((action) => (
                   <button
-                    key={option.value}
+                    key={action.value}
                     type="button"
-                    onClick={() => setStatus(option.value)}
+                    onClick={() => selectPrimaryAction(action.value)}
                     className={cn(
-                      "min-h-11 rounded-lg border px-3 text-sm font-semibold",
-                      status === option.value
-                        ? option.tone
+                      "min-h-16 rounded-lg border px-3 py-2 text-left transition",
+                      primaryAction === action.value
+                        ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500 dark:bg-brand-950 dark:text-brand-100"
                         : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                     )}
                   >
-                    {option.label}
+                    <span className="block text-sm font-bold">{action.label}</span>
+                    <span className="mt-1 block text-xs opacity-75">{action.description}</span>
                   </button>
                 ))}
               </div>
+              <div className={cn("mt-3 rounded-lg border px-3 py-2 text-sm font-semibold", selectedTone)}>
+                Selected outcome: {statusLabel(status)}
+              </div>
             </div>
+
+            {primaryAction === "PAYMENT_UPDATE" && (
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <p className="text-sm font-semibold">Payment outcome</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {PAYMENT_OUTCOMES.map((outcome) => (
+                    <button
+                      key={outcome.label}
+                      type="button"
+                      onClick={() => applyOutcome(outcome)}
+                      className={cn(
+                        "min-h-11 rounded-lg border px-3 text-sm font-semibold",
+                        status === outcome.value && notes === outcome.notes
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100"
+                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      )}
+                    >
+                      {outcome.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {primaryAction === "NO_RESPONSE" && (
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <p className="text-sm font-semibold">No response reason</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {NO_RESPONSE_OUTCOMES.map((outcome) => (
+                    <button
+                      key={outcome.label}
+                      type="button"
+                      onClick={() => applyOutcome(outcome)}
+                      className={cn(
+                        "min-h-11 rounded-lg border px-3 text-sm font-semibold",
+                        status === outcome.value && notes === outcome.notes
+                          ? "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-100"
+                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      )}
+                    >
+                      {outcome.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {primaryAction === "COMPLETED" && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">
+                This will close the follow-up for this customer. Add a note below if the operator needs context later.
+              </div>
+            )}
 
             {(status === "PARTIAL_PAID" || status === "PAID") && (
               <div>
@@ -1324,73 +1424,88 @@ function ActionPanel({
             </div>
 
             <div>
-              <label className="text-sm font-semibold">Promised payment / response</label>
+              <label className="text-sm font-semibold">{primaryAction === "FOLLOW_UP_LATER" ? "Reminder notes" : "Promised payment / response"}</label>
               <input
                 value={customerResponse}
                 onChange={(event) => setCustomerResponse(event.target.value)}
-                placeholder="Example: promised Rs 10,000 by 6 PM"
+                placeholder={primaryAction === "FOLLOW_UP_LATER" ? "Example: customer asked callback tomorrow morning" : "Example: promised Rs 10,000 by 6 PM"}
                 className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label className="text-sm font-semibold">Next date and exact time</label>
-                <input
-                  type="datetime-local"
-                  value={nextDate}
-                  onChange={(event) => setNextDate(event.target.value)}
-                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-semibold">Reminder priority</label>
-                <select
-                  value={priority}
-                  onChange={(event) => setPriority(event.target.value as FollowUpPriority)}
-                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                >
-                  {(["LOW", "MEDIUM", "HIGH", "URGENT"] as FollowUpPriority[]).map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
+            {showScheduleFields && (
+              <div className={cn("rounded-lg border p-3", primaryAction === "FOLLOW_UP_LATER" ? "border-brand-300 bg-brand-50 dark:border-brand-900 dark:bg-brand-950/40" : "border-slate-200 dark:border-slate-800")}>
+                <div className="flex items-center gap-2">
+                  <CalendarClock className="h-4 w-4 text-brand-600" />
+                  <p className="text-sm font-bold">Next Follow-up Date</p>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-semibold">Date and exact time</label>
+                    <input
+                      type="datetime-local"
+                      value={nextDate}
+                      onChange={(event) => {
+                        setNextDate(event.target.value);
+                        if (primaryAction === "FOLLOW_UP_LATER") setSetReminder(true);
+                      }}
+                      className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold">Priority</label>
+                    <select
+                      value={priority}
+                      onChange={(event) => setPriority(event.target.value as FollowUpPriority)}
+                      className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    >
+                      {(["LOW", "MEDIUM", "HIGH", "URGENT"] as FollowUpPriority[]).map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {REMINDERS.map((reminder) => (
+                    <button
+                      key={reminder.label}
+                      type="button"
+                      onClick={() => {
+                        setNextDate(nextReminderDate(reminder.minutes, reminder.tomorrowHour));
+                        setSetReminder(true);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm dark:bg-slate-900 dark:text-slate-200"
+                    >
+                      <Bell className="h-3.5 w-3.5" />
+                      {reminder.label}
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {REMINDERS.map((reminder) => (
-                <button
-                  key={reminder.label}
-                  type="button"
-                  onClick={() => setNextDate(nextReminderDate(reminder.minutes, reminder.tomorrowHour))}
-                  className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium dark:bg-slate-800"
-                >
-                  <Bell className="h-3.5 w-3.5" />
-                  {reminder.label}
-                </button>
-              ))}
-            </div>
+            )}
 
-            <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
-              <input
-                type="checkbox"
-                checked={setReminder}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setSetReminder(checked);
-                  if (checked && "Notification" in window && Notification.permission === "default") {
-                    Notification.requestPermission().catch(() => undefined);
-                  }
-                  if (checked && status !== "CALLBACK" && status !== "FOLLOW_UP_REQUIRED") setStatus("CALLBACK");
-                }}
-                className="mt-1 h-4 w-4"
-              />
-              <span>
-                <span className="block font-semibold">Set Reminder Notification</span>
-                <span className="text-xs text-slate-500">Notification will send once at the selected callback time only.</span>
-              </span>
-            </label>
+            {showScheduleFields && (
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+                <input
+                  type="checkbox"
+                  checked={setReminder}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setSetReminder(checked);
+                    if (checked && "Notification" in window && Notification.permission === "default") {
+                      Notification.requestPermission().catch(() => undefined);
+                    }
+                  }}
+                  className="mt-1 h-4 w-4"
+                />
+                <span>
+                  <span className="block font-semibold">Set Reminder Notification</span>
+                  <span className="text-xs text-slate-500">Notification will send once at the selected callback time only.</span>
+                </span>
+              </label>
+            )}
 
             <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
               <div className="flex items-center gap-2">
