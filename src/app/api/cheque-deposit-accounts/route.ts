@@ -36,6 +36,14 @@ export async function GET(request: Request) {
   });
 
   const accountIds = accounts.map((account) => account.id);
+  const linkedCounts = accountIds.length
+    ? await prisma.cheque.groupBy({
+        by: ["depositedAccountId"],
+        where: { shopId, depositedAccountId: { in: accountIds } },
+        _count: { id: true },
+      })
+    : [];
+  const linkedCountMap = new Map(linkedCounts.map((row) => [row.depositedAccountId, row._count.id]));
   const auditWhere: Prisma.ChequeWhereInput = {
     shopId,
     depositedAccountId: { in: accountIds },
@@ -87,7 +95,13 @@ export async function GET(request: Request) {
     })
   ;
 
-  return NextResponse.json({ accounts, audit });
+  return NextResponse.json({
+    accounts: accounts.map((account) => ({
+      ...account,
+      linkedChequeCount: linkedCountMap.get(account.id) ?? 0,
+    })),
+    audit,
+  });
 }
 
 export async function POST(request: Request) {

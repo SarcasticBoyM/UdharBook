@@ -18,6 +18,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import type { ChequeStatus } from "@prisma/client";
@@ -54,6 +55,7 @@ type DepositAccount = {
   bankName: string;
   lastFourDigits: string;
   isActive: boolean;
+  linkedChequeCount?: number;
 };
 
 type AccountAudit = {
@@ -410,6 +412,9 @@ export default function ChequeCollectionsPage() {
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
   const [accountSaving, setAccountSaving] = useState(false);
   const [accountForm, setAccountForm] = useState({ accountName: "", bankName: "", lastFourDigits: "" });
+  const [showArchivedAccounts, setShowArchivedAccounts] = useState(false);
+  const [deleteAccount, setDeleteAccount] = useState<DepositAccount | null>(null);
+  const [accountDeleting, setAccountDeleting] = useState(false);
   const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
   const [selectedDepositAccountId, setSelectedDepositAccountId] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
@@ -455,7 +460,7 @@ export default function ChequeCollectionsPage() {
 
   const loadDepositAccounts = useCallback(async () => {
     const search = new URLSearchParams();
-    search.set("activeOnly", currentRole === "STAFF" || currentRole === "FIELD_SALES" ? "true" : "false");
+    search.set("activeOnly", currentRole === "SHOP_ADMIN" && showArchivedAccounts ? "false" : "true");
     if (from) search.set("from", from);
     if (to) search.set("to", to);
     if (staffId) search.set("staffId", staffId);
@@ -468,7 +473,7 @@ export default function ChequeCollectionsPage() {
       setDepositAccounts(payload.accounts ?? []);
       setAccountAudit(payload.audit ?? []);
     }
-  }, [currentRole, from, quick, staffId, to]);
+  }, [currentRole, from, quick, showArchivedAccounts, staffId, to]);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -741,6 +746,22 @@ export default function ChequeCollectionsPage() {
     if (res.ok) loadDepositAccounts();
   };
 
+  const confirmDeleteDepositAccount = async () => {
+    if (!deleteAccount) return;
+    setAccountDeleting(true);
+    const res = await fetch(`/api/cheque-deposit-accounts/${deleteAccount.id}`, { method: "DELETE" });
+    const payload = await res.json().catch(() => ({}));
+    setAccountDeleting(false);
+    if (!res.ok) {
+      window.alert(payload.error ?? "Could not delete deposit account");
+      return;
+    }
+    setDeleteAccount(null);
+    loadDepositAccounts();
+    loadCheques();
+    window.alert(payload.message ?? (payload.action === "archived" ? "Account archived." : "Account deleted."));
+  };
+
   const chooseReceiptFile = async (file: File) => {
     if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
       window.alert("Only JPG, PNG, WEBP, or PDF receipts allowed");
@@ -989,7 +1010,16 @@ export default function ChequeCollectionsPage() {
 
       {accountPanelOpen && currentRole === "SHOP_ADMIN" && (
         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="font-bold">Manage Deposit Accounts</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold">Manage Deposit Accounts</h2>
+              <p className="mt-1 text-xs text-slate-500">Unused accounts can be deleted. Accounts used in cheque records are archived to preserve history.</p>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
+              <input type="checkbox" checked={showArchivedAccounts} onChange={(event) => setShowArchivedAccounts(event.target.checked)} className="h-4 w-4" />
+              Show archived
+            </label>
+          </div>
           <form onSubmit={saveDepositAccount} className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_160px_auto]">
             <input value={accountForm.accountName} onChange={(e) => setAccountForm((f) => ({ ...f, accountName: e.target.value }))} placeholder="Account name" className="min-h-11 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950" required />
             <input value={accountForm.bankName} onChange={(e) => setAccountForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="Bank name" className="min-h-11 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950" required />
@@ -1000,15 +1030,40 @@ export default function ChequeCollectionsPage() {
           </form>
           <div className="mt-4 grid gap-2 md:grid-cols-2">
             {depositAccounts.map((account) => (
-              <div key={account.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
-                <span>
-                  <strong>{account.bankName}</strong> - {account.accountName} - {account.lastFourDigits}
-                </span>
-                <button type="button" onClick={() => toggleDepositAccount(account)} className="rounded-md border px-2 py-1 text-xs font-semibold">
-                  {account.isActive ? "Active" : "Inactive"}
-                </button>
+              <div key={account.id} className={`rounded-lg border p-3 text-sm dark:border-slate-700 ${account.isActive ? "border-slate-200" : "border-slate-200 bg-slate-50 opacity-80 dark:bg-slate-950"}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p>
+                      <strong>{account.bankName}</strong> - {account.accountName} - {account.lastFourDigits}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {account.linkedChequeCount ?? 0} linked cheque record{(account.linkedChequeCount ?? 0) === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${account.isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
+                    {account.isActive ? "Active" : "Archived"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => toggleDepositAccount(account)} className="min-h-9 rounded-md border px-3 text-xs font-semibold">
+                    {account.isActive ? "Archive" : "Restore"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteAccount(account)}
+                    className="flex min-h-9 items-center gap-1 rounded-md border border-red-300 px-3 text-xs font-semibold text-red-700"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
+            {depositAccounts.length === 0 && (
+              <p className="rounded-lg border border-dashed p-4 text-center text-sm text-slate-500 md:col-span-2">
+                {showArchivedAccounts ? "No deposit accounts found." : "No active deposit accounts found."}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1670,6 +1725,50 @@ export default function ChequeCollectionsPage() {
                 className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950"
               >
                 {receiptUploading ? "Saving..." : `Confirm ${formatStatus(depositAction.status)}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteAccount && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 sm:items-center sm:p-6">
+          <div className="mx-auto max-h-[92vh] w-full max-w-md overflow-auto rounded-t-2xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:rounded-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-red-50 p-2 text-red-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold">Delete bank account?</h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Are you sure you want to delete this bank account?</p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+              <p>
+                <strong>{deleteAccount.bankName}</strong> - {deleteAccount.accountName} - {deleteAccount.lastFourDigits}
+              </p>
+              {(deleteAccount.linkedChequeCount ?? 0) > 0 ? (
+                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  This account is already used in {deleteAccount.linkedChequeCount} cheque record{deleteAccount.linkedChequeCount === 1 ? "" : "s"}. It will be archived instead of permanently deleted.
+                </p>
+              ) : (
+                <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-900">
+                  No linked cheque records were found. This account can be permanently deleted.
+                </p>
+              )}
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setDeleteAccount(null)} disabled={accountDeleting} className="min-h-11 rounded-lg border px-4 text-sm font-semibold disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteDepositAccount}
+                disabled={accountDeleting}
+                className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {accountDeleting ? "Deleting..." : (deleteAccount.linkedChequeCount ?? 0) > 0 ? "Archive Account" : "Delete Account"}
               </button>
             </div>
           </div>
