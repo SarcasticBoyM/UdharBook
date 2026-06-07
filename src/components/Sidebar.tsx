@@ -10,6 +10,7 @@ import {
   FileBarChart,
   Map,
   MapPinned,
+  QrCode,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -36,6 +37,7 @@ const links = [
   { href: "/upload", label: "Upload Excel", icon: Upload },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },
   { href: "/reports", label: "Reports", icon: FileBarChart, adminOnly: true },
+  { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true },
   { href: "/shops", label: "Shops", icon: Store, superOnly: true },
 ];
 

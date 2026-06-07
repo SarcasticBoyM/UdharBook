@@ -132,9 +132,44 @@ model Shop {
   visitPhotos        VisitPhoto[]
   supportAccessGrants SupportAccessGrant[]
   orders             Order[]
+  qrVCard            QRVCard?
 
   @@index([subscriptionStatus])
   @@index([createdAt])
+}
+
+model QRVCard {
+  id              String   @id @default(cuid())
+  shopId          String   @unique
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  slug            String   @unique
+  businessName    String
+  tagline         String?
+  gstNumber       String?
+  ownerName       String?
+  mobile1         String?
+  mobile2         String?
+  whatsappNumber  String?
+  email           String?
+  address         String?
+  mapUrl          String?
+  website         String?
+  logoUrl         String?
+  bannerUrl       String?
+  categories      String[] @default([])
+  socialLinks     Json?
+  products        Json?
+  galleryImages   Json?
+  theme           String   @default("professional-blue")
+  isPublic        Boolean  @default(true)
+  viewCount       Int      @default(0)
+  clickCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([shopId])
+  @@index([slug])
+  @@index([isPublic])
 }
 
 model User {

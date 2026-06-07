@@ -11,6 +11,7 @@ const PUBLIC = [
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
   "/api/health",
+  "/vcard",
   "/manifest.webmanifest",
   "/sw.js",
   "/icon.svg",
