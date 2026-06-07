@@ -82,6 +82,16 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
     };
   }, [mobileOpen]);
 
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const closeOnDesktop = () => {
+      if (media.matches) setMobileOpen(false);
+    };
+    closeOnDesktop();
+    media.addEventListener("change", closeOnDesktop);
+    return () => media.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   const sidebarContent = (mobile = false) => (
     <>
       <div className="border-b border-slate-200 p-4 dark:border-slate-700 md:p-5">
@@ -177,25 +187,22 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
         <span className="h-10 w-10" aria-hidden="true" />
       </div>
 
-      <div
-        className={cn(
-          "fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm transition-opacity md:hidden",
-          mobileOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
-        )}
-        onClick={() => setMobileOpen(false)}
-      />
+      {mobileOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm md:hidden"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside
+            className="fixed inset-y-0 left-0 z-50 flex w-[min(86vw,20rem)] shrink-0 flex-col border-r border-slate-200 bg-white shadow-2xl transition-transform duration-200 ease-out dark:border-slate-700 dark:bg-slate-900 md:hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {sidebarContent(true)}
+          </aside>
+        </>
+      )}
 
-      <aside
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(86vw,20rem)] shrink-0 flex-col border-r border-slate-200 bg-white shadow-2xl transition-transform duration-200 ease-out dark:border-slate-700 dark:bg-slate-900 md:static md:z-auto md:w-64 md:translate-x-0 md:shadow-none",
-          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        )}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {sidebarContent(true)}
-      </aside>
-
-      <aside className="hidden w-20 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 md:flex md:w-64">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 md:flex">
         {sidebarContent(false)}
       </aside>
     </>
