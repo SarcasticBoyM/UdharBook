@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
 
-type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED";
+type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
 type OrderRow = {
   id: string;
@@ -144,9 +144,11 @@ export default function OrderDeskPage() {
     const data = await res.json().catch(() => ({}));
     setLoading(false);
     if (!res.ok) {
+      console.error("[Order Desk] load failed", { status: res.status, data });
       setMessage(data.error ?? "Could not load orders.");
       return;
     }
+    console.info("[Order Desk] load success", { count: data.orders?.length ?? 0, summary: data.summary });
     setOrders(data.orders ?? []);
     setSummary(data.summary ?? emptySummary);
   }

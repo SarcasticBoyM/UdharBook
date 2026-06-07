@@ -6,11 +6,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 
-const receivedStatuses: OrderStatus[] = ["ORDER_RECEIVED", "PENDING"];
-const dispatchedStatuses: OrderStatus[] = ["DISPATCHED", "PROCESSING"];
-const finalStatuses: OrderStatus[] = ["DELIVERED", "CANCELLED"];
-const activeStatuses: OrderStatus[] = [...receivedStatuses, ...dispatchedStatuses];
-
+const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
 
 const createSchema = z.object({
@@ -29,7 +25,7 @@ const patchSchema = z.object({
   priority: prioritySchema.optional(),
 });
 
-const statusRank: Record<OrderStatus, number> = {
+const statusRank: Record<string, number> = {
   ORDER_RECEIVED: 0,
   PENDING: 0,
   DISPATCHED: 1,
@@ -55,7 +51,7 @@ function parseOptionalDate(value?: string | null) {
   return parsed;
 }
 
-function normalizeRequestedStatus(status?: OrderStatus) {
+function normalizeStatus(status?: string | null) {
   if (!status) return null;
   if (status === "PENDING") return "ORDER_RECEIVED";
   if (status === "PROCESSING") return "DISPATCHED";
@@ -63,18 +59,30 @@ function normalizeRequestedStatus(status?: OrderStatus) {
 }
 
 function actionForStatus(status?: OrderStatus) {
-  const normalized = normalizeRequestedStatus(status);
+  const normalized = normalizeStatus(status);
   if (normalized === "DISPATCHED") return "DISPATCH";
   if (normalized === "DELIVERED") return "DELIVER";
   if (normalized === "CANCELLED") return "CANCEL";
   return "EDIT";
 }
 
+function isReceivedStatus(status: string) {
+  return normalizeStatus(status) === "ORDER_RECEIVED";
+}
+
+function isDispatchedStatus(status: string) {
+  return normalizeStatus(status) === "DISPATCHED";
+}
+
+function isActiveStatus(status: string) {
+  return isReceivedStatus(status) || isDispatchedStatus(status);
+}
+
 function sortOrders<T extends { status: OrderStatus; priority: string; preferredDeliveryDate: Date | null; createdAt: Date }>(orders: T[]) {
   return orders.sort((a, b) => {
-    const statusDiff = statusRank[a.status] - statusRank[b.status];
+    const statusDiff = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
     if (statusDiff) return statusDiff;
-    if (activeStatuses.includes(a.status)) {
+    if (isActiveStatus(a.status)) {
       const priorityDiff = (priorityRank[a.priority] ?? 2) - (priorityRank[b.priority] ?? 2);
       if (priorityDiff) return priorityDiff;
       const aDelivery = a.preferredDeliveryDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
@@ -86,18 +94,19 @@ function sortOrders<T extends { status: OrderStatus; priority: string; preferred
 }
 
 function transitionStatus(current: OrderStatus, action: string) {
-  if (finalStatuses.includes(current)) throw new Error("ORDER_READ_ONLY");
+  const normalized = normalizeStatus(current);
+  if (normalized && finalStatuses.includes(normalized)) throw new Error("ORDER_READ_ONLY");
 
   if (action === "EDIT") {
-    if (!receivedStatuses.includes(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_EDITED");
+    if (!isReceivedStatus(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_EDITED");
     return current;
   }
   if (action === "DISPATCH") {
-    if (!receivedStatuses.includes(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_DISPATCHED");
-    return "DISPATCHED" as OrderStatus;
+    if (!isReceivedStatus(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_DISPATCHED");
+    return "PROCESSING" as OrderStatus;
   }
   if (action === "DELIVER") {
-    if (!dispatchedStatuses.includes(current)) throw new Error("ONLY_DISPATCHED_ORDERS_CAN_BE_DELIVERED");
+    if (!isDispatchedStatus(current)) throw new Error("ONLY_DISPATCHED_ORDERS_CAN_BE_DELIVERED");
     return "DELIVERED" as OrderStatus;
   }
   if (action === "CANCEL") return "CANCELLED" as OrderStatus;
@@ -116,54 +125,74 @@ export async function GET(request: Request) {
   const upcoming = new Date(now);
   upcoming.setDate(upcoming.getDate() + 7);
 
-  const where: Prisma.OrderWhereInput = { shopId };
-  if (session.role === "FIELD_SALES") where.createdById = session.id;
-  if (filter === "pending") where.status = { in: receivedStatuses };
-  if (filter === "dispatched") where.status = { in: dispatchedStatuses };
-  if (filter === "delivered") where.status = "DELIVERED";
-  if (filter === "cancelled") where.status = "CANCELLED";
-  if (filter === "high") where.priority = "High";
-  if (filter === "upcoming") {
-    where.status = { in: activeStatuses };
-    where.preferredDeliveryDate = { gte: now, lte: upcoming };
-  }
-  if (filter === "sales") where.visitSource = "Sales Visit";
-  if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
-  const summaryScope: Prisma.OrderWhereInput = session.role === "FIELD_SALES" ? { shopId, createdById: session.id } : { shopId };
+  try {
+    logger.info("orders_fetch_start", { shopId, userId: session.id, role: session.role, filter });
+    const where: Prisma.OrderWhereInput = { shopId };
+    if (session.role === "FIELD_SALES") where.createdById = session.id;
+    if (filter === "high") where.priority = "High";
+    if (filter === "sales") where.visitSource = "Sales Visit";
+    if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
+    if (filter === "upcoming") where.preferredDeliveryDate = { gte: now, lte: upcoming };
 
-  const [orders, pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries] = await prisma.$transaction([
-    prisma.order.findMany({
+    const rows = await prisma.order.findMany({
       where,
       include: {
         customer: { select: { partyName: true, contactNumber: true } },
         createdBy: { select: { name: true, role: true } },
       },
-      take: 300,
-    }),
-    prisma.order.count({ where: { ...summaryScope, status: { in: receivedStatuses } } }),
-    prisma.order.count({ where: { ...summaryScope, status: { in: dispatchedStatuses } } }),
-    prisma.order.count({ where: { ...summaryScope, status: { in: activeStatuses }, priority: "High" } }),
-    prisma.order.count({
-      where: {
-        ...summaryScope,
-        status: "DELIVERED",
-        deliveredAt: { gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) },
-      },
-    }),
-    prisma.order.count({ where: { ...summaryScope, status: "CANCELLED" } }),
-    prisma.order.count({
-      where: {
-        ...summaryScope,
-        status: { in: activeStatuses },
-        preferredDeliveryDate: { gte: now, lte: upcoming },
-      },
-    }),
-  ]);
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
 
-  return NextResponse.json({
-    orders: sortOrders(orders),
-    summary: { pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries },
-  });
+    const orders = rows.filter((order) => {
+      if (filter === "pending") return isReceivedStatus(order.status);
+      if (filter === "dispatched") return isDispatchedStatus(order.status);
+      if (filter === "delivered") return normalizeStatus(order.status) === "DELIVERED";
+      if (filter === "cancelled") return normalizeStatus(order.status) === "CANCELLED";
+      if (filter === "upcoming") return isActiveStatus(order.status);
+      return true;
+    });
+
+    const pendingOrders = rows.filter((order) => isReceivedStatus(order.status)).length;
+    const dispatchedOrders = rows.filter((order) => isDispatchedStatus(order.status)).length;
+    const highPriorityOrders = rows.filter((order) => isActiveStatus(order.status) && order.priority === "High").length;
+    const deliveredToday = rows.filter(
+      (order) => normalizeStatus(order.status) === "DELIVERED" && order.deliveredAt && order.deliveredAt >= new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+    ).length;
+    const cancelledOrders = rows.filter((order) => normalizeStatus(order.status) === "CANCELLED").length;
+    const upcomingDeliveries = rows.filter((order) => isActiveStatus(order.status) && order.preferredDeliveryDate && order.preferredDeliveryDate >= now && order.preferredDeliveryDate <= upcoming).length;
+    const unknownStatuses = Array.from(new Set(rows.map((order) => order.status).filter((status) => !(status in statusRank))));
+    if (unknownStatuses.length > 0) {
+      logger.warn("orders_fetch_unknown_statuses", { shopId, userId: session.id, unknownStatuses });
+    }
+
+    logger.info("orders_fetch_success", {
+      shopId,
+      userId: session.id,
+      filter,
+      totalRows: rows.length,
+      returnedRows: orders.length,
+      pendingOrders,
+      dispatchedOrders,
+      deliveredToday,
+      cancelledOrders,
+    });
+
+    return NextResponse.json({
+      orders: sortOrders(orders),
+      summary: { pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries },
+    });
+  } catch (error) {
+    logger.error("orders_fetch_failed", {
+      shopId,
+      userId: session.id,
+      role: session.role,
+      filter,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return NextResponse.json({ error: "Could not load orders.", detail: error instanceof Error ? error.message : String(error), orders: [], summary: { pendingOrders: 0, dispatchedOrders: 0, highPriorityOrders: 0, deliveredToday: 0, cancelledOrders: 0, upcomingDeliveries: 0 } }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
@@ -187,19 +216,9 @@ export async function POST(request: Request) {
           orderDetails: body.orderDetails,
           preferredDeliveryDate,
           priority: body.priority,
-          status: "ORDER_RECEIVED",
+          status: "PENDING",
           sourceModule: "ORDER_DESK",
           visitSource: "Order Desk",
-        },
-      });
-      await tx.orderActivity.create({
-        data: {
-          shopId,
-          orderId: created.id,
-          userId: session.id,
-          action: "order_created",
-          newStatus: created.status,
-          notes: "Order created from Order Desk",
         },
       });
       await tx.activityLog.create({
@@ -262,17 +281,6 @@ export async function PATCH(request: Request) {
         },
       });
 
-      await tx.orderActivity.create({
-        data: {
-          shopId,
-          orderId: updated.id,
-          userId: session.id,
-          action: isEdit ? "order_edited" : `order_${nextStatus.toLowerCase()}`,
-          previousStatus: existing.status,
-          newStatus: updated.status,
-          notes: isEdit ? "Order details edited" : `Order moved from ${existing.status} to ${updated.status}`,
-        },
-      });
       await tx.activityLog.create({
         data: {
           shopId,
