@@ -92,6 +92,8 @@ enum AttendanceStatus {
 }
 
 enum OrderStatus {
+  ORDER_RECEIVED
+  DISPATCHED
   PENDING
   PROCESSING
   DELIVERED
@@ -132,6 +134,7 @@ model Shop {
   visitPhotos        VisitPhoto[]
   supportAccessGrants SupportAccessGrant[]
   orders             Order[]
+  orderActivities    OrderActivity[]
   qrVCard            QRVCard?
 
   @@index([subscriptionStatus])
@@ -256,6 +259,7 @@ model User {
   supportAccessRequested SupportAccessGrant[] @relation("SupportAccessRequestedBy")
   supportAccessAssigned SupportAccessGrant[] @relation("SupportAccessSuperAdmin")
   ordersCreated Order[] @relation("OrderCreatedBy")
+  orderActivities OrderActivity[]
 
   @@index([shopId])
   @@index([role])
@@ -415,13 +419,14 @@ model Order {
   orderDetails          String
   preferredDeliveryDate DateTime?
   priority              String      @default("Normal")
-  status                OrderStatus @default(PENDING)
+  status                OrderStatus @default(ORDER_RECEIVED)
   sourceModule          String      @default("FIELD_VISIT")
   visitSource           String?
   deliveredAt           DateTime?
   cancelledAt           DateTime?
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
+  activities            OrderActivity[]
 
   @@unique([shopId, staffVisitId])
   @@index([shopId, status, priority])
@@ -429,6 +434,25 @@ model Order {
   @@index([shopId, createdAt])
   @@index([shopId, createdById, createdAt])
   @@index([customerId, createdAt])
+}
+
+model OrderActivity {
+  id             String       @id @default(cuid())
+  shopId         String
+  shop           Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderId        String
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  action         String
+  previousStatus OrderStatus?
+  newStatus      OrderStatus?
+  notes          String?
+  createdAt      DateTime     @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model VisitPhoto {
