@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Eye, Globe2, ImagePlus, Mail, MapPin, Phone, QrCode, Save, Share2 } from "lucide-react";
+import { Copy, Download, Edit3, ExternalLink, Eye, Globe2, ImagePlus, Mail, MapPin, Phone, QrCode, Save, Share2 } from "lucide-react";
 import { normalizePhone, qrCodeUrl } from "@/lib/qrvcard";
 
 type CardForm = {
@@ -75,7 +75,11 @@ export default function QRVCardPage() {
   const [form, setForm] = useState<CardForm>(emptyForm);
   const [productText, setProductText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [cardExists, setCardExists] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [origin, setOrigin] = useState("");
 
   const publicUrl = useMemo(() => {
@@ -86,9 +90,18 @@ export default function QRVCardPage() {
   useEffect(() => {
     setOrigin(window.location.origin);
     fetch("/api/qrvcard")
-      .then((res) => res.json())
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Could not load QRVCard.");
+        return data;
+      })
       .then((data) => {
-        if (!data.card) return;
+        if (!data.card) {
+          setCardExists(false);
+          setEditMode(true);
+          setLoading(false);
+          return;
+        }
         setForm({
           ...emptyForm,
           ...data.card,
@@ -116,8 +129,14 @@ export default function QRVCardPage() {
           galleryImages: data.card.galleryImages ?? [],
         });
         setProductText((data.card.products ?? []).join("\n"));
+        setCardExists(true);
+        setEditMode(false);
+        setLoading(false);
       })
-      .catch(() => setMessage("Could not load QRVCard."));
+      .catch((error) => {
+        setLoadError(error instanceof Error ? error.message : "Could not load QRVCard.");
+        setLoading(false);
+      });
   }, []);
 
   function setValue<K extends keyof CardForm>(key: K, value: CardForm[K]) {
@@ -172,11 +191,115 @@ export default function QRVCardPage() {
         return;
       }
       setForm((prev) => ({ ...prev, ...data.card, products: data.card.products ?? products }));
+      setCardExists(true);
+      setEditMode(false);
       setMessage("QRVCard saved.");
     } catch (error) {
       setSaving(false);
       setMessage(error instanceof Error ? `Could not save QRVCard: ${error.message}` : "Could not save QRVCard.");
     }
+  }
+
+  async function copyPublicLink() {
+    if (!publicUrl) return;
+    await navigator.clipboard.writeText(publicUrl);
+    setMessage("QRVCard link copied.");
+  }
+
+  async function sharePublicLink() {
+    if (!publicUrl) return;
+    if (navigator.share) {
+      await navigator.share({ title: form.businessName || "QRVCard", text: form.tagline || "My digital visiting card", url: publicUrl });
+      return;
+    }
+    await copyPublicLink();
+  }
+
+  if (loading) {
+    return <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">Loading QRVCard...</div>;
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-2xl rounded-lg border border-amber-200 bg-amber-50 p-5 text-amber-900">
+        <h1 className="text-xl font-bold">Could not load QRVCard</h1>
+        <p className="mt-2 text-sm">{loadError}</p>
+        <button type="button" onClick={() => window.location.reload()} className="mt-4 min-h-11 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (cardExists && !editMode) {
+    return (
+      <div className="mx-auto grid max-w-7xl gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <main className="space-y-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Digital Business Card</p>
+              <h1 className="text-2xl font-bold md:text-3xl">Your QRVCard</h1>
+              <p className="text-sm text-slate-500">Your saved business profile is ready to share with customers and vendors.</p>
+            </div>
+            <button type="button" onClick={() => { setEditMode(true); setMessage(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white">
+              <Edit3 className="h-4 w-4" /> Edit QRVCard
+            </button>
+          </div>
+
+          {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{message}</div>}
+
+          <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-lg font-bold">{form.businessName}</h2>
+                <p className="mt-1 text-sm text-slate-500">{form.isPublic ? "Public sharing is enabled" : "Public sharing is disabled"}</p>
+                {publicUrl && <p className="mt-2 break-all rounded-lg bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">{publicUrl}</p>}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:min-w-72">
+                <a href={publicUrl} target="_blank" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold" rel="noreferrer">
+                  <Eye className="h-4 w-4" /> Open
+                </a>
+                <button type="button" onClick={copyPublicLink} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold">
+                  <Copy className="h-4 w-4" /> Copy
+                </button>
+                <button type="button" onClick={sharePublicLink} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white">
+                  <Share2 className="h-4 w-4" /> Share
+                </button>
+                <a href={qrCodeUrl(publicUrl, 600)} download="qrvcard-qr.png" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white">
+                  <Download className="h-4 w-4" /> QR
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <CardPreview form={form} publicUrl={publicUrl} />
+        </main>
+
+        <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+          <section className="rounded-lg border bg-white p-4 text-center shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-center justify-center gap-2">
+              <QrCode className="h-5 w-5 text-brand-600" />
+              <h2 className="font-bold">QR Code</h2>
+            </div>
+            {publicUrl ? (
+              <>
+                <img src={qrCodeUrl(publicUrl, 260)} alt="QR code" className="mx-auto mt-4 h-56 w-56 rounded-lg bg-white p-2" />
+                <p className="mt-3 text-sm text-slate-500">Scan to open your digital visiting card</p>
+              </>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">Public link not available.</p>
+            )}
+          </section>
+          <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <h2 className="font-bold">Quick Actions</h2>
+            <div className="mt-3 grid gap-2">
+              <a href={`/vcard/${form.slug}/contact.vcf`} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold">Download Contact</a>
+              <a href={`https://wa.me/?text=${encodeURIComponent(publicUrl)}`} target="_blank" className="rounded-lg bg-emerald-600 px-3 py-3 text-center text-sm font-semibold text-white" rel="noreferrer">Share on WhatsApp</a>
+            </div>
+          </section>
+        </aside>
+      </div>
+    );
   }
 
   return (
@@ -186,9 +309,14 @@ export default function QRVCardPage() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Digital Business Card</p>
             <h1 className="text-2xl font-bold md:text-3xl">Your QRVCard</h1>
-            <p className="text-sm text-slate-500">Create a premium shareable business profile for WhatsApp, QR codes, and customer sharing.</p>
+            <p className="text-sm text-slate-500">{cardExists ? "Update your saved QRVCard details." : "Setup your QRVCard once, then manage it from your business profile dashboard."}</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {cardExists && (
+              <button type="button" onClick={() => { setEditMode(false); setMessage(""); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-4 text-sm font-semibold">
+                Cancel Edit
+              </button>
+            )}
             {publicUrl && (
               <a href={publicUrl} target="_blank" className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-4 text-sm font-semibold" rel="noreferrer">
                 <Eye className="h-4 w-4" /> Preview
@@ -199,6 +327,13 @@ export default function QRVCardPage() {
             </button>
           </div>
         </div>
+
+        {!cardExists && (
+          <section className="rounded-lg border border-brand-200 bg-brand-50 p-4 text-sm text-brand-950">
+            <h2 className="font-bold">Setup Your QRVCard</h2>
+            <p className="mt-1">Add your business details, branding, and contact actions. After the first save, this page will open directly to your live card dashboard.</p>
+          </section>
+        )}
 
         {message && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div>}
 
