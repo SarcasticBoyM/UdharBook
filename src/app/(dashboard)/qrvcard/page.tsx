@@ -118,38 +118,47 @@ export default function QRVCardPage() {
   async function upload(kind: "logo" | "banner" | "gallery", file?: File) {
     if (!file) return;
     setMessage("Uploading image...");
-    const body = new FormData();
-    body.append("kind", kind);
-    body.append("file", file);
-    const res = await fetch("/api/qrvcard/upload", { method: "POST", body });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setMessage(data.error ?? "Image upload failed.");
-      return;
+    try {
+      const body = new FormData();
+      body.append("kind", kind);
+      body.append("file", file);
+      const res = await fetch("/api/qrvcard/upload", { method: "POST", body });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMessage(data.error ?? "Image upload failed. You can still save the card without this image.");
+        return;
+      }
+      if (kind === "logo") setValue("logoUrl", data.url);
+      if (kind === "banner") setValue("bannerUrl", data.url);
+      if (kind === "gallery") setValue("galleryImages", [...form.galleryImages, data.url]);
+      setMessage("Image uploaded. Save the card to publish this change.");
+    } catch (error) {
+      setMessage(error instanceof Error ? `Image upload failed: ${error.message}` : "Image upload failed. You can still save the card without this image.");
     }
-    if (kind === "logo") setValue("logoUrl", data.url);
-    if (kind === "banner") setValue("bannerUrl", data.url);
-    if (kind === "gallery") setValue("galleryImages", [...form.galleryImages, data.url]);
-    setMessage("Image uploaded.");
   }
 
   async function save() {
     setSaving(true);
     setMessage("");
     const products = productText.split("\n").map((item) => item.trim()).filter(Boolean);
-    const res = await fetch("/api/qrvcard", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, products }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setSaving(false);
-    if (!res.ok) {
-      setMessage(data.error ?? "Could not save QRVCard.");
-      return;
+    try {
+      const res = await fetch("/api/qrvcard", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, products }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setSaving(false);
+      if (!res.ok) {
+        setMessage(data.error ?? "Could not save QRVCard. Check server logs for qrvcard_save_failed.");
+        return;
+      }
+      setForm((prev) => ({ ...prev, ...data.card, products: data.card.products ?? products }));
+      setMessage("QRVCard saved.");
+    } catch (error) {
+      setSaving(false);
+      setMessage(error instanceof Error ? `Could not save QRVCard: ${error.message}` : "Could not save QRVCard.");
     }
-    setForm((prev) => ({ ...prev, ...data.card, products: data.card.products ?? products }));
-    setMessage("QRVCard saved.");
   }
 
   return (

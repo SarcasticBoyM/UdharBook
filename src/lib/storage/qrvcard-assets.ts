@@ -20,8 +20,40 @@ function bucketFor(kind: AssetKind) {
   return process.env.SUPABASE_QRVCARD_GALLERY_BUCKET ?? DEFAULT_BUCKETS.gallery;
 }
 
+export function qrvcardBucketName(kind: AssetKind) {
+  return bucketFor(kind);
+}
+
 export function qrvcardStorageConfigured() {
   return Boolean(supabaseUrl() && serviceKey());
+}
+
+export async function getQRVCardBucketStatus(kind: AssetKind) {
+  const url = supabaseUrl();
+  const key = serviceKey();
+  if (!url || !key) throw new Error("QRVCard storage is not configured");
+
+  const bucket = bucketFor(kind);
+  const res = await fetch(`${url}/storage/v1/bucket/${bucket}`, {
+    headers: {
+      Authorization: `Bearer ${key}`,
+      apikey: key,
+    },
+  });
+  const text = await res.text();
+  let payload: Record<string, unknown> | null = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = { raw: text };
+  }
+  return {
+    bucket,
+    exists: res.ok,
+    isPublic: payload?.public === true,
+    status: res.status,
+    payload,
+  };
 }
 
 export function qrvcardAssetPath(shopId: string, kind: AssetKind, fileName: string) {
@@ -59,6 +91,9 @@ export async function uploadQRVCardAsset({
     },
     body,
   });
-  if (!res.ok) throw new Error(`QRVCard asset upload failed: ${res.status}`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`QRVCard asset upload failed: ${res.status}${detail ? ` ${detail}` : ""}`);
+  }
   return `${url}/storage/v1/object/public/${bucket}/${path}`;
 }
