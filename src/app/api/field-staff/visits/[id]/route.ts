@@ -14,6 +14,7 @@ const updateSchema = z.object({
   result: z.string().optional(),
   visitType: z.string().optional(),
   outcome: z.string().optional(),
+  visitOutcomes: z.array(z.string().min(1)).optional(),
   nextAction: z.string().optional(),
   recoveryAmount: z.number().min(0).optional(),
   nextFollowupDate: z.string().datetime().optional(),
@@ -39,8 +40,25 @@ function paymentSummary(mode?: string | null, amount = 0) {
   return null;
 }
 
-function isOrderVisit(visitType?: string | null, outcome?: string | null) {
-  return ["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visitType ?? "") && outcome === "Order Received";
+function uniqueOutcomes(values: (string | undefined | null)[]) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
+}
+
+function isOrderVisit(visitType?: string | null, outcome?: string | null, outcomes: string[] = []) {
+  return ["Sales Visit", "New Lead Visit", "Prospect Visit", "Payment Collection", "Recovery Follow-up"].includes(visitType ?? "") && (outcome === "Order Received" || outcomes.includes("Order Received"));
+}
+
+function visitSummary(visitType: string, outcomes: string[], mode?: string | null, amount = 0) {
+  const hasPayment = outcomes.includes("Payment Collected") || amount > 0 || mode === "Cheque Collected";
+  const hasOrder = outcomes.includes("Order Received");
+  const hasFollowUp = outcomes.includes("Follow-up Required") || outcomes.includes("Revisit Required") || outcomes.includes("Payment Promised");
+
+  if (mode === "Cheque Collected" && hasOrder) return "Cheque collected and order received";
+  if (hasPayment && hasOrder) return `${mode ?? "Payment"} collected and order received`;
+  if (hasOrder) return "Order received during sales visit";
+  if (hasPayment) return paymentSummary(mode, amount) ?? "Payment collected during visit";
+  if (hasFollowUp) return "Follow-up scheduled from field visit";
+  return `${visitType} completed`;
 }
 
 type Params = { params: Promise<{ id: string }> };
@@ -80,6 +98,8 @@ export async function PATCH(request: Request, { params }: Params) {
       distanceMeters(existing.checkInLat, existing.checkInLng, checkOutLat, checkOutLng) / 1000;
     const recoveryAmount = body.recoveryAmount ?? 0;
     const now = new Date();
+    const visitOutcomes = uniqueOutcomes([...(body.visitOutcomes ?? []), body.outcome, body.result]);
+    const combinedOutcome = visitOutcomes.join(", ") || body.outcome || body.result || "Visit completed";
 
     const visit = await prisma.$transaction(async (tx) => {
       const updated = await tx.staffVisit.update({
@@ -92,7 +112,7 @@ export async function PATCH(request: Request, { params }: Params) {
           notes: body.notes ?? existing.notes,
           result: body.result,
           visitType: body.visitType ?? existing.visitType,
-          outcome: body.outcome ?? body.result,
+          outcome: combinedOutcome,
           nextAction: body.nextAction,
           nextVisitDate: body.nextFollowupDate ? new Date(body.nextFollowupDate) : null,
           orderAmount: body.orderAmount,
@@ -148,9 +168,11 @@ export async function PATCH(request: Request, { params }: Params) {
       const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : null;
       const shouldCreateFollowUp =
         recoveryAmount > 0 ||
+        visitOutcomes.includes("Payment Collected") ||
+        visitOutcomes.includes("Order Received") ||
         Boolean(nextDate) ||
         recoveryVisitTypes.has(updated.visitType) ||
-        followUpOutcomes.has(body.outcome ?? body.result ?? "");
+        visitOutcomes.some((outcome) => followUpOutcomes.has(outcome));
       const status =
         recoveryAmount > 0
           ? recoveryAmount >= existing.customer.outstandingBalance
@@ -176,21 +198,13 @@ export async function PATCH(request: Request, { params }: Params) {
           paymentStatus: recoveryAmount > 0 ? (status === "PAID" ? "PAID" : "PARTIAL_PAID") : null,
           sourceModule: "FIELD_VISIT",
           followUpType: updated.visitType,
-          summary:
-            recoveryAmount > 0
-              ? paymentSummary(updated.paymentMode, recoveryAmount) ?? `Field visit recovered Rs ${recoveryAmount}`
-              : isOrderVisit(updated.visitType, updated.outcome)
-                ? updated.visitType === "New Lead Visit" || updated.visitType === "Prospect Visit"
-                  ? "Lead converted with first order"
-                  : "Order received during sales visit"
-                : updated.paymentMode === "Cheque Collected"
-                  ? "Cheque collected during payment visit"
-                : `${updated.visitType} completed`,
+          summary: visitSummary(updated.visitType, visitOutcomes, updated.paymentMode, recoveryAmount),
           detailedNotes: body.notes,
           visitId: updated.id,
           activitySource: "field-visit-checkout",
           metadata: {
-            outcome: body.outcome ?? body.result ?? null,
+            outcome: combinedOutcome,
+            visitOutcomes,
             orderAmount: body.orderAmount ?? null,
             orderQuantity: body.orderQuantity ?? null,
             orderProductCategory: body.orderProductCategory ?? null,
@@ -204,7 +218,7 @@ export async function PATCH(request: Request, { params }: Params) {
         });
       }
 
-      if (isOrderVisit(updated.visitType, updated.outcome)) {
+      if (isOrderVisit(updated.visitType, updated.outcome, visitOutcomes)) {
         const orderDetails = updated.orderProductCategory?.trim() || "Order received during visit";
         await tx.order.upsert({
           where: { shopId_staffVisitId: { shopId, staffVisitId: updated.id } },

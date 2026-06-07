@@ -111,6 +111,17 @@ const leadVisitOutcomes = [
   "Customer Unavailable",
 ];
 const paymentModes = ["Cash", "NEFT / RTGS", "Cheque Collected"];
+const visitOutcomeOptions = [
+  "Payment Collected",
+  "Order Received",
+  "Follow-up Required",
+  "Customer Unavailable",
+  "Product Discussion",
+  "Customer Busy",
+  "Payment Promised",
+  "Revisit Required",
+  "Discussion Done",
+];
 const salesOrderStatuses = [
   "Order Received",
   "Product Discussion",
@@ -132,7 +143,6 @@ const visitTypes = [
   "Market Survey",
   "General Visit",
 ];
-const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection"]);
 const followUpRequiredOutcomes = new Set(["Follow-up Required", "Revisit Required", "Payment Promised", "Customer Unavailable", "Customer Busy"]);
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
 const customerSourceOptions: { label: string; value: CustomerSource }[] = [
@@ -168,23 +178,39 @@ function resultOptionsFor(visitType: string) {
 }
 
 function isOrderReceived(visitType: string, result: string) {
-  return ["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visitType) && result === "Order Received";
+  return ["Sales Visit", "New Lead Visit", "Prospect Visit", "Payment Collection", "Recovery Follow-up"].includes(visitType) && result === "Order Received";
 }
 
 function isPaymentCollection(visitType: string) {
   return visitType === "Payment Collection";
 }
 
-function isChequePayment(visitType: string, paymentMode: string) {
-  return isPaymentCollection(visitType) && paymentMode === "Cheque Collected";
-}
-
-function isMoneyPayment(visitType: string, paymentMode: string) {
-  return isPaymentCollection(visitType) && paymentMode !== "Cheque Collected";
-}
-
 function needsNextFollowup(result: string) {
   return followUpRequiredOutcomes.has(result);
+}
+
+function uniqueOutcomes(values: (string | undefined | null)[]) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
+}
+
+function hasVisitOutcome(outcomes: string[], outcome: string) {
+  return outcomes.includes(outcome);
+}
+
+function combinedOutcomeText(outcomes: string[], fallback: string) {
+  return outcomes.length ? outcomes.join(", ") : fallback;
+}
+
+function isOrderOutcome(visitType: string, result: string, outcomes: string[]) {
+  return isOrderReceived(visitType, result) || hasVisitOutcome(outcomes, "Order Received");
+}
+
+function isPaymentOutcome(visitType: string, outcomes: string[]) {
+  return isPaymentCollection(visitType) || hasVisitOutcome(outcomes, "Payment Collected");
+}
+
+function needsNextFollowupOutcome(result: string, outcomes: string[]) {
+  return needsNextFollowup(result) || outcomes.some((outcome) => followUpRequiredOutcomes.has(outcome));
 }
 
 export default function FieldStaffPage() {
@@ -212,6 +238,7 @@ export default function FieldStaffPage() {
   const [staffStatuses, setStaffStatuses] = useState<StaffStatus[]>([]);
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState(resultOptionsFor("Sales Visit")[0]);
+  const [visitOutcomes, setVisitOutcomes] = useState<string[]>([]);
   const [nextAction, setNextAction] = useState("");
   const [orderExpectedDelivery, setOrderExpectedDelivery] = useState("");
   const [orderProductCategory, setOrderProductCategory] = useState("");
@@ -235,7 +262,7 @@ export default function FieldStaffPage() {
     () => ({
       visits: visits.length,
       completed: visits.filter((visit) => visit.status === "COMPLETED").length,
-      ordersBooked: visits.filter((visit) => isOrderReceived(visit.visitType ?? "", visit.outcome ?? visit.result ?? "") || Boolean(visit.orderQuantity ?? visit.orderAmount)).length,
+      ordersBooked: visits.filter((visit) => (visit.outcome ?? visit.result ?? "").includes("Order Received") || isOrderReceived(visit.visitType ?? "", visit.outcome ?? visit.result ?? "") || Boolean(visit.orderQuantity ?? visit.orderAmount)).length,
       orderValue: visits.reduce((sum, visit) => sum + (visit.orderAmount ?? 0), 0),
       recovered: visits.reduce((sum, visit) => sum + visit.recoveryAmount, 0),
       newLeads: visits.filter((visit) => visit.visitType === "New Lead Visit" || visit.visitType === "New Lead").length,
@@ -285,13 +312,14 @@ export default function FieldStaffPage() {
   }, [result, visitType]);
 
   useEffect(() => {
-    setShowChequeFlow(isChequePayment(visitType, paymentMode));
-  }, [paymentMode, visitType]);
+    setShowChequeFlow(isPaymentOutcome(visitType, visitOutcomes) && paymentMode === "Cheque Collected");
+  }, [paymentMode, visitOutcomes, visitType]);
 
   useEffect(() => {
     if (!activeVisit) return;
     setVisitType(activeVisit.visitType ?? "General Visit");
     setResult(activeVisit.outcome ?? activeVisit.result ?? resultOptionsFor(activeVisit.visitType ?? "General Visit")[0]);
+    setVisitOutcomes(uniqueOutcomes((activeVisit.outcome ?? activeVisit.result ?? "").split(",")));
     setNextAction(activeVisit.nextAction ?? "");
     setOrderProductCategory(activeVisit.orderProductCategory ?? "");
     setOrderPriority(activeVisit.orderPriority ?? "Normal");
@@ -379,7 +407,7 @@ export default function FieldStaffPage() {
       setVisits(data.visits);
       const openVisit = isFieldWorker ? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
       setActiveVisit(openVisit);
-      setShowChequeFlow(isChequePayment(openVisit?.visitType ?? "", openVisit?.paymentMode ?? ""));
+      setShowChequeFlow(openVisit?.paymentMode === "Cheque Collected");
     }
   }, [isFieldWorker]);
 
@@ -533,9 +561,18 @@ export default function FieldStaffPage() {
     reader.readAsDataURL(file);
   }
 
+  function toggleVisitOutcome(outcome: string) {
+    setVisitOutcomes((current) => (current.includes(outcome) ? current.filter((item) => item !== outcome) : [...current, outcome]));
+    setResult(outcome);
+  }
+
   async function saveCheckIn(position: GeolocationPosition) {
     if (!isFieldWorker) return;
     if (!selectedCustomer && !leadName.trim()) return;
+    const outcomeText = combinedOutcomeText(visitOutcomes, result);
+    const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
+    const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
+    const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
     const res = await fetch("/api/field-staff/visits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -545,24 +582,24 @@ export default function FieldStaffPage() {
         mobileNumber: selectedCustomer?.contactNumber ?? leadMobile,
         address: leadAddress || undefined,
         visitType,
-        outcome: result,
-        nextAction: isOrderReceived(visitType, result) ? undefined : nextAction || undefined,
-        nextVisitDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-        orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-        orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
-        orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
-        paymentMode: isPaymentCollection(visitType) ? paymentMode : undefined,
-        paymentReference: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
-        paymentBankName: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
-        paymentScreenshotUrl: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
+        outcome: outcomeText,
+        nextAction: hasOrder ? undefined : nextAction || undefined,
+        nextVisitDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+        orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+        orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
+        orderPriority: hasOrder ? orderPriority || undefined : undefined,
+        paymentMode: hasPayment ? paymentMode : undefined,
+        paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+        paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+        paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
         leadArea: leadArea || undefined,
         leadContactPerson: leadContactPerson || undefined,
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
         notes,
-        recoveryAmount: isMoneyPayment(visitType, paymentMode) || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-        nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+        recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+        nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
       }),
     });
     const data = await res.json();
@@ -578,11 +615,12 @@ export default function FieldStaffPage() {
     setLeadName("");
     setLeadContactPerson("");
     setLeadMobile("");
-    setLeadAddress("");
-    setLeadArea("");
-    setNotes("");
-    await loadVisits();
-  }
+        setLeadAddress("");
+        setLeadArea("");
+        setNotes("");
+        setVisitOutcomes([]);
+        await loadVisits();
+      }
 
   function checkIn() {
     if (!isFieldWorker) return;
@@ -596,6 +634,10 @@ export default function FieldStaffPage() {
     runDirectGpsRequest({
       status: "ACTIVE",
       onSuccess: async (position) => {
+        const outcomeText = combinedOutcomeText(visitOutcomes, result);
+        const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
+        const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
+        const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
         const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -606,18 +648,19 @@ export default function FieldStaffPage() {
             notes,
             result,
             visitType,
-            outcome: result,
-            nextAction: isOrderReceived(visitType, result) ? undefined : nextAction || undefined,
-            recoveryAmount: isMoneyPayment(visitType, paymentMode) || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-            nextFollowupDate: needsNextFollowup(result) && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+            outcome: outcomeText,
+            visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
+            nextAction: hasOrder ? undefined : nextAction || undefined,
+            recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+            nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
             followupNotes: notes,
-            orderExpectedDelivery: isOrderReceived(visitType, result) && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-            orderProductCategory: isOrderReceived(visitType, result) ? orderProductCategory || undefined : undefined,
-            orderPriority: isOrderReceived(visitType, result) ? orderPriority || undefined : undefined,
-            paymentMode: isPaymentCollection(visitType) ? paymentMode : undefined,
-            paymentReference: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
-            paymentBankName: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
-            paymentScreenshotUrl: isPaymentCollection(visitType) && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
+            orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+            orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
+            orderPriority: hasOrder ? orderPriority || undefined : undefined,
+            paymentMode: hasPayment ? paymentMode : undefined,
+            paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+            paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+            paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
           }),
         });
         const data = await res.json();
@@ -637,6 +680,7 @@ export default function FieldStaffPage() {
         setPaymentReference("");
         setPaymentBankName("");
         setPaymentScreenshotUrl("");
+        setVisitOutcomes([]);
         await loadVisits();
       },
     });
@@ -648,6 +692,8 @@ export default function FieldStaffPage() {
     setSelectedCustomer(null);
     setLeadName(prefill.trim());
     setVisitType("New Lead Visit");
+    setResult(resultOptionsFor("New Lead Visit")[0]);
+    setVisitOutcomes([]);
   }
 
   function applyChip(source: CustomerSource) {
@@ -828,6 +874,7 @@ export default function FieldStaffPage() {
           visitType={visitType}
           notes={notes}
           result={result}
+          visitOutcomes={visitOutcomes}
           recoveryAmount={recoveryAmount}
           nextFollowupDate={nextFollowupDate}
           nextAction={nextAction}
@@ -842,6 +889,7 @@ export default function FieldStaffPage() {
           onNotes={setNotes}
           onVisitType={setVisitType}
           onResult={setResult}
+          onToggleOutcome={toggleVisitOutcome}
           onRecovery={setRecoveryAmount}
           onNextFollowup={setNextFollowupDate}
           onNextAction={setNextAction}
@@ -935,6 +983,7 @@ export default function FieldStaffPage() {
             <VisitDetailFields
               visitType={visitType}
               result={result}
+              visitOutcomes={visitOutcomes}
               nextAction={nextAction}
               recoveryAmount={recoveryAmount}
               nextFollowupDate={nextFollowupDate}
@@ -947,6 +996,7 @@ export default function FieldStaffPage() {
               paymentScreenshotUrl={paymentScreenshotUrl}
               onVisitType={setVisitType}
               onResult={setResult}
+              onToggleOutcome={toggleVisitOutcome}
               onNextAction={setNextAction}
               onRecovery={setRecoveryAmount}
               onNextFollowup={setNextFollowupDate}
@@ -981,13 +1031,11 @@ export default function FieldStaffPage() {
                 <select value={visitType} onChange={(e) => setVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                   {visitTypes.map((type) => <option key={type}>{type}</option>)}
                 </select>
-                <select value={result} onChange={(e) => setResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-                  {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
-                </select>
-                {!isOrderReceived(visitType, result) && (
+                <VisitOutcomeChips outcomes={visitOutcomes} onToggle={toggleVisitOutcome} />
+                {!isOrderOutcome(visitType, result, visitOutcomes) && (
                   <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 )}
-                {isOrderReceived(visitType, result) && (
+                {isOrderOutcome(visitType, result, visitOutcomes) && (
                   <>
                     <textarea value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
                     <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -998,7 +1046,7 @@ export default function FieldStaffPage() {
                     </select>
                   </>
                 )}
-                {recoveryVisitTypes.has(visitType) && (
+                {isPaymentOutcome(visitType, visitOutcomes) && (
                   <PaymentFields
                     visitType={visitType}
                     paymentMode={paymentMode}
@@ -1013,7 +1061,7 @@ export default function FieldStaffPage() {
                     onRecovery={setRecoveryAmount}
                   />
                 )}
-                {needsNextFollowup(result) && (
+                {needsNextFollowupOutcome(result, visitOutcomes) && (
                   <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                 )}
               </div>
@@ -1061,6 +1109,7 @@ export default function FieldStaffPage() {
 function VisitDetailFields({
   visitType,
   result,
+  visitOutcomes,
   nextAction,
   recoveryAmount,
   nextFollowupDate,
@@ -1073,6 +1122,7 @@ function VisitDetailFields({
   paymentScreenshotUrl,
   onVisitType,
   onResult,
+  onToggleOutcome,
   onNextAction,
   onRecovery,
   onNextFollowup,
@@ -1086,6 +1136,7 @@ function VisitDetailFields({
 }: {
   visitType: string;
   result: string;
+  visitOutcomes: string[];
   nextAction: string;
   recoveryAmount: string;
   nextFollowupDate: string;
@@ -1098,6 +1149,7 @@ function VisitDetailFields({
   paymentScreenshotUrl: string;
   onVisitType: (value: string) => void;
   onResult: (value: string) => void;
+  onToggleOutcome: (value: string) => void;
   onNextAction: (value: string) => void;
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
@@ -1109,6 +1161,10 @@ function VisitDetailFields({
   onPaymentBankName: (value: string) => void;
   onPaymentScreenshot: (file?: File) => void;
 }) {
+  const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
+  const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
+  const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
+
   return (
     <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
       <select value={visitType} onChange={(e) => onVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -1117,13 +1173,14 @@ function VisitDetailFields({
       <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
         {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
       </select>
-      {!isOrderReceived(visitType, result) && (
+      <VisitOutcomeChips outcomes={visitOutcomes} onToggle={onToggleOutcome} />
+      {!hasOrder && (
         <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
-      {needsNextFollowup(result) && (
+      {hasFollowup && (
         <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
-      {recoveryVisitTypes.has(visitType) && (
+      {hasPayment && (
         <PaymentFields
           visitType={visitType}
           paymentMode={paymentMode}
@@ -1138,7 +1195,7 @@ function VisitDetailFields({
           onRecovery={onRecovery}
         />
       )}
-      {isOrderReceived(visitType, result) && (
+      {hasOrder && (
         <>
           <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
           <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -1149,6 +1206,34 @@ function VisitDetailFields({
           </select>
         </>
       )}
+    </div>
+  );
+}
+
+function VisitOutcomeChips({ outcomes, onToggle }: { outcomes: string[]; onToggle: (value: string) => void }) {
+  return (
+    <div className="md:col-span-2">
+      <p className="mb-2 text-xs font-semibold uppercase text-slate-500">Visit Outcomes</p>
+      <div className="flex flex-wrap gap-2">
+        {visitOutcomeOptions.map((outcome) => {
+          const selected = outcomes.includes(outcome);
+          return (
+            <button
+              key={outcome}
+              type="button"
+              onClick={() => onToggle(outcome)}
+              className={`min-h-11 rounded-full border px-4 text-sm font-semibold ${
+                selected
+                  ? "border-brand-600 bg-brand-600 text-white"
+                  : "border-slate-300 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              }`}
+            >
+              {selected ? "Selected: " : ""}
+              {outcome}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1178,12 +1263,7 @@ function PaymentFields({
   onPaymentScreenshot: (file?: File) => void;
   onRecovery: (value: string) => void;
 }) {
-  if (visitType !== "Payment Collection") {
-    return (
-      <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Recovery amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-    );
-  }
-
+  void visitType;
   return (
     <>
       <select value={paymentMode} onChange={(e) => onPaymentMode(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -1211,6 +1291,7 @@ function ActiveVisitCard({
   visitType,
   notes,
   result,
+  visitOutcomes,
   recoveryAmount,
   nextFollowupDate,
   nextAction,
@@ -1225,6 +1306,7 @@ function ActiveVisitCard({
   onNotes,
   onVisitType,
   onResult,
+  onToggleOutcome,
   onRecovery,
   onNextFollowup,
   onNextAction,
@@ -1244,6 +1326,7 @@ function ActiveVisitCard({
   visitType: string;
   notes: string;
   result: string;
+  visitOutcomes: string[];
   recoveryAmount: string;
   nextFollowupDate: string;
   nextAction: string;
@@ -1258,6 +1341,7 @@ function ActiveVisitCard({
   onNotes: (value: string) => void;
   onVisitType: (value: string) => void;
   onResult: (value: string) => void;
+  onToggleOutcome: (value: string) => void;
   onRecovery: (value: string) => void;
   onNextFollowup: (value: string) => void;
   onNextAction: (value: string) => void;
@@ -1274,8 +1358,9 @@ function ActiveVisitCard({
   onSavedCheque: () => void;
 }) {
   const latestCheque = visit.cheques?.[0];
-  const isRecoveryVisit = recoveryVisitTypes.has(visitType);
-  const isOrderVisit = isOrderReceived(visitType, result);
+  const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
+  const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
+  const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
   return (
     <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
       <div className="flex items-start justify-between gap-3">
@@ -1296,10 +1381,11 @@ function ActiveVisitCard({
         <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
           {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
         </select>
-        {!isOrderVisit && (
+        <VisitOutcomeChips outcomes={visitOutcomes} onToggle={onToggleOutcome} />
+        {!hasOrder && (
           <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         )}
-        {isRecoveryVisit && (
+        {hasPayment && (
           <PaymentFields
             visitType={visitType}
             paymentMode={paymentMode}
@@ -1314,7 +1400,7 @@ function ActiveVisitCard({
             onRecovery={onRecovery}
           />
         )}
-        {isOrderVisit && (
+        {hasOrder && (
           <>
             <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
             <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -1325,10 +1411,10 @@ function ActiveVisitCard({
             </select>
           </>
         )}
-        {needsNextFollowup(result) && (
+        {hasFollowup && (
           <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
         )}
-        {!isOrderVisit && (
+        {!hasOrder && (
           <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
             <Camera className="h-5 w-5" /> Add photo
           </button>
@@ -1349,7 +1435,7 @@ function ActiveVisitCard({
           </div>
         </div>
       )}
-      {isChequePayment(visitType, paymentMode) && (
+      {hasPayment && paymentMode === "Cheque Collected" && (
         <button
           type="button"
           onClick={() => onToggleChequeFlow(!showChequeFlow)}
