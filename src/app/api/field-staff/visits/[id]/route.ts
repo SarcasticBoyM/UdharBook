@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, isFieldWorker, startOfDay } from "@/lib/field-tracking";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
+import { logger } from "@/lib/logger";
 
 const updateSchema = z.object({
   action: z.enum(["CHECK_OUT", "CANCEL"]),
@@ -63,14 +64,53 @@ function visitSummary(visitType: string, outcomes: string[], mode?: string | nul
 
 type Params = { params: Promise<{ id: string }> };
 
+function errorMessage(error: unknown) {
+  if (error instanceof z.ZodError) return error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function clientError(error: unknown) {
+  const message = errorMessage(error);
+  if (message === "ORDER_DETAILS_REQUIRED") return "Order details are required when Order Received is selected.";
+  if (message === "CUSTOMER_NOT_FOUND") return "Customer was not found for this visit.";
+  if (message === "INVALID_ORDER_DELIVERY_DATE") return "Preferred delivery date is invalid.";
+  if (message.includes("Invalid enum value") || message.includes("invalid input value for enum")) return "Order status setup is not ready. Please apply the latest Order Desk migration.";
+  if (message.includes("Unique constraint")) return "An order is already linked with this visit. Please refresh and try again.";
+  if (error instanceof z.ZodError) return `Invalid visit data: ${message}`;
+  return `Visit save failed: ${message}`;
+}
+
 export async function PATCH(request: Request, { params }: Params) {
+  const requestId = crypto.randomUUID();
+  let sessionId: string | undefined;
+  let shopIdForLog: string | undefined;
+  let visitIdForLog: string | undefined;
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    sessionId = session.id;
 
     const { id } = await params;
+    visitIdForLog = id;
     const shopId = requireShopId(request, session);
+    shopIdForLog = shopId;
     const body = updateSchema.parse(await request.json());
+    logger.info("field_visit_checkout_payload", {
+      requestId,
+      visitId: id,
+      shopId,
+      userId: session.id,
+      action: body.action,
+      visitType: body.visitType,
+      result: body.result,
+      outcome: body.outcome,
+      visitOutcomes: body.visitOutcomes,
+      hasOrderDetails: Boolean(body.orderProductCategory?.trim()),
+      hasDeliveryDate: Boolean(body.orderExpectedDelivery),
+      paymentMode: body.paymentMode,
+      recoveryAmount: body.recoveryAmount ?? 0,
+    });
 
     const existing = await prisma.staffVisit.findFirst({
       where: { id, shopId },
@@ -100,8 +140,21 @@ export async function PATCH(request: Request, { params }: Params) {
     const now = new Date();
     const visitOutcomes = uniqueOutcomes([...(body.visitOutcomes ?? []), body.outcome, body.result]);
     const combinedOutcome = visitOutcomes.join(", ") || body.outcome || body.result || "Visit completed";
+    const hasOrder = isOrderVisit(body.visitType ?? existing.visitType, combinedOutcome, visitOutcomes);
+    if (hasOrder && !body.orderProductCategory?.trim()) {
+      logger.warn("field_visit_order_validation_failed", {
+        requestId,
+        visitId: id,
+        shopId,
+        userId: session.id,
+        reason: "ORDER_DETAILS_REQUIRED",
+        visitOutcomes,
+      });
+      return NextResponse.json({ success: false, error: "Order details are required when Order Received is selected." }, { status: 400 });
+    }
 
     const visit = await prisma.$transaction(async (tx) => {
+      logger.info("field_visit_checkout_transaction_start", { requestId, visitId: id, shopId, userId: session.id });
       const updated = await tx.staffVisit.update({
         where: { id },
         data: {
@@ -132,6 +185,14 @@ export async function PATCH(request: Request, { params }: Params) {
           customer: { select: { partyName: true, contactNumber: true, outstandingBalance: true } },
           photos: true,
         },
+      });
+      logger.info("field_visit_checkout_visit_updated", {
+        requestId,
+        visitId: updated.id,
+        shopId,
+        userId: session.id,
+        visitType: updated.visitType,
+        outcome: updated.outcome,
       });
 
       await tx.staffLocation.create({
@@ -182,6 +243,14 @@ export async function PATCH(request: Request, { params }: Params) {
             ? "RESCHEDULED"
             : "COMPLETED";
       if (shouldCreateFollowUp) {
+        logger.info("field_visit_checkout_followup_start", {
+          requestId,
+          visitId: updated.id,
+          shopId,
+          userId: session.id,
+          status,
+          visitOutcomes,
+        });
         await recordFollowUpActivity(tx, {
           shopId,
           customerId: existing.customerId,
@@ -216,11 +285,22 @@ export async function PATCH(request: Request, { params }: Params) {
           recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
           paymentMethod: "FIELD_VISIT",
         });
+        logger.info("field_visit_checkout_followup_done", { requestId, visitId: updated.id, shopId, userId: session.id });
       }
 
       if (isOrderVisit(updated.visitType, updated.outcome, visitOutcomes)) {
         const orderDetails = updated.orderProductCategory?.trim() || "Order received during visit";
-        await tx.order.upsert({
+        logger.info("field_visit_checkout_order_upsert_start", {
+          requestId,
+          visitId: updated.id,
+          shopId,
+          userId: session.id,
+          customerId: existing.customerId,
+          hasOrderDetails: Boolean(orderDetails),
+          preferredDeliveryDate: updated.orderExpectedDelivery?.toISOString() ?? null,
+          priority: updated.orderPriority ?? "Normal",
+        });
+        const order = await tx.order.upsert({
           where: { shopId_staffVisitId: { shopId, staffVisitId: updated.id } },
           create: {
             shopId,
@@ -230,6 +310,7 @@ export async function PATCH(request: Request, { params }: Params) {
             orderDetails,
             preferredDeliveryDate: updated.orderExpectedDelivery,
             priority: updated.orderPriority ?? "Normal",
+            status: "PENDING",
             sourceModule: "FIELD_VISIT",
             visitSource: updated.visitType,
           },
@@ -239,6 +320,14 @@ export async function PATCH(request: Request, { params }: Params) {
             priority: updated.orderPriority ?? "Normal",
             visitSource: updated.visitType,
           },
+        });
+        logger.info("field_visit_checkout_order_upsert_done", {
+          requestId,
+          visitId: updated.id,
+          orderId: order.id,
+          shopId,
+          userId: session.id,
+          status: order.status,
         });
         await tx.activityLog.create({
           data: {
@@ -253,12 +342,20 @@ export async function PATCH(request: Request, { params }: Params) {
         });
       }
 
+      logger.info("field_visit_checkout_transaction_done", { requestId, visitId: updated.id, shopId, userId: session.id });
       return updated;
     });
 
     return NextResponse.json({ success: true, visit });
   } catch (error) {
-    console.error("Visit update failed", error);
-    return NextResponse.json({ success: false, error: "Could not update visit" }, { status: 400 });
+    logger.error("field_visit_checkout_failed", {
+      requestId,
+      visitId: visitIdForLog,
+      shopId: shopIdForLog,
+      userId: sessionId,
+      error: errorMessage(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return NextResponse.json({ success: false, error: clientError(error) }, { status: 400 });
   }
 }

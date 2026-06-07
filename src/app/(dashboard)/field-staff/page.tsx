@@ -219,6 +219,7 @@ export default function FieldStaffPage() {
   const [location, setLocation] = useState<GeolocationPosition | null>(null);
   const [gpsState, setGpsState] = useState<GpsState>("idle");
   const [gpsError, setGpsError] = useState("");
+  const [checkoutSaving, setCheckoutSaving] = useState(false);
   const [lastGpsSyncAt, setLastGpsSyncAt] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -631,57 +632,79 @@ export default function FieldStaffPage() {
   function checkOut() {
     if (!isFieldWorker) return;
     if (!activeVisit) return;
+    if (checkoutSaving) return;
     runDirectGpsRequest({
       status: "ACTIVE",
       onSuccess: async (position) => {
+        setCheckoutSaving(true);
         const outcomeText = combinedOutcomeText(visitOutcomes, result);
         const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
         const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
         const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
-        const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "CHECK_OUT",
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            notes,
-            result,
+        try {
+          const payload = {
+              action: "CHECK_OUT",
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              notes,
+              result,
+              visitType,
+              outcome: outcomeText,
+              visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
+              nextAction: hasOrder ? undefined : nextAction || undefined,
+              recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+              nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+              followupNotes: notes,
+              orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+              orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
+              orderPriority: hasOrder ? orderPriority || undefined : undefined,
+              paymentMode: hasPayment ? paymentMode : undefined,
+              paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+              paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+              paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
+            };
+          console.info("[Field Visit] checkout payload", {
+            visitId: activeVisit.id,
             visitType,
-            outcome: outcomeText,
-            visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
-            nextAction: hasOrder ? undefined : nextAction || undefined,
-            recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-            nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-            followupNotes: notes,
-            orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-            orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
-            orderPriority: hasOrder ? orderPriority || undefined : undefined,
-            paymentMode: hasPayment ? paymentMode : undefined,
-            paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
-            paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
-            paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
-          }),
-        });
-        const data = await res.json();
-        if (!data.success) {
-          setMessage(data.error ?? "Could not check out.");
-          return;
+            result,
+            visitOutcomes: payload.visitOutcomes,
+            hasOrder,
+            hasPayment,
+            hasFollowup,
+            hasOrderDetails: Boolean(orderProductCategory.trim()),
+            paymentMode: payload.paymentMode,
+          });
+          const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json().catch(() => ({ success: false, error: "Server returned an unreadable response." }));
+          console.info("[Field Visit] checkout response", { ok: res.ok, status: res.status, data });
+          if (!res.ok || !data.success) {
+            setMessage(data.error ?? "Could not check out.");
+            return;
+          }
+          setActiveVisit(null);
+          setNotes("");
+          setRecoveryAmount("");
+          setNextFollowupDate("");
+          setNextAction("");
+          setOrderExpectedDelivery("");
+          setOrderProductCategory("");
+          setOrderPriority("Normal");
+          setPaymentMode(paymentModes[0]);
+          setPaymentReference("");
+          setPaymentBankName("");
+          setPaymentScreenshotUrl("");
+          setVisitOutcomes([]);
+          await loadVisits();
+        } catch (error) {
+          console.error("[Field Visit] checkout request failed", error);
+          setMessage(error instanceof Error ? error.message : "Could not check out.");
+        } finally {
+          setCheckoutSaving(false);
         }
-        setActiveVisit(null);
-        setNotes("");
-        setRecoveryAmount("");
-        setNextFollowupDate("");
-        setNextAction("");
-        setOrderExpectedDelivery("");
-        setOrderProductCategory("");
-        setOrderPriority("Normal");
-        setPaymentMode(paymentModes[0]);
-        setPaymentReference("");
-        setPaymentBankName("");
-        setPaymentScreenshotUrl("");
-        setVisitOutcomes([]);
-        await loadVisits();
       },
     });
   }
@@ -885,7 +908,7 @@ export default function FieldStaffPage() {
           paymentReference={paymentReference}
           paymentBankName={paymentBankName}
           paymentScreenshotUrl={paymentScreenshotUrl}
-          gpsChecking={gpsState === "checking"}
+          gpsChecking={gpsState === "checking" || checkoutSaving}
           onNotes={setNotes}
           onVisitType={setVisitType}
           onResult={setResult}
