@@ -183,12 +183,11 @@ const FILTERS: { value: FilterKey; label: string }[] = [
 ];
 
 const SCHEDULED_FILTERS: { value: ScheduledFilterKey; label: string }[] = [
-  { value: "all", label: "All Scheduled" },
-  { value: "today", label: "Today" },
+  { value: "all", label: "All" },
   { value: "upcoming", label: "Upcoming" },
+  { value: "today", label: "Due Today" },
   { value: "overdue", label: "Overdue" },
   { value: "promise", label: "Promise To Pay" },
-  { value: "reminder", label: "Reminder Set" },
 ];
 
 const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
@@ -842,53 +841,72 @@ function ScheduledQueueSection({
   };
 
   return (
-    <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm dark:border-blue-900 dark:bg-blue-950/30">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <CalendarClock className="h-5 w-5 text-blue-700 dark:text-blue-300" />
-            <h2 className="text-lg font-bold">Scheduled Follow-ups</h2>
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200">
+              <CalendarClock className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-xl font-bold text-slate-950 dark:text-white">Scheduled Follow-ups</h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {total} scheduled recovery reminders, sorted by what needs attention next.
+              </p>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-blue-900/70 dark:text-blue-100/70">
-            {total} manually scheduled, {overdueCount} overdue
-          </p>
         </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-3 text-sm font-semibold text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
-        >
-          {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-          {collapsed ? "Show" : "Hide"}
-        </button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center xl:justify-end">
+          <div className="grid grid-cols-3 gap-2 sm:min-w-[320px]">
+            <ScheduledMetric label="Upcoming" value={grouped.upcoming.length} tone="blue" />
+            <ScheduledMetric label="Due Today" value={grouped.today.length} tone="amber" />
+            <ScheduledMetric label="Overdue" value={overdueCount} tone="red" />
+          </div>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+          >
+            {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+            {collapsed ? "Show" : "Hide"}
+          </button>
+        </div>
       </div>
 
       {!collapsed && (
         <>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {SCHEDULED_FILTERS.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                onClick={() => onFilterChange(item.value)}
-                className={cn(
-                  "shrink-0 rounded-full border px-3 py-2 text-xs font-semibold",
-                  filter === item.value
-                    ? "border-blue-700 bg-blue-700 text-white"
-                    : "border-blue-200 bg-white text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="mt-5 overflow-x-auto pb-1">
+            <div className="inline-flex min-w-max rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
+              {SCHEDULED_FILTERS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => onFilterChange(item.value)}
+                  className={cn(
+                    "shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition sm:px-4",
+                    filter === item.value
+                      ? "bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white"
+                      : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {customers.length === 0 ? (
-            <div className="mt-3 rounded-lg border border-dashed border-blue-300 bg-white/80 p-5 text-center text-sm text-blue-900/70 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-100/70">
-              No scheduled follow-ups match this view.
+            <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-950/50">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-slate-400 shadow-sm dark:bg-slate-900">
+                <CalendarClock className="h-6 w-6" />
+              </div>
+              <h3 className="mt-3 text-base font-bold text-slate-900 dark:text-white">No scheduled follow-ups here</h3>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+                New reminders, promises, and rescheduled recovery tasks will appear in this queue when they match the selected view.
+              </p>
             </div>
           ) : (
-            <div className="mt-3 space-y-4">
+            <div className="mt-5 space-y-5">
               <ScheduledGroup
                 title="Overdue"
                 description="Missed reminder time. Work these first."
@@ -921,6 +939,20 @@ function ScheduledQueueSection({
   );
 }
 
+function ScheduledMetric({ label, value, tone }: { label: string; value: number; tone: "blue" | "amber" | "red" }) {
+  const classes = {
+    blue: "border-blue-100 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100",
+    amber: "border-amber-100 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100",
+    red: "border-red-100 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-100",
+  }[tone];
+  return (
+    <div className={cn("rounded-xl border px-3 py-2 text-center", classes)}>
+      <p className="text-lg font-extrabold leading-none">{value}</p>
+      <p className="mt-1 text-[11px] font-semibold uppercase text-current/70">{label}</p>
+    </div>
+  );
+}
+
 function ScheduledGroup({
   title,
   description,
@@ -939,12 +971,12 @@ function ScheduledGroup({
   if (customers.length === 0) return null;
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-2 border-b border-slate-100 pb-2 dark:border-slate-800">
         <div>
-          <h3 className="text-sm font-bold uppercase tracking-wide text-blue-950 dark:text-blue-100">{title}</h3>
-          <p className="text-xs text-blue-900/70 dark:text-blue-100/70">{description}</p>
+          <h3 className="text-sm font-bold uppercase text-slate-800 dark:text-slate-100">{title}</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{description}</p>
         </div>
-        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-blue-900 dark:bg-blue-950 dark:text-blue-100">{customers.length}</span>
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{customers.length}</span>
       </div>
       <div className="space-y-3">
         {customers.map((customer) => (
@@ -975,58 +1007,99 @@ function ScheduledFollowUpCard({
   const scheduled = customer.scheduledFollowUp;
   const dueAt = new Date(scheduled.scheduledAt);
   const overdue = scheduled.overdue || isPastDue(dueAt);
+  const group = scheduledGroupFor(customer);
   const latest = latestFollowUp(customer);
   const notes = scheduled.notes || scheduled.customerResponse || scheduled.reminderNotes || latest?.notes || customer.notes || "No notes added.";
+  const isPromise = Boolean(scheduled.promiseToPay);
+  const isReminder = Boolean(scheduled.manualReminder || scheduled.reminderEnabled);
+  const stateLabel = overdue ? "Overdue" : group === "today" ? "Due Today" : "Upcoming";
+  const stateTone = overdue ? "red" : group === "today" ? "amber" : "blue";
+  const cardTone =
+    overdue
+      ? "border-red-200 bg-red-50/40 hover:border-red-300 dark:border-red-900 dark:bg-red-950/10"
+      : group === "today"
+        ? "border-amber-200 bg-amber-50/40 hover:border-amber-300 dark:border-amber-900 dark:bg-amber-950/10"
+        : "border-blue-200 bg-blue-50/30 hover:border-blue-300 dark:border-blue-900 dark:bg-blue-950/10";
 
   return (
     <article
       onClick={onOpen}
       className={cn(
-        "cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition dark:bg-slate-900",
-        active && "ring-2 ring-blue-500",
-        overdue ? "border-red-300 dark:border-red-900" : "border-blue-200 dark:border-blue-900"
+        "cursor-pointer rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
+        cardTone,
+        active && "ring-2 ring-brand-500"
       )}
     >
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-lg font-bold">{customer.partyName}</h3>
-            {scheduled.promiseToPay && <Badge tone="violet">Promise to pay</Badge>}
-            {(scheduled.manualReminder || scheduled.reminderEnabled) && <Badge tone="blue">Reminder set</Badge>}
-            {overdue && <Badge tone="red">Overdue</Badge>}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(270px,0.9fr)_190px] xl:items-center">
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+              <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{displayPhone(customer.contactNumber)}</p>
+            </div>
+            <Badge tone={stateTone}>{stateLabel}</Badge>
           </div>
-          <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{displayPhone(customer.contactNumber)}</p>
-          <p className="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{notes}</p>
+          <p className="line-clamp-2 text-sm leading-6 text-slate-700 dark:text-slate-300">{notes}</p>
+          <div className="flex flex-wrap gap-2">
+            {isPromise && <Badge tone="violet">Promise to pay</Badge>}
+            {isReminder && <Badge tone="blue">Reminder set</Badge>}
+            <Badge tone="slate">{statusLabel(scheduled.followUpType)}</Badge>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-4 lg:grid-cols-2">
-          <Info label="Balance" value={formatCurrency(customer.outstandingBalance)} />
-          <Info label={scheduled.promiseToPay ? "Payment expected" : "Scheduled"} value={formatDateTime(dueAt)} />
-          <Info label="Type" value={statusLabel(scheduled.followUpType)} />
-          <Info label="Assigned" value={scheduled.assignedTo || "Staff"} />
+        <div className="rounded-xl border border-white/80 bg-white/80 p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-950/50">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div>
+              <p className="text-xs font-semibold uppercase text-slate-400">Outstanding</p>
+              <p className="mt-1 text-lg font-extrabold text-slate-950 dark:text-white">{formatCurrency(customer.outstandingBalance)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-slate-400">
+                {isPromise ? "Payment Expected" : "Scheduled For"}
+              </p>
+              <p className="mt-1 font-bold text-slate-800 dark:text-slate-100">{formatDateTime(dueAt)}</p>
+            </div>
+            <div className="flex flex-wrap gap-2 sm:col-span-2 xl:col-span-1">
+              <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Priority: {customer.smartPriorityLabel || statusLabel(customer.smartPriority)}
+              </span>
+              <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                By {scheduled.assignedTo || "Staff"}
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-2 lg:min-w-40">
-          <span className={cn("rounded-full px-3 py-1 text-center text-xs font-bold", overdue ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100" : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100")}>
+        <div className="flex flex-col gap-2 xl:min-w-44">
+          <span className={cn("rounded-xl px-3 py-2 text-center text-xs font-extrabold", badgeToneClass(stateTone))}>
             {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
-          <div className="grid grid-cols-2 gap-2">
-            <QuickButton label="Open Follow-up" onClick={onOpen} />
-            <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
-          </div>
+          <QuickButton label="Open Follow-up" onClick={onOpen} />
+          <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
         </div>
+      </div>
+      <div className="mt-4 flex items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
+        <Bell className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+        <span>{isPromise ? "Payment reminder" : "Reminder"} scheduled for {formatDateTime(dueAt)}</span>
       </div>
     </article>
   );
 }
 
-function Badge({ children, tone }: { children: React.ReactNode; tone: "blue" | "red" | "violet" }) {
+function Badge({ children, tone }: { children: React.ReactNode; tone: "blue" | "red" | "violet" | "amber" | "green" | "slate" }) {
+  return <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-bold uppercase", badgeToneClass(tone))}>{children}</span>;
+}
+
+function badgeToneClass(tone: "blue" | "red" | "violet" | "amber" | "green" | "slate") {
   const classes = {
     blue: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100",
     red: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100",
     violet: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-100",
+    amber: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-100",
+    green: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100",
+    slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
   }[tone];
-  return <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", classes)}>{children}</span>;
+  return classes;
 }
 
 function QueueSection({
@@ -1198,7 +1271,7 @@ function QuickButton({ label, onClick }: { label: string; onClick: () => void })
         event.stopPropagation();
         onClick();
       }}
-      className="min-h-10 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+      className="min-h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-brand-700 dark:hover:text-brand-200"
     >
       {label}
     </button>
@@ -1360,11 +1433,12 @@ function ActionPanel({
   };
 
   return (
-    <aside className="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-3 xl:sticky xl:top-4 xl:z-0 xl:block xl:h-[calc(100vh-2rem)] xl:bg-transparent xl:p-0">
-      <div className="ml-auto flex min-h-full w-full max-w-lg flex-col rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 xl:min-h-0 xl:shadow-sm">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4 dark:border-slate-800">
+    <aside className="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-3 xl:sticky xl:top-5 xl:z-0 xl:block xl:h-[calc(100vh-2.5rem)] xl:bg-transparent xl:p-0">
+      <div className="ml-auto flex min-h-full w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 xl:min-h-0 xl:shadow-sm">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
           <div>
-            <h2 className="text-xl font-bold">{customer.partyName}</h2>
+            <p className="text-xs font-bold uppercase text-brand-600 dark:text-brand-300">What happened?</p>
+            <h2 className="mt-1 text-xl font-bold">{customer.partyName}</h2>
             <p className="text-sm text-slate-500">{formatCurrency(customer.outstandingBalance)} outstanding</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
@@ -1393,8 +1467,8 @@ function ActionPanel({
               </a>
             </div>
 
-            <div>
-              <p className="mb-2 text-sm font-semibold">What happened?</p>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+              <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the recovery outcome</p>
               <div className="grid grid-cols-2 gap-2">
                 {PRIMARY_ACTIONS.map((action) => (
                   <button
@@ -1402,7 +1476,7 @@ function ActionPanel({
                     type="button"
                     onClick={() => selectPrimaryAction(action.value)}
                     className={cn(
-                      "min-h-16 rounded-lg border px-3 py-2 text-left transition",
+                      "min-h-20 rounded-xl border bg-white px-3 py-3 text-left transition dark:bg-slate-900",
                       primaryAction === action.value
                         ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500 dark:bg-brand-950 dark:text-brand-100"
                         : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -1413,7 +1487,7 @@ function ActionPanel({
                   </button>
                 ))}
               </div>
-              <div className={cn("mt-3 rounded-lg border px-3 py-2 text-sm font-semibold", selectedTone)}>
+              <div className={cn("mt-3 rounded-xl border px-3 py-2 text-sm font-bold", selectedTone)}>
                 Selected outcome: {statusLabel(status)}
               </div>
             </div>
