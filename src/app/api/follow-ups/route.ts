@@ -118,6 +118,7 @@ export async function GET(request: Request) {
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
+  const now = new Date();
 
   let where: Record<string, unknown> = {
     shopId,
@@ -132,7 +133,7 @@ export async function GET(request: Request) {
   } else if (filter === "overdue") {
     where = {
       ...where,
-      nextFollowupDate: { lt: todayStart },
+      nextFollowupDate: { lt: now },
     };
   }
 

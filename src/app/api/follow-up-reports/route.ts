@@ -346,6 +346,7 @@ export async function GET(request: Request) {
   const pendingOnly = searchParams.get("pendingOnly") === "true";
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
+  const now = new Date();
   const activityFrom = todayOnly ? todayStart : from;
   const activityTo = todayOnly ? todayEnd : to;
 
@@ -375,7 +376,7 @@ export async function GET(request: Request) {
     ...(promiseOnly ? { status: "PAYMENT_PROMISED" } : {}),
     ...(completedOnly ? { status: { in: ["PAID", "COMPLETED"] } } : {}),
     ...(pendingOnly ? { status: { in: ["PENDING", "RESCHEDULED", "NOT_REACHABLE", "PAYMENT_PROMISED"] } } : {}),
-    ...(overdueOnly ? { nextFollowupDate: { lt: todayStart } } : {}),
+    ...(overdueOnly ? { nextFollowupDate: { lt: now } } : {}),
     customer: customerWhere,
   };
 
@@ -545,7 +546,7 @@ export async function GET(request: Request) {
       lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
-      isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < todayStart),
+      isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < now),
       isPromise: followUp.status === "PAYMENT_PROMISED" || Boolean(followUp.promiseDate),
       notes,
       timeline: [{ at: latestActivityAt, type: humanStatus(followUp.sourceModule), summary, by: actor, status: statusLabel, notes }],
@@ -623,7 +624,7 @@ export async function GET(request: Request) {
       lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
-      isOverdue: Boolean(next.at && next.at < todayStart),
+      isOverdue: Boolean(next.at && next.at < now),
       isPromise: false,
       notes: visitNotes,
       timeline: [{ at: latestActivityAt, type: visit.visitType, summary, by: actor, status: visit.outcome ?? visit.status, notes: visitNotes }],
@@ -662,7 +663,7 @@ export async function GET(request: Request) {
       lastUpdatedAt: payment.paidAt,
       latestActivityAt: payment.paidAt,
       relativeActivityTime: relativeTime(payment.paidAt),
-      isOverdue: Boolean(next.at && next.at < todayStart),
+      isOverdue: Boolean(next.at && next.at < now),
       isPromise: false,
       notes: cleanText(payment.notes),
       timeline: [{ at: payment.paidAt, type: "Payment", summary: `Recovered ${formatMoney(payment.amount)}`, by: actor, status: "Recovered", notes: cleanText(payment.notes) }],
@@ -720,7 +721,7 @@ export async function GET(request: Request) {
       lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
-      isOverdue: Boolean(next.at && next.at < todayStart),
+      isOverdue: Boolean(next.at && next.at < now),
       isPromise: false,
       notes: chequeNotes,
       timeline: [{ at: latestActivityAt, type: "Cheque", summary, by: actor, status: statusLabel, notes: chequeNotes }],

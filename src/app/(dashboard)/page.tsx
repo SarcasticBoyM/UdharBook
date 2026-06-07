@@ -80,6 +80,7 @@ async function getStats(shopId: string): Promise<DashboardStats> {
   if (!shopId) return emptyStats;
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
+  const now = new Date();
   const nextWeek = new Date();
   nextWeek.setDate(nextWeek.getDate() + 7);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
@@ -133,7 +134,7 @@ async function getStats(shopId: string): Promise<DashboardStats> {
     todayFollowups: active.filter(
       (c) => c.nextFollowupDate && c.nextFollowupDate >= todayStart && c.nextFollowupDate <= todayEnd
     ).length,
-    overdueFollowups: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate < todayStart).length,
+    overdueFollowups: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate < now).length,
     highOutstanding: customers.filter((c) => c.outstandingBalance >= threshold).length,
     recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
     pendingOrders,

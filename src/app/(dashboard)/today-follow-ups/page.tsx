@@ -281,7 +281,38 @@ function latestFollowUp(customer: QueueCustomer) {
 
 function daysOverdue(customer: QueueCustomer) {
   if (!customer.nextFollowupDate) return 0;
-  return Math.max(0, Math.floor((startOfToday().getTime() - new Date(customer.nextFollowupDate).getTime()) / 86400000));
+  return Math.max(0, Math.ceil((Date.now() - new Date(customer.nextFollowupDate).getTime()) / 86400000));
+}
+
+function isPastDue(date: string | Date | null | undefined) {
+  if (!date) return false;
+  return new Date(date).getTime() < Date.now();
+}
+
+function followUpTimingLabel(date: string | Date | null | undefined, promiseToPay = false) {
+  if (!date) return "-";
+  const target = new Date(date);
+  const diff = target.getTime() - Date.now();
+  const time = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(target);
+  const todayStart = startOfToday();
+  const todayEnd = endOfToday();
+  const tomorrowStart = startOfToday();
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+  const tomorrowEnd = new Date(tomorrowStart);
+  tomorrowEnd.setHours(23, 59, 59, 999);
+  const dateText = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short" }).format(target);
+
+  if (diff < 0) {
+    const abs = Math.abs(diff);
+    const minutes = Math.max(1, Math.round(abs / 60000));
+    const hours = Math.round(abs / 3600000);
+    const days = Math.round(abs / 86400000);
+    const unit = days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : hours >= 1 ? `${hours}h` : `${minutes}m`;
+    return promiseToPay ? `Overdue after missed promise by ${unit}` : `Overdue by ${unit}`;
+  }
+  if (target >= todayStart && target <= todayEnd) return promiseToPay ? `Payment expected today ${time}` : `Due today ${time}`;
+  if (target >= tomorrowStart && target <= tomorrowEnd) return promiseToPay ? `Payment expected tomorrow ${time}` : `Upcoming tomorrow ${time}`;
+  return promiseToPay ? `Payment expected on ${dateText}` : `Upcoming ${dateText}`;
 }
 
 function derivedPriority(customer: QueueCustomer): FollowUpPriority {
@@ -303,33 +334,13 @@ function statusLabel(status: string | null | undefined) {
   return status ? status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()) : "-";
 }
 
-function scheduledCountdown(date: string | Date) {
-  const target = new Date(date);
-  const diff = target.getTime() - Date.now();
-  const abs = Math.abs(diff);
-  const minutes = Math.max(1, Math.round(abs / 60000));
-  const hours = Math.round(abs / 3600000);
-  const days = Math.round(abs / 86400000);
-  const unit = days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : hours >= 1 ? `${hours}h` : `${minutes}m`;
-  if (diff < 0) return `Overdue by ${unit}`;
-
-  const tomorrow = startOfToday();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowEnd = new Date(tomorrow);
-  tomorrowEnd.setHours(23, 59, 59, 999);
-  if (target >= tomorrow && target <= tomorrowEnd) {
-    return `Tomorrow ${new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(target)}`;
-  }
-  return `Due in ${unit}`;
-}
-
 function matchesScheduledFilter(item: ScheduledQueueCustomer, filter: ScheduledFilterKey) {
   const scheduledAt = new Date(item.scheduledFollowUp.scheduledAt);
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
   if (filter === "today") return scheduledAt >= todayStart && scheduledAt <= todayEnd;
   if (filter === "upcoming") return scheduledAt > todayEnd;
-  if (filter === "overdue") return scheduledAt < todayStart || scheduledAt.getTime() < Date.now();
+  if (filter === "overdue") return isPastDue(scheduledAt);
   if (filter === "promise") return item.scheduledFollowUp.promiseToPay;
   if (filter === "reminder") return item.scheduledFollowUp.manualReminder || item.scheduledFollowUp.reminderEnabled;
   return true;
@@ -895,7 +906,7 @@ function ScheduledFollowUpCard({
 }) {
   const scheduled = customer.scheduledFollowUp;
   const dueAt = new Date(scheduled.scheduledAt);
-  const overdue = dueAt.getTime() < Date.now();
+  const overdue = scheduled.overdue || isPastDue(dueAt);
   const latest = latestFollowUp(customer);
   const notes = scheduled.notes || scheduled.customerResponse || scheduled.reminderNotes || latest?.notes || customer.notes || "No notes added.";
 
@@ -922,14 +933,14 @@ function ScheduledFollowUpCard({
 
         <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-4 lg:grid-cols-2">
           <Info label="Balance" value={formatCurrency(customer.outstandingBalance)} />
-          <Info label="Scheduled" value={formatDateTime(dueAt)} />
+          <Info label={scheduled.promiseToPay ? "Payment expected" : "Scheduled"} value={formatDateTime(dueAt)} />
           <Info label="Type" value={statusLabel(scheduled.followUpType)} />
           <Info label="Assigned" value={scheduled.assignedTo || "Staff"} />
         </div>
 
         <div className="flex flex-col gap-2 lg:min-w-40">
           <span className={cn("rounded-full px-3 py-1 text-center text-xs font-bold", overdue ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100" : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100")}>
-            {scheduledCountdown(dueAt)}
+            {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
           <div className="grid grid-cols-2 gap-2">
             <QuickButton label="Open Follow-up" onClick={onOpen} />
@@ -1009,7 +1020,6 @@ function CustomerCard({
   const priority = customer.smartPriority ?? derivedPriority(customer);
   const priorityName = customer.smartPriorityLabel ?? (priority === "URGENT" ? "Critical" : statusLabel(priority));
   const tone = cardTone(customer);
-  const overdue = daysOverdue(customer);
 
   const handleTouchEnd = (event: React.TouchEvent) => {
     const start = touchStart.current;
@@ -1067,7 +1077,7 @@ function CustomerCard({
             <Info label="Last payment" value={lastPayment ? `${formatCurrency(lastPayment.amount)} / ${formatDate(lastPayment.paidAt)}` : "-"} />
             <Info label="Last follow-up" value={formatDateTime(customer.lastFollowupDate ?? latest?.followupDate)} />
             <Info label="Next follow-up" value={formatDateTime(customer.nextFollowupDate ?? latest?.nextFollowupDate)} />
-            <Info label="Overdue" value={overdue ? `${overdue} day${overdue === 1 ? "" : "s"}` : "Due today"} />
+            <Info label="Timing" value={followUpTimingLabel(customer.nextFollowupDate ?? latest?.nextFollowupDate, latest?.status === "PAYMENT_PROMISED")} />
           </div>
 
           <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800/70">

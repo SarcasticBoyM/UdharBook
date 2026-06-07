@@ -29,7 +29,11 @@ function daysSince(date: Date | null | undefined) {
 
 function daysOverdue(date: Date | null | undefined) {
   if (!date) return 0;
-  return Math.max(0, Math.floor((startOfToday().getTime() - date.getTime()) / 86400000));
+  return Math.max(0, Math.ceil((Date.now() - date.getTime()) / 86400000));
+}
+
+function isPastDue(date: Date | null | undefined, now = new Date()) {
+  return Boolean(date && date.getTime() < now.getTime());
 }
 
 function smartPriority(customer: {
@@ -191,7 +195,7 @@ function compareBy(sort: SortKey, a: QueueCustomer, b: QueueCustomer) {
 
 function matchesFilter(filter: string, customer: QueueCustomer, todayStart: Date, todayEnd: Date) {
   const latest = customer.followUps[0];
-  const overdue = customer.nextFollowupDate ? customer.nextFollowupDate < todayStart : false;
+  const overdue = isPastDue(customer.nextFollowupDate);
   const dueToday = customer.nextFollowupDate
     ? customer.nextFollowupDate >= todayStart && customer.nextFollowupDate <= todayEnd
     : false;
@@ -207,7 +211,7 @@ function matchesFilter(filter: string, customer: QueueCustomer, todayStart: Date
 }
 
 function databaseFilter(filter: string, todayStart: Date, todayEnd: Date): Prisma.CustomerWhereInput {
-  if (filter === "overdue") return { nextFollowupDate: { lt: todayStart } };
+  if (filter === "overdue") return { nextFollowupDate: { lt: new Date() } };
   if (filter === "today") return { nextFollowupDate: { gte: todayStart, lte: todayEnd } };
   if (filter === "high_amount") return { outstandingBalance: { gte: HIGH_AMOUNT } };
   if (filter === "no_followup") return { followUps: { none: {} }, lastFollowupDate: null };
@@ -217,7 +221,7 @@ function databaseFilter(filter: string, todayStart: Date, todayEnd: Date): Prism
     return {
       OR: [
         { status: "HIGH_RISK" },
-        { nextFollowupDate: { lt: todayStart } },
+        { nextFollowupDate: { lt: new Date() } },
         { outstandingBalance: { gte: HIGH_AMOUNT } },
         { followUps: { some: { priority: "URGENT" } } },
       ],
@@ -391,7 +395,7 @@ export async function GET(request: Request) {
       orderBy: { createdById: "asc" },
       _count: { _all: true },
     }),
-    prisma.customer.count({ where: { shopId, outstandingBalance: { gt: 0 }, nextFollowupDate: { lt: todayStart } } }),
+    prisma.customer.count({ where: { shopId, outstandingBalance: { gt: 0 }, nextFollowupDate: { lt: new Date() } } }),
   ]);
 
   const scheduledRows = await prisma.followUp.findMany({
@@ -437,7 +441,7 @@ export async function GET(request: Request) {
         reminderEnabled: row.reminderEnabled,
         manualReminder: row.manualReminder,
         promiseToPay: row.status === "PAYMENT_PROMISED",
-        overdue: scheduledAt < todayStart,
+        overdue: isPastDue(scheduledAt),
       },
     };
     candidate.queueScore = queueScore(candidate);

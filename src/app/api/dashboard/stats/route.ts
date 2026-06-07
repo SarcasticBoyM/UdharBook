@@ -66,6 +66,7 @@ export async function GET(request: Request) {
 
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
+  const now = new Date();
   const nextWeek = new Date();
   nextWeek.setDate(nextWeek.getDate() + 7);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
@@ -84,7 +85,7 @@ export async function GET(request: Request) {
       c.nextFollowupDate <= todayEnd
   ).length;
   const overdueFollowups = active.filter(
-    (c) => c.nextFollowupDate && c.nextFollowupDate < todayStart
+    (c) => c.nextFollowupDate && c.nextFollowupDate < now
   ).length;
   const highOutstanding = customers.filter((c) => c.outstandingBalance >= threshold).length;
 
