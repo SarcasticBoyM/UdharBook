@@ -104,7 +104,7 @@ function transitionStatus(current: OrderStatus, action: string) {
   }
   if (action === "DISPATCH") {
     if (!isReceivedStatus(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_DISPATCHED");
-    return "PROCESSING" as OrderStatus;
+    return current === "PENDING" ? ("PROCESSING" as OrderStatus) : ("DISPATCHED" as OrderStatus);
   }
   if (action === "DELIVER") {
     if (!isDispatchedStatus(current)) throw new Error("ONLY_DISPATCHED_ORDERS_CAN_BE_DELIVERED");
@@ -404,6 +404,7 @@ export async function PATCH(request: Request) {
     const action = body.action ?? actionForStatus(body.status as OrderStatus | undefined);
     const preferredDeliveryDate = body.preferredDeliveryDate === undefined ? undefined : parseOptionalDate(body.preferredDeliveryDate);
     const now = new Date();
+    let previousStatusForActivity: OrderStatus | null = null;
 
     const order = await prisma.$transaction(async (tx) => {
       const existing = await tx.order.findFirst({
@@ -414,6 +415,19 @@ export async function PATCH(request: Request) {
 
       const nextStatus = transitionStatus(existing.status, action);
       const isEdit = action === "EDIT";
+      previousStatusForActivity = existing.status;
+      logger.info("order_transition_validated", {
+        requestId,
+        shopId,
+        userId: session.id,
+        role: session.role,
+        orderId: existing.id,
+        currentStatus: existing.status,
+        normalizedCurrentStatus: normalizeStatus(existing.status),
+        requestedAction: action,
+        nextStatus,
+        normalizedNextStatus: normalizeStatus(nextStatus),
+      });
       const updated = await tx.order.update({
         where: { id: existing.id },
         data: {
@@ -427,12 +441,16 @@ export async function PATCH(request: Request) {
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true } },
           createdBy: { select: { name: true, role: true } },
-          activities: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            include: { user: { select: { name: true, role: true } } },
-          },
         },
+      });
+      logger.info("order_transition_update_success", {
+        requestId,
+        shopId,
+        userId: session.id,
+        orderId: updated.id,
+        previousStatus: existing.status,
+        newStatus: updated.status,
+        action,
       });
 
       await tx.activityLog.create({
@@ -452,9 +470,19 @@ export async function PATCH(request: Request) {
       orderId: order.id,
       userId: session.id,
       action: action === "EDIT" ? "EDITED" : action,
-      previousStatus: order.activities?.[0]?.newStatus ?? undefined,
+      previousStatus: previousStatusForActivity,
       newStatus: order.status,
-      notes: action === "EDIT" ? "Order details edited" : `Order status updated to ${order.status}`,
+      notes: action === "EDIT" ? "Order details edited" : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
+    });
+    logger.info("order_update_success", {
+      requestId,
+      shopId,
+      userId: session.id,
+      role: session.role,
+      orderId: order.id,
+      action,
+      previousStatus: previousStatusForActivity,
+      newStatus: order.status,
     });
     return NextResponse.json({ order });
   } catch (error) {

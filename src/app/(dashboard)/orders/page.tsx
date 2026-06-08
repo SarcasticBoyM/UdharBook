@@ -128,6 +128,7 @@ export default function OrderDeskPage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
   const [customerQuery, setCustomerQuery] = useState("");
@@ -243,16 +244,21 @@ export default function OrderDeskPage() {
 
   async function runAction(orderId: string, action: "DISPATCH" | "DELIVER" | "CANCEL") {
     setMessage("");
+    setActionLoading(`${orderId}:${action}`);
+    console.info("[Order Desk] action start", { orderId, action });
     const res = await fetch("/api/orders", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orderId, action }),
     });
     const data = await res.json().catch(() => ({}));
+    console.info("[Order Desk] action response", { orderId, action, ok: res.ok, status: res.status, data });
+    setActionLoading(null);
     if (!res.ok) {
       setMessage(data.error ?? "Could not update order.");
       return;
     }
+    setOrders((current) => current.map((order) => (order.id === orderId ? { ...order, ...data.order, activities: order.activities } : order)));
     await load();
   }
 
@@ -335,18 +341,18 @@ export default function OrderDeskPage() {
                   </button>
                 )}
                 {canDispatch(order) && (
-                  <button type="button" onClick={() => runAction(order.id, "DISPATCH")} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">
-                    Dispatch Order
+                  <button type="button" disabled={actionLoading === `${order.id}:DISPATCH`} onClick={() => runAction(order.id, "DISPATCH")} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                    {actionLoading === `${order.id}:DISPATCH` ? "Dispatching..." : "Dispatch Order"}
                   </button>
                 )}
                 {canDeliver(order) && (
-                  <button type="button" onClick={() => runAction(order.id, "DELIVER")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">
-                    Mark Delivered
+                  <button type="button" disabled={actionLoading === `${order.id}:DELIVER`} onClick={() => runAction(order.id, "DELIVER")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                    {actionLoading === `${order.id}:DELIVER` ? "Saving..." : "Mark Delivered"}
                   </button>
                 )}
                 {canCancel(order) && (
-                  <button type="button" onClick={() => runAction(order.id, "CANCEL")} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700">
-                    Cancel Order
+                  <button type="button" disabled={actionLoading === `${order.id}:CANCEL`} onClick={() => runAction(order.id, "CANCEL")} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-60">
+                    {actionLoading === `${order.id}:CANCEL` ? "Cancelling..." : "Cancel Order"}
                   </button>
                 )}
               </div>
