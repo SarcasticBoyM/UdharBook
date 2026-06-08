@@ -5,7 +5,6 @@ import Image from "next/image";
 import {
   Activity,
   Camera,
-  CheckCircle2,
   Clock,
   IndianRupee,
   LocateFixed,
@@ -113,14 +112,21 @@ const leadVisitOutcomes = [
 const paymentModes = ["Cash", "NEFT / RTGS", "Cheque Collected"];
 const visitOutcomeOptions = [
   "Payment Collected",
-  "Order Received",
-  "Follow-up Required",
-  "Customer Unavailable",
-  "Product Discussion",
-  "Customer Busy",
   "Payment Promised",
+  "Order Received",
+  "Cheque Collected",
+  "Follow-up Later",
+  "Customer Unavailable",
+  "Not Reachable",
+  "Wrong Number",
+  "Product Discussion",
+  "Complaint",
+  "Site Visit",
+  "Delivery Discussion",
+  "Partial Payment",
+  "Paid Fully",
+  "Call Back Requested",
   "Revisit Required",
-  "Discussion Done",
 ];
 const salesOrderStatuses = [
   "Order Received",
@@ -143,7 +149,7 @@ const visitTypes = [
   "Market Survey",
   "General Visit",
 ];
-const followUpRequiredOutcomes = new Set(["Follow-up Required", "Revisit Required", "Payment Promised", "Customer Unavailable", "Customer Busy"]);
+const followUpRequiredOutcomes = new Set(["Follow-up Later", "Revisit Required", "Payment Promised", "Customer Unavailable", "Not Reachable", "Call Back Requested"]);
 const GPS_SESSION_KEY = "udharbook:gps-active-session";
 const customerSourceOptions: { label: string; value: CustomerSource }[] = [
   { label: "Recent Customers", value: "recent" },
@@ -189,10 +195,6 @@ function needsNextFollowup(result: string) {
   return followUpRequiredOutcomes.has(result);
 }
 
-function uniqueOutcomes(values: (string | undefined | null)[]) {
-  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
-}
-
 function hasVisitOutcome(outcomes: string[], outcome: string) {
   return outcomes.includes(outcome);
 }
@@ -206,7 +208,7 @@ function isOrderOutcome(visitType: string, result: string, outcomes: string[]) {
 }
 
 function isPaymentOutcome(visitType: string, outcomes: string[]) {
-  return isPaymentCollection(visitType) || hasVisitOutcome(outcomes, "Payment Collected");
+  return isPaymentCollection(visitType) || outcomes.some((outcome) => ["Payment Collected", "Partial Payment", "Paid Fully", "Cheque Collected"].includes(outcome));
 }
 
 function needsNextFollowupOutcome(result: string, outcomes: string[]) {
@@ -219,7 +221,7 @@ export default function FieldStaffPage() {
   const [location, setLocation] = useState<GeolocationPosition | null>(null);
   const [gpsState, setGpsState] = useState<GpsState>("idle");
   const [gpsError, setGpsError] = useState("");
-  const [checkoutSaving, setCheckoutSaving] = useState(false);
+  const [visitSaving, setVisitSaving] = useState(false);
   const [lastGpsSyncAt, setLastGpsSyncAt] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -234,7 +236,6 @@ export default function FieldStaffPage() {
   const [leadAddress, setLeadAddress] = useState("");
   const [leadArea, setLeadArea] = useState("");
   const [visitType, setVisitType] = useState("Sales Visit");
-  const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [staffStatuses, setStaffStatuses] = useState<StaffStatus[]>([]);
   const [notes, setNotes] = useState("");
@@ -251,13 +252,13 @@ export default function FieldStaffPage() {
   const [recoveryAmount, setRecoveryAmount] = useState("");
   const [nextFollowupDate, setNextFollowupDate] = useState("");
   const [showChequeFlow, setShowChequeFlow] = useState(false);
+  const [chequeVisit, setChequeVisit] = useState<Visit | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
-  const activeVisitRef = useRef<Visit | null>(null);
 
   const isFieldWorker = role === "FIELD_SALES" || role === "STAFF";
   const isAdmin = role === "SHOP_ADMIN";
-  const canCheckIn = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && !activeVisit && gpsState !== "checking");
+  const canSaveVisit = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && visitOutcomes.length > 0 && gpsState !== "checking" && !visitSaving);
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
   const summary = useMemo(
     () => ({
@@ -302,10 +303,6 @@ export default function FieldStaffPage() {
   }, []);
 
   useEffect(() => {
-    activeVisitRef.current = activeVisit;
-  }, [activeVisit]);
-
-  useEffect(() => {
     const options = resultOptionsFor(visitType);
     if (!options.includes(result)) {
       setResult(options[0]);
@@ -315,22 +312,6 @@ export default function FieldStaffPage() {
   useEffect(() => {
     setShowChequeFlow(isPaymentOutcome(visitType, visitOutcomes) && paymentMode === "Cheque Collected");
   }, [paymentMode, visitOutcomes, visitType]);
-
-  useEffect(() => {
-    if (!activeVisit) return;
-    setVisitType(activeVisit.visitType ?? "General Visit");
-    setResult(activeVisit.outcome ?? activeVisit.result ?? resultOptionsFor(activeVisit.visitType ?? "General Visit")[0]);
-    setVisitOutcomes(uniqueOutcomes((activeVisit.outcome ?? activeVisit.result ?? "").split(",")));
-    setNextAction(activeVisit.nextAction ?? "");
-    setOrderProductCategory(activeVisit.orderProductCategory ?? "");
-    setOrderPriority(activeVisit.orderPriority ?? "Normal");
-    setOrderExpectedDelivery(activeVisit.orderExpectedDelivery ? activeVisit.orderExpectedDelivery.slice(0, 10) : "");
-    setPaymentMode(activeVisit.paymentMode ?? paymentModes[0]);
-    setPaymentReference(activeVisit.paymentReference ?? "");
-    setPaymentBankName(activeVisit.paymentBankName ?? "");
-    setPaymentScreenshotUrl(activeVisit.paymentScreenshotUrl ?? "");
-    setRecoveryAmount(activeVisit.recoveryAmount ? String(activeVisit.recoveryAmount) : "");
-  }, [activeVisit]);
 
   const stopGpsWatcher = useCallback(() => {
     if (watchIdRef.current !== null && navigator.geolocation) {
@@ -365,7 +346,7 @@ export default function FieldStaffPage() {
         setLocation(position);
         setGpsState("active");
         setGpsError("");
-        await sendLocation(position, activeVisitRef.current ? "ON_VISIT" : "ACTIVE").catch((error) => {
+        await sendLocation(position, "ACTIVE").catch((error) => {
           console.error("[Field GPS] background sync failed", error);
         });
       },
@@ -406,17 +387,9 @@ export default function FieldStaffPage() {
     const data = await res.json();
     if (data.success) {
       setVisits(data.visits);
-      const openVisit = isFieldWorker ? data.activeVisit ?? data.visits.find((visit: Visit) => visit.status === "CHECKED_IN") ?? null : null;
-      setActiveVisit(openVisit);
-      activeVisitRef.current = openVisit;
-      setShowChequeFlow(openVisit?.paymentMode === "Cheque Collected");
-      console.info("[Field Visit] active state refreshed", {
-        activeVisitId: openVisit?.id ?? null,
-        activeVisitStatus: openVisit?.status ?? null,
-        visits: data.visits?.length ?? 0,
-      });
+      console.info("[Field Visit] visits refreshed", { visits: data.visits?.length ?? 0 });
     }
-  }, [isFieldWorker]);
+  }, []);
 
   const loadStaffStatuses = useCallback(async () => {
     if (!isAdmin) return;
@@ -512,7 +485,7 @@ export default function FieldStaffPage() {
       }
     }
     runDirectGpsRequest({
-      status: activeVisitRef.current ? "ON_VISIT" : "ACTIVE",
+      status: "ACTIVE",
       onSuccess: () => {
         window.localStorage.setItem(GPS_SESSION_KEY, "true");
         startGpsWatcher(source);
@@ -522,7 +495,7 @@ export default function FieldStaffPage() {
 
   const requestGPS = () => ensureGpsSession("gps-button");
   const forceRequestGPS = () => runDirectGpsRequest({
-    status: activeVisit ? "ON_VISIT" : "ACTIVE",
+    status: "ACTIVE",
     onSuccess: () => {
       window.localStorage.setItem(GPS_SESSION_KEY, "true");
       startGpsWatcher("force-button");
@@ -538,7 +511,7 @@ export default function FieldStaffPage() {
     setTracking(true);
     window.localStorage.setItem(GPS_SESSION_KEY, "true");
     runDirectGpsRequest({
-      status: activeVisitRef.current ? "ON_VISIT" : "ACTIVE",
+      status: "ACTIVE",
       onSuccess: () => startGpsWatcher("start-day"),
     });
     await fetch("/api/field-staff/attendance", {
@@ -573,29 +546,32 @@ export default function FieldStaffPage() {
     setResult(outcome);
   }
 
-  async function saveCheckIn(position: GeolocationPosition) {
+  async function saveVisitAtLocation(position: GeolocationPosition) {
     if (!isFieldWorker) return;
     if (!selectedCustomer && !leadName.trim()) return;
     const outcomeText = combinedOutcomeText(visitOutcomes, result);
     const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
     const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
     const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
-    const res = await fetch("/api/field-staff/visits", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    setVisitSaving(true);
+    try {
+      const res = await fetch("/api/field-staff/visits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
         customerId: selectedCustomer?.id,
         customerName: selectedCustomer?.partyName ?? leadName.trim(),
         mobileNumber: selectedCustomer?.contactNumber ?? leadMobile,
         address: leadAddress || undefined,
         visitType,
         outcome: outcomeText,
+        visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
         nextAction: hasOrder ? undefined : nextAction || undefined,
         nextVisitDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
         orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
         orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
         orderPriority: hasOrder ? orderPriority || undefined : undefined,
-        paymentMode: hasPayment ? paymentMode : undefined,
+        paymentMode: hasPayment || visitOutcomes.includes("Cheque Collected") ? (visitOutcomes.includes("Cheque Collected") ? "Cheque Collected" : paymentMode) : undefined,
         paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
         paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
         paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
@@ -607,114 +583,48 @@ export default function FieldStaffPage() {
         notes,
         recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
         nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-      }),
-    });
-    const data = await res.json();
-    if (!data.success) {
-      setMessage(data.error ?? "Could not check in.");
-      return;
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setMessage(data.error ?? "Could not save visit.");
+        return;
+      }
+      const needsCheque = visitOutcomes.includes("Cheque Collected") || paymentMode === "Cheque Collected";
+      setChequeVisit(needsCheque ? data.visit : null);
+      setShowChequeFlow(needsCheque);
+      setSelectedCustomer(null);
+      setSearch("");
+      setCustomers([]);
+      setShowNewVisit(false);
+      setLeadName("");
+      setLeadContactPerson("");
+      setLeadMobile("");
+      setLeadAddress("");
+      setLeadArea("");
+      setNotes("");
+      setVisitOutcomes([]);
+      setRecoveryAmount("");
+      setNextFollowupDate("");
+      setNextAction("");
+      setOrderExpectedDelivery("");
+      setOrderProductCategory("");
+      setOrderPriority("Normal");
+      setPaymentMode(paymentModes[0]);
+      setPaymentReference("");
+      setPaymentBankName("");
+      setPaymentScreenshotUrl("");
+      setMessage(needsCheque ? "Visit saved. Add cheque details below." : "Visit saved successfully.");
+      await loadVisits();
+    } finally {
+      setVisitSaving(false);
     }
-    setActiveVisit(data.visit);
-    setSelectedCustomer(null);
-    setSearch("");
-    setCustomers([]);
-    setShowNewVisit(false);
-    setLeadName("");
-    setLeadContactPerson("");
-    setLeadMobile("");
-        setLeadAddress("");
-        setLeadArea("");
-        setNotes("");
-        setVisitOutcomes([]);
-        await loadVisits();
       }
 
-  function checkIn() {
+  function saveVisit() {
     if (!isFieldWorker) return;
-    if (!canCheckIn) return;
-    runDirectGpsRequest({ status: "ON_VISIT", onSuccess: saveCheckIn });
-  }
-
-  function checkOut() {
-    if (!isFieldWorker) return;
-    if (!activeVisit) return;
-    if (checkoutSaving) return;
-    runDirectGpsRequest({
-      status: "ACTIVE",
-      onSuccess: async (position) => {
-        setCheckoutSaving(true);
-        const outcomeText = combinedOutcomeText(visitOutcomes, result);
-        const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
-        const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
-        const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
-        try {
-          const payload = {
-              action: "CHECK_OUT",
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              notes,
-              result,
-              visitType,
-              outcome: outcomeText,
-              visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
-              nextAction: hasOrder ? undefined : nextAction || undefined,
-              recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-              nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-              followupNotes: notes,
-              orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-              orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
-              orderPriority: hasOrder ? orderPriority || undefined : undefined,
-              paymentMode: hasPayment ? paymentMode : undefined,
-              paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
-              paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
-              paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
-            };
-          console.info("[Field Visit] checkout payload", {
-            visitId: activeVisit.id,
-            visitType,
-            result,
-            visitOutcomes: payload.visitOutcomes,
-            hasOrder,
-            hasPayment,
-            hasFollowup,
-            hasOrderDetails: Boolean(orderProductCategory.trim()),
-            paymentMode: payload.paymentMode,
-          });
-          const res = await fetch(`/api/field-staff/visits/${activeVisit.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const data = await res.json().catch(() => ({ success: false, error: "Server returned an unreadable response." }));
-          console.info("[Field Visit] checkout response", { ok: res.ok, status: res.status, data });
-          if (!res.ok || !data.success) {
-            setMessage(data.error ?? "Could not check out.");
-            return;
-          }
-          setActiveVisit(null);
-          activeVisitRef.current = null;
-          setNotes("");
-          setRecoveryAmount("");
-          setNextFollowupDate("");
-          setNextAction("");
-          setOrderExpectedDelivery("");
-          setOrderProductCategory("");
-          setOrderPriority("Normal");
-          setPaymentMode(paymentModes[0]);
-          setPaymentReference("");
-          setPaymentBankName("");
-          setPaymentScreenshotUrl("");
-          setVisitOutcomes([]);
-          setMessage("Visit completed successfully.");
-          await loadVisits();
-        } catch (error) {
-          console.error("[Field Visit] checkout request failed", error);
-          setMessage(error instanceof Error ? error.message : "Could not check out.");
-        } finally {
-          setCheckoutSaving(false);
-        }
-      },
-    });
+    if (!canSaveVisit) return;
+    runDirectGpsRequest({ status: "ACTIVE", onSuccess: saveVisitAtLocation });
   }
 
   function startNewVisit(prefill = search) {
@@ -899,47 +809,13 @@ export default function FieldStaffPage() {
 
       {isAdmin && <StaffStatusPanel staff={staffStatuses} />}
 
-      {isFieldWorker && activeVisit ? (
-        <ActiveVisitCard
-          visit={activeVisit}
-          visitType={visitType}
-          notes={notes}
-          result={result}
-          visitOutcomes={visitOutcomes}
-          recoveryAmount={recoveryAmount}
-          nextFollowupDate={nextFollowupDate}
-          nextAction={nextAction}
-          orderExpectedDelivery={orderExpectedDelivery}
-          orderProductCategory={orderProductCategory}
-          orderPriority={orderPriority}
-          paymentMode={paymentMode}
-          paymentReference={paymentReference}
-          paymentBankName={paymentBankName}
-          paymentScreenshotUrl={paymentScreenshotUrl}
-          gpsChecking={gpsState === "checking" || checkoutSaving}
-          onNotes={setNotes}
-          onVisitType={setVisitType}
-          onResult={setResult}
-          onToggleOutcome={toggleVisitOutcome}
-          onRecovery={setRecoveryAmount}
-          onNextFollowup={setNextFollowupDate}
-          onNextAction={setNextAction}
-          onOrderExpectedDelivery={setOrderExpectedDelivery}
-          onOrderProductCategory={setOrderProductCategory}
-          onOrderPriority={setOrderPriority}
-          onPaymentMode={setPaymentMode}
-          onPaymentReference={setPaymentReference}
-          onPaymentBankName={setPaymentBankName}
-          onPaymentScreenshot={handlePaymentScreenshot}
-          onCheckOut={checkOut}
-          showChequeFlow={showChequeFlow}
-          onToggleChequeFlow={setShowChequeFlow}
-          onSavedCheque={loadVisits}
-        />
-      ) : isFieldWorker ? (
+      {isFieldWorker ? (
         <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-bold">Start Customer Visit</h2>
+            <div>
+              <h2 className="text-lg font-bold">Add Visit</h2>
+              <p className="text-sm text-slate-500">Select outcomes and save. No checkout needed.</p>
+            </div>
             <button type="button" onClick={() => startNewVisit("")} className="flex min-h-10 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white">
               <Plus className="h-4 w-4" /> New Visit
             </button>
@@ -970,6 +846,7 @@ export default function FieldStaffPage() {
               onChange={(e) => {
                 setSearch(e.target.value);
                 setSelectedCustomer(null);
+                setChequeVisit(null);
                 if (activeCustomerSource === "new_visit") setActiveCustomerSource("recent");
               }}
               placeholder="Search customer, business, or mobile"
@@ -1026,7 +903,6 @@ export default function FieldStaffPage() {
               paymentBankName={paymentBankName}
               paymentScreenshotUrl={paymentScreenshotUrl}
               onVisitType={setVisitType}
-              onResult={setResult}
               onToggleOutcome={toggleVisitOutcome}
               onNextAction={setNextAction}
               onRecovery={setRecoveryAmount}
@@ -1100,9 +976,20 @@ export default function FieldStaffPage() {
           )}
 
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+          {chequeVisit && showChequeFlow && (
+            <VisitChequeCollection
+              visit={chequeVisit}
+              onSaved={async () => {
+                setMessage("Cheque saved to Recovery Desk.");
+                setChequeVisit(null);
+                setShowChequeFlow(false);
+                await loadVisits();
+              }}
+            />
+          )}
           <div className="sticky bottom-3 z-10 mt-3">
-            <button type="button" onClick={checkIn} disabled={!canCheckIn} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-base font-semibold text-white shadow-lg disabled:opacity-50">
-              <MapPin className="h-5 w-5" /> Check In at Customer
+            <button type="button" onClick={saveVisit} disabled={!canSaveVisit} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-base font-semibold text-white shadow-lg disabled:opacity-50">
+              <MapPin className="h-5 w-5" /> {visitSaving || gpsState === "checking" ? "Saving Visit..." : "Save Visit"}
             </button>
           </div>
         </section>
@@ -1152,7 +1039,6 @@ function VisitDetailFields({
   paymentBankName,
   paymentScreenshotUrl,
   onVisitType,
-  onResult,
   onToggleOutcome,
   onNextAction,
   onRecovery,
@@ -1179,7 +1065,6 @@ function VisitDetailFields({
   paymentBankName: string;
   paymentScreenshotUrl: string;
   onVisitType: (value: string) => void;
-  onResult: (value: string) => void;
   onToggleOutcome: (value: string) => void;
   onNextAction: (value: string) => void;
   onRecovery: (value: string) => void;
@@ -1200,9 +1085,6 @@ function VisitDetailFields({
     <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
       <select value={visitType} onChange={(e) => onVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
         {visitTypes.map((type) => <option key={type}>{type}</option>)}
-      </select>
-      <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-        {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
       </select>
       <VisitOutcomeChips outcomes={visitOutcomes} onToggle={onToggleOutcome} />
       {!hasOrder && (
@@ -1314,178 +1196,6 @@ function PaymentFields({
         </>
       )}
     </>
-  );
-}
-
-function ActiveVisitCard({
-  visit,
-  visitType,
-  notes,
-  result,
-  visitOutcomes,
-  recoveryAmount,
-  nextFollowupDate,
-  nextAction,
-  orderExpectedDelivery,
-  orderProductCategory,
-  orderPriority,
-  paymentMode,
-  paymentReference,
-  paymentBankName,
-  paymentScreenshotUrl,
-  gpsChecking,
-  onNotes,
-  onVisitType,
-  onResult,
-  onToggleOutcome,
-  onRecovery,
-  onNextFollowup,
-  onNextAction,
-  onOrderExpectedDelivery,
-  onOrderProductCategory,
-  onOrderPriority,
-  onPaymentMode,
-  onPaymentReference,
-  onPaymentBankName,
-  onPaymentScreenshot,
-  onCheckOut,
-  showChequeFlow,
-  onToggleChequeFlow,
-  onSavedCheque,
-}: {
-  visit: Visit;
-  visitType: string;
-  notes: string;
-  result: string;
-  visitOutcomes: string[];
-  recoveryAmount: string;
-  nextFollowupDate: string;
-  nextAction: string;
-  orderExpectedDelivery: string;
-  orderProductCategory: string;
-  orderPriority: string;
-  paymentMode: string;
-  paymentReference: string;
-  paymentBankName: string;
-  paymentScreenshotUrl: string;
-  gpsChecking: boolean;
-  onNotes: (value: string) => void;
-  onVisitType: (value: string) => void;
-  onResult: (value: string) => void;
-  onToggleOutcome: (value: string) => void;
-  onRecovery: (value: string) => void;
-  onNextFollowup: (value: string) => void;
-  onNextAction: (value: string) => void;
-  onOrderExpectedDelivery: (value: string) => void;
-  onOrderProductCategory: (value: string) => void;
-  onOrderPriority: (value: string) => void;
-  onPaymentMode: (value: string) => void;
-  onPaymentReference: (value: string) => void;
-  onPaymentBankName: (value: string) => void;
-  onPaymentScreenshot: (file?: File) => void;
-  onCheckOut: () => void;
-  showChequeFlow: boolean;
-  onToggleChequeFlow: (value: boolean) => void;
-  onSavedCheque: () => void;
-}) {
-  const latestCheque = visit.cheques?.[0];
-  const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
-  const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
-  const hasFollowup = needsNextFollowupOutcome(result, visitOutcomes);
-  return (
-    <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold text-emerald-700">ACTIVE VISIT</p>
-          <h2 className="mt-1 text-xl font-bold">{visit.customer.partyName}</h2>
-          <p className="text-sm text-slate-600">{visit.customer.contactNumber} - {money(visit.customer.outstandingBalance)}</p>
-          <p className="mt-1 text-xs text-slate-500">Checked in {formatDateTime(visit.checkInAt)}</p>
-        </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white ${visit.verified ? "bg-emerald-600" : "bg-amber-500"}`}>
-          {visit.verified ? "Verified" : "GPS saved"}
-        </span>
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <select value={visitType} onChange={(e) => onVisitType(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-          {visitTypes.map((type) => <option key={type}>{type}</option>)}
-        </select>
-        <select value={result} onChange={(e) => onResult(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-          {resultOptionsFor(visitType).map((item) => <option key={item}>{item}</option>)}
-        </select>
-        <VisitOutcomeChips outcomes={visitOutcomes} onToggle={onToggleOutcome} />
-        {!hasOrder && (
-          <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-        )}
-        {hasPayment && (
-          <PaymentFields
-            visitType={visitType}
-            paymentMode={paymentMode}
-            paymentReference={paymentReference}
-            paymentBankName={paymentBankName}
-            paymentScreenshotUrl={paymentScreenshotUrl}
-            recoveryAmount={recoveryAmount}
-            onPaymentMode={onPaymentMode}
-            onPaymentReference={onPaymentReference}
-            onPaymentBankName={onPaymentBankName}
-            onPaymentScreenshot={onPaymentScreenshot}
-            onRecovery={onRecovery}
-          />
-        )}
-        {hasOrder && (
-          <>
-            <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
-            <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-            <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-              <option>Normal</option>
-              <option>Urgent</option>
-              <option>High</option>
-            </select>
-          </>
-        )}
-        {hasFollowup && (
-          <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-        )}
-        {!hasOrder && (
-          <button type="button" className="flex min-h-12 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600">
-            <Camera className="h-5 w-5" /> Add photo
-          </button>
-        )}
-      </div>
-      {latestCheque && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-white p-3 text-sm shadow-sm dark:border-emerald-900 dark:bg-slate-900">
-          <p className="text-xs font-semibold uppercase text-emerald-700">Collected Cheque</p>
-          <div className="mt-2 flex items-start justify-between gap-3">
-            <div>
-              <p className="font-bold">{latestCheque.chequeNumber} · {latestCheque.bankName}</p>
-              <p className="text-xs text-slate-500">{formatDateTime(latestCheque.collectionDateTime)}</p>
-            </div>
-            <div className="text-right">
-              <p className="font-bold">{money(latestCheque.amount)}</p>
-              <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">{latestCheque.status}</span>
-            </div>
-          </div>
-        </div>
-      )}
-      {hasPayment && paymentMode === "Cheque Collected" && (
-        <button
-          type="button"
-          onClick={() => onToggleChequeFlow(!showChequeFlow)}
-          className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white"
-        >
-          {showChequeFlow ? "Hide Cheque Collection" : "Open Cheque Collection"}
-        </button>
-      )}
-      {showChequeFlow && (
-        <VisitChequeCollection
-          visit={visit}
-          onSaved={onSavedCheque}
-        />
-      )}
-      <textarea value={notes} onChange={(e) => onNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-24 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
-      <button type="button" onClick={onCheckOut} disabled={gpsChecking} className="mt-3 flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-semibold text-white disabled:opacity-60">
-        <CheckCircle2 className="h-5 w-5" /> Check Out & Save Visit
-      </button>
-    </section>
   );
 }
 
@@ -1633,7 +1343,6 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         customerId: visit.customer.id,
-        staffVisitId: visit.id,
         chequeNumber: form.chequeNumber.trim(),
         bankName: form.bankName.trim(),
         branch: form.branch || undefined,

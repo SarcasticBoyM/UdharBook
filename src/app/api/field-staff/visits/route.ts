@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, endOfDay, isFieldWorker, startOfDay, visibleStaffId } from "@/lib/field-tracking";
 import { logger } from "@/lib/logger";
+import { recordFollowUpActivity } from "@/lib/follow-up-service";
 
 const visitSchema = z.object({
   customerId: z.string().optional(),
@@ -33,6 +34,7 @@ const visitSchema = z.object({
     ])
     .optional(),
   outcome: z.string().optional(),
+  visitOutcomes: z.array(z.string().min(1)).optional(),
   nextAction: z.string().optional(),
   nextVisitDate: z.string().datetime().optional(),
   orderAmount: z.number().min(0).optional(),
@@ -62,14 +64,35 @@ function temporaryLeadPhone() {
   return `LEAD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-const staleActiveVisitHours = 12;
+const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup", "Collection", "Follow-up", "Payment Reminder"]);
+const followUpOutcomes = new Set(["Follow-up Later", "Follow-up Required", "Payment Promised", "Revisit Required", "Customer Unavailable", "Customer Busy", "Call Back Requested", "Not Reachable"]);
 
-function staleActiveVisitCutoff() {
-  return new Date(Date.now() - staleActiveVisitHours * 60 * 60 * 1000);
+function paymentSummary(mode?: string | null, amount = 0) {
+  if (mode === "Cash") return `Cash payment collected Rs ${amount}`;
+  if (mode === "NEFT / RTGS") return `NEFT payment received${amount > 0 ? ` Rs ${amount}` : ""}`;
+  if (mode === "Cheque Collected") return "Cheque collected during visit";
+  return null;
 }
 
-function appendSystemNote(existing: string | null | undefined, note: string) {
-  return [existing, note].filter(Boolean).join("\n");
+function uniqueOutcomes(values: (string | undefined | null)[]) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
+}
+
+function isOrderVisit(visitType?: string | null, outcome?: string | null, outcomes: string[] = []) {
+  return ["Sales Visit", "New Lead Visit", "Prospect Visit", "Payment Collection", "Recovery Follow-up"].includes(visitType ?? "") && (outcome === "Order Received" || outcomes.includes("Order Received"));
+}
+
+function visitSummary(visitType: string, outcomes: string[], mode?: string | null, amount = 0) {
+  const hasPayment = outcomes.includes("Payment Collected") || outcomes.includes("Partial Payment") || outcomes.includes("Paid Fully") || amount > 0 || mode === "Cheque Collected";
+  const hasOrder = outcomes.includes("Order Received");
+  const hasFollowUp = outcomes.some((outcome) => followUpOutcomes.has(outcome));
+
+  if (mode === "Cheque Collected" && hasOrder) return "Cheque collected and order received";
+  if (hasPayment && hasOrder) return `${mode ?? "Payment"} collected and order received`;
+  if (hasOrder) return "Order received during visit";
+  if (hasPayment) return paymentSummary(mode, amount) ?? "Payment collected during visit";
+  if (hasFollowUp) return "Follow-up scheduled from field visit";
+  return `${visitType} recorded`;
 }
 
 export async function GET(request: Request) {
@@ -84,40 +107,6 @@ export async function GET(request: Request) {
     const date = searchParams.get("date") ? new Date(searchParams.get("date") as string) : new Date();
     const from = searchParams.get("from") ? new Date(searchParams.get("from") as string) : startOfDay(date);
     const to = searchParams.get("to") ? new Date(searchParams.get("to") as string) : endOfDay(date);
-    const staleCutoff = staleActiveVisitCutoff();
-
-    if (isFieldWorker(session)) {
-      const staleVisits = await prisma.staffVisit.findMany({
-        where: {
-          shopId,
-          staffId: session.id,
-          status: "CHECKED_IN",
-          checkInAt: { lt: staleCutoff },
-        },
-        select: { id: true, notes: true },
-      });
-      if (staleVisits.length > 0) {
-        await prisma.$transaction(
-          staleVisits.map((visit) =>
-            prisma.staffVisit.update({
-              where: { id: visit.id },
-              data: {
-                status: "CANCELLED",
-                checkOutAt: new Date(),
-                notes: appendSystemNote(visit.notes, `Auto-closed stale active visit after ${staleActiveVisitHours} hours.`),
-              },
-            }),
-          ),
-        );
-        logger.warn("field_visit_stale_active_auto_closed", {
-          shopId,
-          staffId: session.id,
-          visitIds: staleVisits.map((visit) => visit.id),
-          reason: "load_visits",
-        });
-      }
-    }
-
     const visits = await prisma.staffVisit.findMany({
       where: {
         shopId,
@@ -155,44 +144,10 @@ export async function GET(request: Request) {
       orderBy: { checkInAt: "desc" },
       take: 200,
     });
-    const activeVisit = isFieldWorker(session)
-      ? await prisma.staffVisit.findFirst({
-          where: { shopId, staffId: session.id, status: "CHECKED_IN" },
-          include: {
-            staff: { select: { id: true, name: true, role: true } },
-            customer: {
-              select: {
-                id: true,
-                partyName: true,
-                contactNumber: true,
-                outstandingBalance: true,
-                latitude: true,
-                longitude: true,
-              },
-            },
-            photos: { orderBy: { createdAt: "desc" }, take: 6 },
-            cheques: {
-              orderBy: { createdAt: "desc" },
-              take: 6,
-              select: {
-                id: true,
-                chequeNumber: true,
-                bankName: true,
-                amount: true,
-                status: true,
-                collectionDateTime: true,
-                frontImageUrl: true,
-              },
-            },
-          },
-          orderBy: { checkInAt: "desc" },
-        })
-      : null;
-
     const summary = {
       totalVisits: visits.length,
       completedVisits: visits.filter((visit) => visit.status === "COMPLETED").length,
-      activeVisits: visits.filter((visit) => visit.status === "CHECKED_IN").length,
+      activeVisits: 0,
       verifiedVisits: visits.filter((visit) => visit.verified).length,
       recoveryAmount: visits.reduce((sum, visit) => sum + visit.recoveryAmount, 0),
       ordersBooked: visits.filter((visit) => ["Sales Visit", "New Lead Visit", "Prospect Visit"].includes(visit.visitType) && visit.outcome === "Order Received").length,
@@ -203,7 +158,7 @@ export async function GET(request: Request) {
       totalKm: visits.reduce((sum, visit) => sum + visit.travelKm, 0),
     };
 
-    return NextResponse.json({ success: true, visits, summary, activeVisit });
+    return NextResponse.json({ success: true, visits, summary });
   } catch (error) {
     logger.error("field_visits_load_failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -218,12 +173,12 @@ export async function POST(request: Request) {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!isFieldWorker(session)) {
-      return NextResponse.json({ success: false, error: "Only field users can check in visits" }, { status: 403 });
+      return NextResponse.json({ success: false, error: "Only field users can save visits" }, { status: 403 });
     }
 
     const shopId = requireShopId(request, session);
     const body = visitSchema.parse(await request.json());
-    logger.info("field_visit_start_requested", {
+    logger.info("field_visit_save_requested", {
       shopId,
       staffId: session.id,
       customerId: body.customerId,
@@ -231,43 +186,6 @@ export async function POST(request: Request) {
       outcome: body.outcome,
     });
     const visit = await prisma.$transaction(async (tx) => {
-      const activeVisits = await tx.staffVisit.findMany({
-        where: { shopId, staffId: session.id, status: "CHECKED_IN" },
-        orderBy: { checkInAt: "desc" },
-        select: { id: true, checkInAt: true, notes: true },
-      });
-      const staleCutoff = staleActiveVisitCutoff();
-      const staleVisits = activeVisits.filter((visit) => visit.checkInAt < staleCutoff);
-      const liveActiveVisit = activeVisits.find((visit) => visit.checkInAt >= staleCutoff);
-
-      for (const staleVisit of staleVisits) {
-        await tx.staffVisit.update({
-          where: { id: staleVisit.id },
-          data: {
-            status: "CANCELLED",
-            checkOutAt: new Date(),
-            notes: appendSystemNote(staleVisit.notes, `Auto-closed stale active visit before starting a new visit after ${staleActiveVisitHours} hours.`),
-          },
-        });
-      }
-      if (staleVisits.length > 0) {
-        logger.warn("field_visit_stale_active_auto_closed", {
-          shopId,
-          staffId: session.id,
-          visitIds: staleVisits.map((visit) => visit.id),
-          reason: "start_visit",
-        });
-      }
-      if (liveActiveVisit) {
-        logger.warn("field_visit_start_blocked_active_exists", {
-          shopId,
-          staffId: session.id,
-          activeVisitId: liveActiveVisit.id,
-          activeSince: liveActiveVisit.checkInAt.toISOString(),
-        });
-        throw new Error("ACTIVE_VISIT_EXISTS");
-      }
-
       let customer = body.customerId
         ? await tx.customer.findFirst({
             where: { id: body.customerId, shopId },
@@ -315,6 +233,16 @@ export async function POST(request: Request) {
           ? distanceMeters(body.latitude, body.longitude, customer.latitude, customer.longitude)
           : null;
       const verified = distance === null ? false : distance <= 200;
+      const now = new Date();
+      const visitType = body.visitType ?? (body.customerId ? "General Visit" : "New Lead Visit");
+      const visitOutcomes = uniqueOutcomes([...(body.visitOutcomes ?? []), body.outcome]);
+      const combinedOutcome = visitOutcomes.join(", ") || body.outcome || "Visit recorded";
+      const recoveryAmount = body.recoveryAmount ?? 0;
+      const nextDate = body.nextFollowupDate ? new Date(body.nextFollowupDate) : body.nextVisitDate ? new Date(body.nextVisitDate) : null;
+      const hasOrder = isOrderVisit(visitType, combinedOutcome, visitOutcomes);
+      if (hasOrder && !body.orderProductCategory?.trim()) {
+        throw new Error("ORDER_DETAILS_REQUIRED");
+      }
 
       await tx.staffLocation.create({
         data: {
@@ -323,8 +251,8 @@ export async function POST(request: Request) {
           latitude: body.latitude,
           longitude: body.longitude,
           accuracy: body.accuracy,
-          status: "ON_VISIT",
-          source: "visit-check-in",
+          status: "ACTIVE",
+          source: "visit-save",
         },
       });
 
@@ -333,14 +261,20 @@ export async function POST(request: Request) {
           shopId,
           staffId: session.id,
           customerId: customer.id,
+          status: "COMPLETED",
+          checkInAt: now,
+          checkOutAt: now,
           checkInLat: body.latitude,
           checkInLng: body.longitude,
+          checkOutLat: body.latitude,
+          checkOutLng: body.longitude,
           accuracy: body.accuracy,
           notes: body.notes,
-          visitType: body.visitType ?? (body.customerId ? "Follow-up" : "New Lead"),
-          outcome: body.outcome,
+          result: combinedOutcome,
+          visitType,
+          outcome: combinedOutcome,
           nextAction: body.nextAction,
-          nextVisitDate: body.nextVisitDate ? new Date(body.nextVisitDate) : null,
+          nextVisitDate: nextDate,
           orderAmount: body.orderAmount,
           orderQuantity: body.orderQuantity,
           orderExpectedDelivery: body.orderExpectedDelivery ? new Date(body.orderExpectedDelivery) : null,
@@ -356,7 +290,7 @@ export async function POST(request: Request) {
             source: body.customerId ? "existing_customer" : "field_lead",
             originalVisitType: body.visitType ?? null,
           },
-          recoveryAmount: body.recoveryAmount ?? 0,
+          recoveryAmount,
           distanceMeters: distance ?? undefined,
           verified,
           outsideWarning: distance !== null && !verified,
@@ -374,7 +308,117 @@ export async function POST(request: Request) {
         update: { status: "ACTIVE" },
       });
 
-      logger.info("field_visit_start_created", {
+      await tx.routeHistory.upsert({
+        where: { staffId_routeDate: { staffId: session.id, routeDate: startOfDay() } },
+        create: {
+          shopId,
+          staffId: session.id,
+          routeDate: startOfDay(),
+          totalKm: 0,
+          totalVisits: 1,
+          productiveHours: 0,
+          startedAt: now,
+          endedAt: now,
+        },
+        update: {
+          totalVisits: { increment: 1 },
+          endedAt: now,
+        },
+      });
+
+      const shouldCreateFollowUp =
+        recoveryAmount > 0 ||
+        visitOutcomes.includes("Payment Collected") ||
+        visitOutcomes.includes("Partial Payment") ||
+        visitOutcomes.includes("Paid Fully") ||
+        visitOutcomes.includes("Order Received") ||
+        Boolean(nextDate) ||
+        recoveryVisitTypes.has(visitType) ||
+        visitOutcomes.some((outcome) => followUpOutcomes.has(outcome));
+      const status =
+        visitOutcomes.includes("Paid Fully")
+          ? "PAID"
+          : recoveryAmount > 0
+            ? "PARTIAL_PAID"
+            : nextDate
+              ? "RESCHEDULED"
+              : "COMPLETED";
+
+      if (shouldCreateFollowUp) {
+        await recordFollowUpActivity(tx, {
+          shopId,
+          customerId: customer.id,
+          createdById: session.id,
+          status,
+          priority: recoveryAmount > 0 ? "HIGH" : "MEDIUM",
+          notes: body.notes ?? combinedOutcome,
+          customerResponse: combinedOutcome,
+          nextFollowupDate: nextDate,
+          scheduledAt: nextDate,
+          completedAt: now,
+          actionLoggedAt: now,
+          recoveryAmount,
+          paymentStatus: recoveryAmount > 0 ? (status === "PAID" ? "PAID" : "PARTIAL_PAID") : null,
+          sourceModule: "FIELD_VISIT",
+          followUpType: visitType,
+          summary: visitSummary(visitType, visitOutcomes, body.paymentMode, recoveryAmount),
+          detailedNotes: body.notes,
+          visitId: created.id,
+          activitySource: "field-visit-save",
+          metadata: {
+            outcome: combinedOutcome,
+            visitOutcomes,
+            orderProductCategory: body.orderProductCategory ?? null,
+            paymentMode: body.paymentMode ?? null,
+            paymentReference: body.paymentReference ?? null,
+            paymentBankName: body.paymentBankName ?? null,
+            nextAction: body.nextAction ?? null,
+          },
+          recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
+          paymentMethod: "FIELD_VISIT",
+        });
+      }
+
+      if (hasOrder) {
+        const orderDetails = body.orderProductCategory?.trim() || "Order received during visit";
+        const order = await tx.order.create({
+          data: {
+            shopId,
+            customerId: customer.id,
+            createdById: session.id,
+            staffVisitId: created.id,
+            orderDetails,
+            preferredDeliveryDate: body.orderExpectedDelivery ? new Date(body.orderExpectedDelivery) : null,
+            priority: body.orderPriority ?? "Normal",
+            status: "ORDER_RECEIVED",
+            sourceModule: "FIELD_VISIT",
+            visitSource: visitType,
+          },
+        });
+        await tx.orderActivity.create({
+          data: {
+            shopId,
+            orderId: order.id,
+            userId: session.id,
+            action: "CREATED",
+            newStatus: order.status,
+            notes: "Order received during field visit",
+          },
+        });
+        await tx.activityLog.create({
+          data: {
+            shopId,
+            userId: session.id,
+            customerId: customer.id,
+            action: "order_received",
+            details: visitType === "New Lead Visit" || visitType === "Prospect Visit"
+              ? "Lead converted with first order"
+              : "Order received during field visit",
+          },
+        });
+      }
+
+      logger.info("field_visit_saved", {
         shopId,
         staffId: session.id,
         visitId: created.id,
@@ -396,9 +440,9 @@ export async function POST(request: Request) {
         error:
           error instanceof Error && error.message === "CUSTOMER_OR_LEAD_REQUIRED"
             ? "Customer name is required for a new visit"
-            : error instanceof Error && error.message === "ACTIVE_VISIT_EXISTS"
-              ? "You already have an active visit. Please check out before starting a new visit."
-              : "Could not check in visit",
+            : error instanceof Error && error.message === "ORDER_DETAILS_REQUIRED"
+              ? "Order details are required when Order Received is selected."
+              : "Could not save visit",
       },
       { status: 400 },
     );
