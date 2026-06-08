@@ -1,12 +1,13 @@
-import type { CustomerStatus, FollowUpPriority, FollowUpStatus, UserRole } from "@prisma/client";
+import type { CustomerStatus, FollowUpPriority, FollowUpStatus, OperationalRole, UserRole } from "@prisma/client";
 
-export type { CustomerStatus, FollowUpPriority, FollowUpStatus, UserRole };
+export type { CustomerStatus, FollowUpPriority, FollowUpStatus, OperationalRole, UserRole };
 
 export interface SessionUser {
   id: string;
   name: string;
   email: string;
   role: UserRole;
+  roles?: OperationalRole[];
   shopId: string;
   shopName?: string | null;
 }

@@ -5,6 +5,7 @@ import { getSession, hashPassword } from "@/lib/auth";
 import { isSuperAdmin } from "@/lib/tenant";
 import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
+import { logger } from "@/lib/logger";
 
 const schema = z.object({
   shopName: z.string().min(1),
@@ -73,6 +74,23 @@ export async function POST(request: Request) {
         select: { id: true, name: true, email: true, role: true, shopId: true },
       });
       return { shop, user };
+    });
+
+    await prisma.userRoleAssignment.create({
+      data: {
+        shopId: result.shop.id,
+        userId: result.user.id,
+        role: "SHOP_ADMIN",
+        assignedById: session.id,
+      },
+    }).catch((error) => {
+      logger.error("onboard_shop_admin_role_assignment_failed_non_blocking", {
+        actorId: session.id,
+        shopId: result.shop.id,
+        userId: result.user.id,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     });
 
     await logActivity({

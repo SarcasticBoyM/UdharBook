@@ -45,12 +45,12 @@ const links = [
   { href: "/reports", label: "Reports", icon: FileBarChart, adminOnly: true },
   { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true },
-  { href: "/shops", label: "Shops", icon: Store, superOnly: true },
+  { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true },
 ];
 
 const platformLinks = [
   { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
-  { href: "/shops", label: "Shops", icon: Store },
+  { href: "/shops", label: "Onboard Shop", icon: Store },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck },
 ];
 

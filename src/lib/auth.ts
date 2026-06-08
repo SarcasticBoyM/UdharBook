@@ -6,7 +6,7 @@ import { prisma, withPrismaRetry } from "./db";
 import type { SessionUser } from "@/types";
 import { logger } from "@/lib/logger";
 import { passwordHashDiagnostics, safeAuthRuntimeDiagnostics } from "@/lib/auth-diagnostics";
-import { fallbackOperationalRoles } from "@/lib/operational-roles";
+import { fallbackOperationalRoles, normalizeOperationalRoles } from "@/lib/operational-roles";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -79,6 +79,7 @@ export async function createSession(user: SessionUser, traceId?: string) {
       name: user.name,
       email: user.email,
       role: user.role,
+      roles: user.roles ?? [],
       shopId: user.shopId,
       shopName: user.shopName,
     })
@@ -152,6 +153,7 @@ export async function getSession(): Promise<SessionUser | null> {
     logger.info("auth_trace_session_jwt_verified", {
       userId: userId ?? null,
       role: typeof payload.role === "string" ? payload.role : null,
+      roles: Array.isArray(payload.roles) ? payload.roles : [],
       shopId: typeof payload.shopId === "string" ? payload.shopId : null,
     });
     if (!userId) {
@@ -202,6 +204,7 @@ export async function getSession(): Promise<SessionUser | null> {
       name: user.name,
       email: user.email,
       role: user.role,
+      roles: Array.isArray(payload.roles) ? payload.roles as SessionUser["roles"] : fallbackOperationalRoles(user.role),
       shopId: user.shopId,
       shopName: user.shop?.shopName ?? null,
     };
@@ -299,8 +302,13 @@ export async function login(email: string, password: string, traceId?: string): 
     logger.info("login_shop_validated", { traceId, userId: user.id, shopId: user.shopId, shopName: user.shop?.shopName });
   }
   if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
-    logger.warn("login_failed_temp_password_expired", { traceId, userId: user.id, email: user.email, role: user.role });
-    return null;
+    logger.warn("login_temp_password_expired_non_blocking", {
+      traceId,
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      tempPasswordExpiresAt: user.tempPasswordExpiresAt.toISOString(),
+    });
   }
   let valid = false;
   try {
@@ -334,9 +342,28 @@ export async function login(email: string, password: string, traceId?: string): 
   }
   logger.info("login_password_validated", { traceId, userId: user.id, email: user.email, role: user.role });
   await ensureLegacyRoleAssignments(user, traceId);
+  const resolvedRoles = await prisma.userRoleAssignment.findMany({
+    where: { userId: user.id, shopId: user.shopId },
+    select: { role: true },
+  }).then((assignments) => normalizeOperationalRoles(user.role, assignments)).catch((error) => {
+    logger.error("login_role_assignment_lookup_failed_fallback_legacy_role", {
+      traceId,
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      shopId: user.shopId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return fallbackOperationalRoles(user.role);
+  });
   await prisma.user.update({
     where: { id: user.id },
-    data: { lastLoginAt: new Date() },
+    data: {
+      lastLoginAt: new Date(),
+      passwordResetRequired: false,
+      tempPasswordExpiresAt: null,
+    },
   }).catch((error) => {
     logger.error("login_last_login_update_failed_non_blocking", {
       traceId,
@@ -370,6 +397,7 @@ export async function login(email: string, password: string, traceId?: string): 
     name: user.name,
     email: user.email,
     role: user.role,
+    roles: resolvedRoles,
     shopId: user.shopId,
     shopName: user.shop?.shopName ?? null,
   };

@@ -71,6 +71,13 @@ const FIELD_SALES_BLOCKED_APIS = [
 ];
 const STAFF_BLOCKED_PAGES = ["/field-staff", "/daily-visits", "/orders", "/live-tracking"];
 const STAFF_BLOCKED_APIS = ["/api/field-staff", "/api/orders"];
+const FIELD_OPERATION_ROLES = ["FIELD_SALES_PERSON"];
+const ORDER_OPERATION_ROLES = ["ORDER_MANAGER", "ACCOUNTING_STAFF", "FIELD_SALES_PERSON"];
+const ACCOUNTING_OPERATION_ROLES = ["ACCOUNTING_STAFF", "FOLLOWUP_MANAGER"];
+
+function hasAnyRole(roles: unknown, allowed: string[]) {
+  return Array.isArray(roles) && roles.some((role) => typeof role === "string" && allowed.includes(role));
+}
 
 function logMiddleware(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) {
   const payload = JSON.stringify({
@@ -143,9 +150,10 @@ export async function middleware(request: NextRequest) {
     });
     const { payload } = await jwtVerify(token, getSecret());
     const role = payload.role as string | undefined;
+    const roles = payload.roles;
     const shopId = payload.shopId as string | undefined;
     const userId = payload.id as string | undefined;
-    logMiddleware("info", "middleware_session_decode_success", { traceId, path: pathname, userId, role, shopId });
+    logMiddleware("info", "middleware_session_decode_success", { traceId, path: pathname, userId, role, roles: Array.isArray(roles) ? roles : [], shopId });
 
     if (!role) {
       logMiddleware("warn", "middleware_reject_missing_role", { traceId, path: pathname, userId, shopId });
@@ -181,20 +189,32 @@ export async function middleware(request: NextRequest) {
       logMiddleware("info", "middleware_redirect_field_sales_home", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.redirect(new URL(FIELD_SALES_HOME, request.url)));
     }
-    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix))) {
+    const fieldSalesAllowedByMultiRole =
+      (pathname.startsWith("/today-follow-ups") || pathname.startsWith("/follow-ups") || pathname.startsWith("/reports") || pathname.startsWith("/upload")) && hasAnyRole(roles, ACCOUNTING_OPERATION_ROLES);
+    const fieldSalesApiAllowedByMultiRole =
+      (pathname.startsWith("/api/follow-ups") || pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/reports") || pathname.startsWith("/api/today-follow-ups") || pathname.startsWith("/api/dashboard/stats")) && hasAnyRole(roles, ACCOUNTING_OPERATION_ROLES);
+
+    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix)) && !fieldSalesAllowedByMultiRole) {
       logMiddleware("warn", "middleware_redirect_field_sales_page_forbidden", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.redirect(new URL(FIELD_SALES_HOME, request.url)));
     }
-    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix))) {
+    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix)) && !fieldSalesApiAllowedByMultiRole) {
       logMiddleware("warn", "middleware_reject_field_sales_api_forbidden", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
 
-    if (role === "STAFF" && STAFF_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix))) {
+    const staffAllowedByMultiRole =
+      (pathname.startsWith("/field-staff") || pathname.startsWith("/daily-visits")) && hasAnyRole(roles, FIELD_OPERATION_ROLES)
+      || pathname.startsWith("/orders") && hasAnyRole(roles, ORDER_OPERATION_ROLES);
+    const staffApiAllowedByMultiRole =
+      pathname.startsWith("/api/field-staff") && hasAnyRole(roles, FIELD_OPERATION_ROLES)
+      || pathname.startsWith("/api/orders") && hasAnyRole(roles, ORDER_OPERATION_ROLES);
+
+    if (role === "STAFF" && STAFF_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix)) && !staffAllowedByMultiRole) {
       logMiddleware("info", "middleware_redirect_staff_page_forbidden", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.redirect(new URL("/today-follow-ups", request.url)));
     }
-    if (role === "STAFF" && STAFF_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix))) {
+    if (role === "STAFF" && STAFF_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix)) && !staffApiAllowedByMultiRole) {
       logMiddleware("warn", "middleware_reject_staff_api_forbidden", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }

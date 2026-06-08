@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { OperationalRole } from "@prisma/client";
-import { Check, KeyRound, Pencil, ShieldCheck, UserPlus } from "lucide-react";
+import { Check, KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { operationalRoleLabels } from "@/lib/operational-roles";
 
 type Shop = {
@@ -54,6 +54,9 @@ export default function StaffManagementPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<OperationalRole | "ALL">("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<ManagedUser | null>(null);
   const [form, setForm] = useState({
@@ -69,6 +72,16 @@ export default function StaffManagementPage() {
   const canSubmit = form.name.trim() && form.email.trim() && selectedRoles.length > 0 && !saving;
 
   const activeShopId = useMemo(() => selectedShopId || shops[0]?.id || "", [selectedShopId, shops]);
+  const visibleUsers = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return users.filter((user) => {
+      const roles = rolesForUser(user);
+      const matchesText = !needle || [user.name, user.email, user.mobile ?? "", user.shop?.shopName ?? "", user.jobTitle ?? ""].join(" ").toLowerCase().includes(needle);
+      const matchesRole = roleFilter === "ALL" || roles.includes(roleFilter);
+      const matchesStatus = statusFilter === "ALL" || (statusFilter === "ACTIVE" ? !user.disabledAt : Boolean(user.disabledAt));
+      return matchesText && matchesRole && matchesStatus;
+    });
+  }, [roleFilter, search, statusFilter, users]);
 
   const load = useCallback(async () => {
     setError("");
@@ -242,8 +255,24 @@ export default function StaffManagementPage() {
         </div>
       </form>
 
+      <div className="mt-6 grid gap-3 rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:grid-cols-[1fr_220px_180px]">
+        <label className="relative">
+          <Search className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search staff by name, email, mobile, shop" className="min-h-11 w-full rounded-lg border py-2 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900" />
+        </label>
+        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as OperationalRole | "ALL")} className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+          <option value="ALL">All roles</option>
+          {roleOptions.map((item) => <option key={item} value={item}>{operationalRoleLabels[item]}</option>)}
+        </select>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "ALL" | "ACTIVE" | "INACTIVE")} className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+          <option value="ALL">All status</option>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </select>
+      </div>
+
       <div className="mt-6 grid gap-3">
-        {users.map((user) => {
+        {visibleUsers.map((user) => {
           const roles = roleBadges(rolesForUser(user));
           return (
             <article key={user.id} className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -276,7 +305,7 @@ export default function StaffManagementPage() {
             </article>
           );
         })}
-        {users.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No staff found for this shop.</div>}
+        {visibleUsers.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No staff found for this selection.</div>}
       </div>
     </div>
   );
