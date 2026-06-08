@@ -21,12 +21,15 @@ import {
   Users,
   WalletCards,
   Store,
+  ShieldCheck,
   UserRoundCheck,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
 import { ShopSwitcher } from "./ShopSwitcher";
+import { canAccessModule, operationalRoleLabels } from "@/lib/operational-roles";
+import type { OperationalRole } from "@prisma/client";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -41,30 +44,30 @@ const links = [
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },
   { href: "/reports", label: "Reports", icon: FileBarChart, adminOnly: true },
   { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true },
+  { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true },
   { href: "/shops", label: "Shops", icon: Store, superOnly: true },
 ];
 
 const platformLinks = [
   { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
   { href: "/shops", label: "Shops", icon: Store },
+  { href: "/staff", label: "Staff Management", icon: ShieldCheck },
 ];
 
-const fieldSalesLinks = new Set(["/field-staff", "/daily-visits", "/customers", "/orders", "/cheques"]);
-const staffLinks = new Set(["/", "/today-follow-ups", "/customers", "/cheques", "/upload", "/follow-ups", "/reports"]);
-
-export function Sidebar({ userName, role }: { userName: string; role: string }) {
+export function Sidebar({ userName, role, operationalRoles = [] }: { userName: string; role: string; operationalRoles?: OperationalRole[] }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const isAdmin = role === "SHOP_ADMIN";
   const isSuperAdmin = role === "SUPER_ADMIN";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
-    if (role === "FIELD_SALES") return fieldSalesLinks.has(link.href);
-    if (role === "STAFF") return staffLinks.has(link.href);
     if (link.superOnly) return isSuperAdmin;
-    if (link.adminOnly) return isAdmin;
-    return true;
+    if (link.adminOnly && isAdmin) return true;
+    return canAccessModule(role, operationalRoles, link.href);
   });
+  const roleLabel = operationalRoles.length > 0
+    ? operationalRoles.map((item) => operationalRoleLabels[item]).join(", ")
+    : role;
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -102,7 +105,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
           <div className={cn(mobile ? "block min-w-0" : "hidden md:block")}>
             <h1 className="text-lg font-bold text-brand-700 dark:text-brand-400">UdharBook</h1>
             <p className="mt-1 truncate text-xs text-slate-500">
-              {userName} | {role}
+              {userName} | {roleLabel}
             </p>
             <ShopSwitcher enabled={false} />
           </div>

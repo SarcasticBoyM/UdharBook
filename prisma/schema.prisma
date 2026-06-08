@@ -15,6 +15,15 @@ enum UserRole {
   FIELD_SALES
 }
 
+enum OperationalRole {
+  SHOP_ADMIN
+  ACCOUNTING_STAFF
+  FIELD_SALES_PERSON
+  CHEQUE_OPERATIONS
+  ORDER_MANAGER
+  FOLLOWUP_MANAGER
+}
+
 enum CustomerStatus {
   ACTIVE
   PENDING
@@ -134,6 +143,7 @@ model Shop {
   visitPhotos        VisitPhoto[]
   supportAccessGrants SupportAccessGrant[]
   orders             Order[]
+  userRoleAssignments UserRoleAssignment[]
   orderActivities    OrderActivity[]
   qrVCard            QRVCard?
 
@@ -260,9 +270,27 @@ model User {
   supportAccessAssigned SupportAccessGrant[] @relation("SupportAccessSuperAdmin")
   ordersCreated Order[] @relation("OrderCreatedBy")
   orderActivities OrderActivity[]
+  roleAssignments UserRoleAssignment[] @relation("UserRoleAssignments")
+  roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
 
   @@index([shopId])
   @@index([role])
+}
+
+model UserRoleAssignment {
+  id          String          @id @default(cuid())
+  shopId      String
+  shop        Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User            @relation("UserRoleAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  role        OperationalRole
+  assignedById String?
+  assignedBy   User?          @relation("UserRoleAssignmentsCreatedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime        @default(now())
+
+  @@unique([userId, role])
+  @@index([shopId, role])
+  @@index([shopId, userId])
 }
 
 model Customer {

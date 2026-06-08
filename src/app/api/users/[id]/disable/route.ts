@@ -24,7 +24,10 @@ export async function POST(
     const result = await tx.user.update({
       where: { id },
       data: { disabledAt: disabled ? new Date() : null },
-      include: { shop: { select: { shopName: true } } },
+      include: {
+        shop: { select: { shopName: true } },
+        roleAssignments: { select: { role: true, createdAt: true } },
+      },
     });
     if (disabled) {
       await tx.passwordResetToken.deleteMany({ where: { userId: id, usedAt: null } });

@@ -28,7 +28,10 @@ export async function POST(
       passwordResetRequired: true,
       tempPasswordExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     },
-    include: { shop: { select: { shopName: true } } },
+    include: {
+      shop: { select: { shopName: true } },
+      roleAssignments: { select: { role: true, createdAt: true } },
+    },
   });
   await logActivity({
     action: "user_password_reset",
