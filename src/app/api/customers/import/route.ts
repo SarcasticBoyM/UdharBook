@@ -91,6 +91,7 @@ export async function POST(request: Request) {
       fileName: file.name,
       totalProcessed: summary.totalProcessed,
       created: summary.created,
+      duplicateNameCreated: summary.duplicateNameCreated ?? 0,
       updated: summary.updated,
       skipped: summary.skipped,
       errors: summary.errors.length,

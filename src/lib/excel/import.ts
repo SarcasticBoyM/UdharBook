@@ -5,7 +5,6 @@ import type { ImportSummary } from "@/types";
 
 const PLACEHOLDER_PREFIX = "NO-PH-";
 const IMPORT_BATCH_SIZE = 100;
-const EXISTING_LOOKUP_BATCH_SIZE = 500;
 const MAX_ERROR_ROWS = 500;
 
 export function isPlaceholderContact(contact: string): boolean {
@@ -20,11 +19,11 @@ function normalizeNameKey(name: string): string {
   return normalizeName(name).toLowerCase();
 }
 
-/** Stable placeholder when Excel has no contact number (satisfies unique contactNumber). */
-function placeholderContact(partyName: string): string {
+/** Stable placeholder when Excel has no usable unique contact number (satisfies unique contactNumber). */
+function placeholderContact(partyName: string, suffix?: string | number): string {
   const slug =
-    normalizeNameKey(partyName).replace(/[^a-z0-9]/g, "").slice(0, 40) || "unknown";
-  return `${PLACEHOLDER_PREFIX}${slug}`;
+    normalizeNameKey(partyName).replace(/[^a-z0-9]/g, "").slice(0, 32) || "unknown";
+  return `${PLACEHOLDER_PREFIX}${slug}${suffix ? `-${suffix}` : ""}`;
 }
 
 function parseContact(raw: string): string | null {
@@ -92,14 +91,15 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
     }
 
     let created = 0;
+    let duplicateNameCreated = 0;
     let updated = 0;
     let skipped = 0;
     const errors: ImportSummary["errors"] = [];
-    const seenContacts = new Set<string>();
     const validRows: Array<{
       rowNumber: number;
       partyName: string;
-      contactNumber: string;
+      nameKey: string;
+      contactNumber: string | null;
       outstandingBalance: number;
     }> = [];
 
@@ -118,17 +118,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       }
 
       const { partyName, contactNumber, outstandingBalance } = parsed;
-
-      if (seenContacts.has(contactNumber)) {
-        skipped++;
-        addImportError(errors, {
-          row: rowNumber,
-          message: "Duplicate contact number in uploaded file",
-        });
-        continue;
-      }
-      seenContacts.add(contactNumber);
-      validRows.push({ rowNumber, partyName, contactNumber, outstandingBalance });
+      validRows.push({ rowNumber, partyName, nameKey: normalizeNameKey(partyName), contactNumber, outstandingBalance });
     }
 
     logger.info("customer_import_validation_complete", {
@@ -140,21 +130,33 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       memoryMb: memorySnapshotMb(),
     });
 
-    const existingContacts = await loadExistingContacts(shopId, validRows.map((row) => row.contactNumber));
-    logger.info("customer_import_existing_lookup_complete", {
+    const existingLookup = await loadExistingCustomerLookup(shopId);
+    logger.info("customer_import_existing_name_lookup_complete", {
       shopId,
-      lookupContacts: validRows.length,
-      existingCount: existingContacts.size,
+      lookupNames: existingLookup.byName.size,
+      existingCustomers: existingLookup.contactNumbers.size,
       durationMs: Date.now() - startedAt,
       memoryMb: memorySnapshotMb(),
     });
 
+    const reservedContacts = new Set(existingLookup.contactNumbers);
     const batches = chunk(validRows, IMPORT_BATCH_SIZE);
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       const batchStartedAt = Date.now();
       const batch = batches[batchIndex];
-      const updates = batch.filter((row) => existingContacts.has(row.contactNumber));
-      const creates = batch.filter((row) => !existingContacts.has(row.contactNumber));
+      const updates: Array<(typeof batch)[number] & { customerId: string }> = [];
+      const creates: Array<(typeof batch)[number] & { contactNumber: string; duplicateName: boolean }> = [];
+
+      for (const row of batch) {
+        const matches = existingLookup.byName.get(row.nameKey) ?? [];
+        if (matches.length === 1) {
+          updates.push({ ...row, customerId: matches[0].id });
+          continue;
+        }
+
+        const contactNumber = reserveContactNumber(row.partyName, row.rowNumber, row.contactNumber, reservedContacts);
+        creates.push({ ...row, contactNumber, duplicateName: matches.length > 1 });
+      }
       logger.info("customer_import_batch_start", {
         shopId,
         batch: batchIndex + 1,
@@ -162,6 +164,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
         rows: batch.length,
         updates: updates.length,
         creates: creates.length,
+        duplicateNameCreates: creates.filter((row) => row.duplicateName).length,
       });
 
       try {
@@ -183,14 +186,16 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
 
           for (const row of updates) {
             await tx.customer.update({
-              where: { shopId_contactNumber: { shopId, contactNumber: row.contactNumber } },
+              where: { id: row.customerId },
               data: { outstandingBalance: row.outstandingBalance },
             });
           }
         }, { timeout: 20000 });
 
         const skippedDuplicates = creates.length - batchCreated;
+        const batchDuplicateNameCreated = creates.filter((row) => row.duplicateName).length;
         created += batchCreated;
+        duplicateNameCreated += batchDuplicateNameCreated;
         updated += updates.length;
         skipped += skippedDuplicates;
         logger.info("customer_import_batch_complete", {
@@ -199,6 +204,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
           totalBatches: batches.length,
           rows: batch.length,
           created: batchCreated,
+          duplicateNameCreated: batchDuplicateNameCreated,
           updated: updates.length,
           skippedDuplicates,
           durationMs: Date.now() - batchStartedAt,
@@ -225,6 +231,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       shopId,
       totalProcessed: rows.length,
       created,
+      duplicateNameCreated,
       updated,
       skipped,
       errors: errors.length,
@@ -235,6 +242,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
     return {
       totalProcessed: rows.length,
       created,
+      duplicateNameCreated,
       updated,
       skipped,
       errors,
@@ -251,6 +259,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
     return {
       totalProcessed: 0,
       created: 0,
+      duplicateNameCreated: 0,
       updated: 0,
       skipped: 0,
       errors: [{ row: 0, message: `Failed to parse Excel file: ${message}` }],
@@ -270,18 +279,37 @@ function chunk<T>(items: T[], size: number): T[][] {
   return batches;
 }
 
-async function loadExistingContacts(shopId: string, contacts: string[]) {
-  const uniqueContacts = Array.from(new Set(contacts));
-  const existingContacts = new Set<string>();
-  const batches = chunk(uniqueContacts, EXISTING_LOOKUP_BATCH_SIZE);
-  for (const batch of batches) {
-    const existing = await prisma.customer.findMany({
-      where: { shopId, contactNumber: { in: batch } },
-      select: { contactNumber: true },
-    });
-    existing.forEach((customer) => existingContacts.add(customer.contactNumber));
+async function loadExistingCustomerLookup(shopId: string) {
+  const customers = await prisma.customer.findMany({
+    where: { shopId },
+    select: { id: true, partyName: true, contactNumber: true },
+  });
+  const byName = new Map<string, Array<{ id: string }>>();
+  const contactNumbers = new Set<string>();
+  customers.forEach((customer) => {
+    const key = normalizeNameKey(customer.partyName);
+    const matches = byName.get(key) ?? [];
+    matches.push({ id: customer.id });
+    byName.set(key, matches);
+    contactNumbers.add(customer.contactNumber);
+  });
+  return { byName, contactNumbers };
+}
+
+function reserveContactNumber(partyName: string, rowNumber: number, contactNumber: string | null, reservedContacts: Set<string>) {
+  if (contactNumber && !reservedContacts.has(contactNumber)) {
+    reservedContacts.add(contactNumber);
+    return contactNumber;
   }
-  return existingContacts;
+
+  let suffix = rowNumber;
+  let placeholder = placeholderContact(partyName, suffix);
+  while (reservedContacts.has(placeholder)) {
+    suffix++;
+    placeholder = placeholderContact(partyName, suffix);
+  }
+  reservedContacts.add(placeholder);
+  return placeholder;
 }
 
 function memorySnapshotMb() {
@@ -294,7 +322,7 @@ function memorySnapshotMb() {
 
 function parseRow(row: Record<string, unknown>): {
   partyName: string;
-  contactNumber: string;
+  contactNumber: string | null;
   outstandingBalance: number;
 } | null {
   const nameValue = cellValue(
@@ -307,7 +335,7 @@ function parseRow(row: Record<string, unknown>): {
   const contactValue = cellValue(
     findField(row, "contactnumber", "mobile", "phone", "contact", "number") as CellValue
   );
-  const contactNumber = parseContact(contactValue || "") || placeholderContact(partyName);
+  const contactNumber = parseContact(contactValue || "");
 
   const balanceValue = cellValue(
     findField(row, "outstandingbalance", "closingbalance", "pendingamount", "dueamount", "osamount", "balance", "amount") as CellValue

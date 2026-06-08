@@ -77,7 +77,7 @@ export default function UploadPage() {
       <p className="mt-1 text-slate-500">
         Columns: <strong>Customer Name</strong> (or Party Name),{" "}
         <strong>Contact Number</strong>, <strong>Outstanding Balance</strong>.
-        Matches by contact first, then by name if contact is empty.
+        Matches customers by exact Customer Name only. If multiple matching names exist, a new customer is created safely.
       </p>
 
       <form onSubmit={upload} className="card mt-6">
@@ -88,8 +88,8 @@ export default function UploadPage() {
           className="w-full text-sm"
         />
         <p className="mt-2 text-xs text-slate-500">
-          Existing customers are updated; new rows are created with Pending status. Empty rows
-          (no name and no contact) are ignored.
+          Existing customers are updated by name; new rows are created with Pending status. Empty rows
+          with no usable data are ignored.
         </p>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <button
@@ -112,6 +112,10 @@ export default function UploadPage() {
             <div>
               <dt className="text-slate-500">New customers created</dt>
               <dd className="text-2xl font-bold text-emerald-600">{summary.created}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Duplicate-name customers created separately</dt>
+              <dd className="text-2xl font-bold text-violet-600">{summary.duplicateNameCreated ?? 0}</dd>
             </div>
             <div>
               <dt className="text-slate-500">Existing customers updated</dt>

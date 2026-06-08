@@ -16,6 +16,7 @@ export interface ImportSummary {
   /** Rows that had at least a name or contact value */
   totalProcessed: number;
   created: number;
+  duplicateNameCreated?: number;
   updated: number;
   /** Invalid or duplicate-in-file rows */
   skipped: number;
