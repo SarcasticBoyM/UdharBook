@@ -34,6 +34,9 @@ export default function UploadPage() {
         } catch {
           /* non-JSON body */
         }
+        if (res.status === 504) {
+          message = "Upload timed out while importing. The server may still be processing a very large file; try again with a smaller batch if this repeats.";
+        }
         setError(message);
         return;
       }

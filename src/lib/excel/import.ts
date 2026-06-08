@@ -1,8 +1,12 @@
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import type { ImportSummary } from "@/types";
 
 const PLACEHOLDER_PREFIX = "NO-PH-";
+const IMPORT_BATCH_SIZE = 100;
+const EXISTING_LOOKUP_BATCH_SIZE = 500;
+const MAX_ERROR_ROWS = 500;
 
 export function isPlaceholderContact(contact: string): boolean {
   return contact.startsWith(PLACEHOLDER_PREFIX);
@@ -62,8 +66,20 @@ function parseBalance(value: string | null): number | null {
 }
 
 export async function importCustomersFromExcel(buffer: Buffer, shopId: string): Promise<ImportSummary> {
+  const startedAt = Date.now();
   try {
+    logger.info("customer_import_parse_start", {
+      shopId,
+      fileBytes: buffer.length,
+      memoryMb: memorySnapshotMb(),
+    });
     const rows = await parseWorkbook(buffer);
+    logger.info("customer_import_parse_complete", {
+      shopId,
+      totalRowsDetected: rows.length,
+      durationMs: Date.now() - startedAt,
+      memoryMb: memorySnapshotMb(),
+    });
 
     if (rows.length === 0) {
       return {
@@ -80,6 +96,12 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
     let skipped = 0;
     const errors: ImportSummary["errors"] = [];
     const seenContacts = new Set<string>();
+    const validRows: Array<{
+      rowNumber: number;
+      partyName: string;
+      contactNumber: string;
+      outstandingBalance: number;
+    }> = [];
 
     for (let idx = 0; idx < rows.length; idx++) {
       const rowNumber = idx + 2;
@@ -88,7 +110,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
 
       if (!parsed) {
         skipped++;
-        errors.push({
+        addImportError(errors, {
           row: rowNumber,
           message: "Valid customer name and non-negative outstanding balance are required",
         });
@@ -99,43 +121,116 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
 
       if (seenContacts.has(contactNumber)) {
         skipped++;
-        errors.push({
+        addImportError(errors, {
           row: rowNumber,
           message: "Duplicate contact number in uploaded file",
         });
         continue;
       }
       seenContacts.add(contactNumber);
+      validRows.push({ rowNumber, partyName, contactNumber, outstandingBalance });
+    }
+
+    logger.info("customer_import_validation_complete", {
+      shopId,
+      parsedRows: rows.length,
+      validRows: validRows.length,
+      skippedRows: skipped,
+      durationMs: Date.now() - startedAt,
+      memoryMb: memorySnapshotMb(),
+    });
+
+    const existingContacts = await loadExistingContacts(shopId, validRows.map((row) => row.contactNumber));
+    logger.info("customer_import_existing_lookup_complete", {
+      shopId,
+      lookupContacts: validRows.length,
+      existingCount: existingContacts.size,
+      durationMs: Date.now() - startedAt,
+      memoryMb: memorySnapshotMb(),
+    });
+
+    const batches = chunk(validRows, IMPORT_BATCH_SIZE);
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batchStartedAt = Date.now();
+      const batch = batches[batchIndex];
+      const updates = batch.filter((row) => existingContacts.has(row.contactNumber));
+      const creates = batch.filter((row) => !existingContacts.has(row.contactNumber));
+      logger.info("customer_import_batch_start", {
+        shopId,
+        batch: batchIndex + 1,
+        totalBatches: batches.length,
+        rows: batch.length,
+        updates: updates.length,
+        creates: creates.length,
+      });
 
       try {
-        const existing = await prisma.customer.findUnique({
-          where: { shopId_contactNumber: { shopId, contactNumber } },
-          select: { id: true },
-        });
+        let batchCreated = 0;
+        await prisma.$transaction(async (tx) => {
+          if (creates.length > 0) {
+            const createResult = await tx.customer.createMany({
+              data: creates.map((row) => ({
+                shopId,
+                partyName: row.partyName,
+                contactNumber: row.contactNumber,
+                outstandingBalance: row.outstandingBalance,
+                status: row.outstandingBalance === 0 ? "CLEARED" : "PENDING",
+              })),
+              skipDuplicates: true,
+            });
+            batchCreated = createResult.count;
+          }
 
-        await prisma.customer.upsert({
-          where: { shopId_contactNumber: { shopId, contactNumber } },
-          update: {
-            outstandingBalance,
-            updatedAt: new Date(),
-          },
-          create: {
-            shopId,
-            partyName,
-            contactNumber,
-            outstandingBalance,
-            status: outstandingBalance === 0 ? "CLEARED" : "PENDING",
-          },
+          for (const row of updates) {
+            await tx.customer.update({
+              where: { shopId_contactNumber: { shopId, contactNumber: row.contactNumber } },
+              data: { outstandingBalance: row.outstandingBalance },
+            });
+          }
+        }, { timeout: 20000 });
+
+        const skippedDuplicates = creates.length - batchCreated;
+        created += batchCreated;
+        updated += updates.length;
+        skipped += skippedDuplicates;
+        logger.info("customer_import_batch_complete", {
+          shopId,
+          batch: batchIndex + 1,
+          totalBatches: batches.length,
+          rows: batch.length,
+          created: batchCreated,
+          updated: updates.length,
+          skippedDuplicates,
+          durationMs: Date.now() - batchStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+          memoryMb: memorySnapshotMb(),
         });
-        if (existing) updated++;
-        else created++;
       } catch (err: unknown) {
-        skipped++;
-        const errMsg =
-          err instanceof Error ? err.message : String(err);
-        errors.push({ row: rowNumber, message: errMsg });
+        skipped += batch.length;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        batch.forEach((row) => addImportError(errors, { row: row.rowNumber, message: errMsg }));
+        logger.error("customer_import_batch_failed", {
+          shopId,
+          batch: batchIndex + 1,
+          totalBatches: batches.length,
+          rows: batch.length,
+          error: errMsg,
+          durationMs: Date.now() - batchStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+        });
       }
     }
+
+    logger.info("customer_import_complete", {
+      shopId,
+      totalProcessed: rows.length,
+      created,
+      updated,
+      skipped,
+      errors: errors.length,
+      durationMs: Date.now() - startedAt,
+      memoryMb: memorySnapshotMb(),
+    });
 
     return {
       totalProcessed: rows.length,
@@ -147,6 +242,12 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : String(err);
+    logger.error("customer_import_failed", {
+      shopId,
+      error: message,
+      durationMs: Date.now() - startedAt,
+      memoryMb: memorySnapshotMb(),
+    });
     return {
       totalProcessed: 0,
       created: 0,
@@ -155,6 +256,40 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       errors: [{ row: 0, message: `Failed to parse Excel file: ${message}` }],
     };
   }
+}
+
+function addImportError(errors: ImportSummary["errors"], error: { row: number; message: string }) {
+  if (errors.length < MAX_ERROR_ROWS) errors.push(error);
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
+}
+
+async function loadExistingContacts(shopId: string, contacts: string[]) {
+  const uniqueContacts = Array.from(new Set(contacts));
+  const existingContacts = new Set<string>();
+  const batches = chunk(uniqueContacts, EXISTING_LOOKUP_BATCH_SIZE);
+  for (const batch of batches) {
+    const existing = await prisma.customer.findMany({
+      where: { shopId, contactNumber: { in: batch } },
+      select: { contactNumber: true },
+    });
+    existing.forEach((customer) => existingContacts.add(customer.contactNumber));
+  }
+  return existingContacts;
+}
+
+function memorySnapshotMb() {
+  const memory = process.memoryUsage();
+  return {
+    rss: Math.round(memory.rss / 1024 / 1024),
+    heapUsed: Math.round(memory.heapUsed / 1024 / 1024),
+  };
 }
 
 function parseRow(row: Record<string, unknown>): {
@@ -205,7 +340,8 @@ async function parseWorkbook(buffer: Buffer): Promise<Record<string, unknown>[]>
       if (header) obj[header] = cell.value;
     });
 
-    rows.push(obj);
+    const hasAnyValue = Object.values(obj).some((value) => cellValue(value as CellValue));
+    if (hasAnyValue) rows.push(obj);
   });
 
   return rows;

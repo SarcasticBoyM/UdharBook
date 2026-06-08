@@ -11,7 +11,12 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   try {
+    logger.info("customer_import_upload_request_start", {
+      contentLength: request.headers.get("content-length"),
+      contentType: request.headers.get("content-type"),
+    });
     const session = await getSession();
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -25,6 +30,14 @@ export async function POST(request: Request) {
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
+    logger.info("customer_import_upload_file_received", {
+      userId: session.id,
+      role: session.role,
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      durationMs: Date.now() - startedAt,
+    });
 
     const name = file.name.toLowerCase();
     if (!name.endsWith(".xlsx")) {
@@ -58,6 +71,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Selected shop no longer exists. Please switch to the correct shop and retry import." }, { status: 400 });
     }
     const buffer = Buffer.from(await file.arrayBuffer());
+    logger.info("customer_import_buffer_ready", {
+      userId: session.id,
+      shopId,
+      fileName: file.name,
+      bufferBytes: buffer.length,
+      durationMs: Date.now() - startedAt,
+    });
     const summary = await importCustomersFromExcel(buffer, shopId);
     await logActivity({
       action: "excel_imported",
@@ -65,11 +85,25 @@ export async function POST(request: Request) {
       shopId,
       details: `${summary.totalProcessed} rows processed`,
     });
+    logger.info("customer_import_upload_complete", {
+      userId: session.id,
+      shopId,
+      fileName: file.name,
+      totalProcessed: summary.totalProcessed,
+      created: summary.created,
+      updated: summary.updated,
+      skipped: summary.skipped,
+      errors: summary.errors.length,
+      durationMs: Date.now() - startedAt,
+    });
     return NextResponse.json(summary);
   } catch (err) {
-    console.error("[import]", err);
     const message =
       err instanceof Error ? err.message : "Import failed on the server";
+    logger.error("customer_import_upload_failed", {
+      error: message,
+      durationMs: Date.now() - startedAt,
+    });
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
