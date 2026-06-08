@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { OrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
@@ -66,6 +67,7 @@ function temporaryLeadPhone() {
 
 const recoveryVisitTypes = new Set(["Recovery Follow-up", "Payment Collection", "Cheque Pickup", "Collection", "Follow-up", "Payment Reminder"]);
 const followUpOutcomes = new Set(["Follow-up Later", "Follow-up Required", "Payment Promised", "Revisit Required", "Customer Unavailable", "Customer Busy", "Call Back Requested", "Not Reachable"]);
+const orderReceivedStatus = "PENDING";
 
 function paymentSummary(mode?: string | null, amount = 0) {
   if (mode === "Cash") return `Cash payment collected Rs ${amount}`;
@@ -185,6 +187,7 @@ export async function POST(request: Request) {
       visitType: body.visitType,
       outcome: body.outcome,
     });
+    const createdOrdersForAudit: { id: string; status: OrderStatus }[] = [];
     const visit = await prisma.$transaction(async (tx) => {
       let customer = body.customerId
         ? await tx.customer.findFirst({
@@ -390,21 +393,12 @@ export async function POST(request: Request) {
             orderDetails,
             preferredDeliveryDate: body.orderExpectedDelivery ? new Date(body.orderExpectedDelivery) : null,
             priority: body.orderPriority ?? "Normal",
-            status: "ORDER_RECEIVED",
+            status: orderReceivedStatus,
             sourceModule: "FIELD_VISIT",
             visitSource: visitType,
           },
         });
-        await tx.orderActivity.create({
-          data: {
-            shopId,
-            orderId: order.id,
-            userId: session.id,
-            action: "CREATED",
-            newStatus: order.status,
-            notes: "Order received during field visit",
-          },
-        });
+        createdOrdersForAudit.push({ id: order.id, status: order.status });
         await tx.activityLog.create({
           data: {
             shopId,
@@ -427,6 +421,33 @@ export async function POST(request: Request) {
       });
       return created;
     });
+    for (const createdOrderForAudit of createdOrdersForAudit) {
+      try {
+        await prisma.orderActivity.create({
+          data: {
+            shopId,
+            orderId: createdOrderForAudit.id,
+            userId: session.id,
+            action: "CREATED",
+            newStatus: createdOrderForAudit.status,
+            notes: "Order received during field visit",
+          },
+        });
+        logger.info("field_visit_order_activity_recorded", {
+          shopId,
+          staffId: session.id,
+          orderId: createdOrderForAudit.id,
+        });
+      } catch (activityError) {
+        logger.error("field_visit_order_activity_record_failed_non_blocking", {
+          shopId,
+          staffId: session.id,
+          orderId: createdOrderForAudit.id,
+          error: activityError instanceof Error ? activityError.message : String(activityError),
+          stack: activityError instanceof Error ? activityError.stack : undefined,
+        });
+      }
+    }
 
     return NextResponse.json({ success: true, visit });
   } catch (error) {

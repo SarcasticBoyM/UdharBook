@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
+const legacyReceivedStatus = "PENDING" as OrderStatus;
 
 const createSchema = z.object({
   customerId: z.string().min(1),
@@ -113,7 +114,73 @@ function transitionStatus(current: OrderStatus, action: string) {
   throw new Error("INVALID_ORDER_ACTION");
 }
 
+function emptyOrderSummary() {
+  return {
+    pendingOrders: 0,
+    dispatchedOrders: 0,
+    highPriorityOrders: 0,
+    deliveredToday: 0,
+    cancelledOrders: 0,
+    upcomingDeliveries: 0,
+  };
+}
+
+function clientOrderError(error: unknown) {
+  if (error instanceof z.ZodError) return `Invalid order data: ${error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`;
+  if (!(error instanceof Error)) return String(error);
+  if (error.message === "CUSTOMER_NOT_FOUND") return "Customer was not found for this shop.";
+  if (error.message === "INVALID_DATE") return "Preferred delivery date is invalid.";
+  if (error.message.includes("invalid input value for enum") || error.message.includes("Invalid enum value")) {
+    return "Order status setup is not fully migrated. Saved using backward-compatible order status.";
+  }
+  if (error.message.includes("OrderActivity")) return "Order activity tracking is not fully migrated yet. Order data was preserved.";
+  return error.message || "Could not save order.";
+}
+
+async function recordOrderActivitySafe(input: {
+  requestId: string;
+  shopId: string;
+  orderId: string;
+  userId: string;
+  action: string;
+  previousStatus?: OrderStatus | null;
+  newStatus?: OrderStatus | null;
+  notes: string;
+}) {
+  try {
+    await prisma.orderActivity.create({
+      data: {
+        shopId: input.shopId,
+        orderId: input.orderId,
+        userId: input.userId,
+        action: input.action,
+        previousStatus: input.previousStatus ?? undefined,
+        newStatus: input.newStatus ?? undefined,
+        notes: input.notes,
+      },
+    });
+    logger.info("order_activity_recorded", {
+      requestId: input.requestId,
+      shopId: input.shopId,
+      orderId: input.orderId,
+      userId: input.userId,
+      action: input.action,
+    });
+  } catch (error) {
+    logger.error("order_activity_record_failed_non_blocking", {
+      requestId: input.requestId,
+      shopId: input.shopId,
+      orderId: input.orderId,
+      userId: input.userId,
+      action: input.action,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
+}
+
 export async function GET(request: Request) {
+  const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.role === "SUPER_ADMIN") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -126,26 +193,63 @@ export async function GET(request: Request) {
   upcoming.setDate(upcoming.getDate() + 7);
 
   try {
-    logger.info("orders_fetch_start", { shopId, userId: session.id, role: session.role, filter });
+    logger.info("orders_fetch_start", { requestId, shopId, userId: session.id, role: session.role, filter });
     const where: Prisma.OrderWhereInput = { shopId };
     if (filter === "high") where.priority = "High";
     if (filter === "sales") where.visitSource = "Sales Visit";
     if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
     if (filter === "upcoming") where.preferredDeliveryDate = { gte: now, lte: upcoming };
 
-    const rows = await prisma.order.findMany({
-      where,
-      include: {
-        customer: { select: { partyName: true, contactNumber: true } },
-        createdBy: { select: { name: true, role: true } },
-        activities: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          include: { user: { select: { name: true, role: true } } },
-        },
+    const baseInclude = {
+      customer: { select: { partyName: true, contactNumber: true } },
+      createdBy: { select: { name: true, role: true } },
+    } satisfies Prisma.OrderInclude;
+    const fullInclude = {
+      ...baseInclude,
+      activities: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: { user: { select: { name: true, role: true } } },
       },
-      orderBy: { createdAt: "desc" },
-      take: 500,
+    } satisfies Prisma.OrderInclude;
+
+    let rows;
+    try {
+      rows = await prisma.order.findMany({
+        where,
+        include: fullInclude,
+        orderBy: { createdAt: "desc" },
+        take: 500,
+      });
+    } catch (error) {
+      logger.error("orders_fetch_with_activity_failed_retrying_without_activity", {
+        requestId,
+        shopId,
+        userId: session.id,
+        role: session.role,
+        filter,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      const fallbackRows = await prisma.order.findMany({
+        where,
+        include: baseInclude,
+        orderBy: { createdAt: "desc" },
+        take: 500,
+      });
+      rows = fallbackRows.map((order) => ({ ...order, activities: [] }));
+    }
+
+    logger.info("orders_fetch_query_counts", {
+      requestId,
+      shopId,
+      userId: session.id,
+      filter,
+      totalRows: rows.length,
+      statuses: rows.reduce<Record<string, number>>((counts, order) => {
+        counts[order.status] = (counts[order.status] ?? 0) + 1;
+        return counts;
+      }, {}),
     });
 
     const orders = rows.filter((order) => {
@@ -171,6 +275,7 @@ export async function GET(request: Request) {
     }
 
     logger.info("orders_fetch_success", {
+      requestId,
       shopId,
       userId: session.id,
       filter,
@@ -188,6 +293,7 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     logger.error("orders_fetch_failed", {
+      requestId,
       shopId,
       userId: session.id,
       role: session.role,
@@ -195,20 +301,34 @@ export async function GET(request: Request) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return NextResponse.json({ error: "Could not load orders.", detail: error instanceof Error ? error.message : String(error), orders: [], summary: { pendingOrders: 0, dispatchedOrders: 0, highPriorityOrders: 0, deliveredToday: 0, cancelledOrders: 0, upcomingDeliveries: 0 } }, { status: 500 });
+    return NextResponse.json({ error: "Could not load orders.", detail: error instanceof Error ? error.message : String(error), orders: [], summary: emptyOrderSummary() }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {
-    const body = createSchema.parse(await request.json());
+    logger.info("order_create_request_start", { requestId, shopId, userId: session.id, role: session.role });
+    const payload = await request.json();
+    logger.info("order_create_payload_received", {
+      requestId,
+      shopId,
+      userId: session.id,
+      role: session.role,
+      hasCustomerId: Boolean(payload?.customerId),
+      hasOrderDetails: Boolean(payload?.orderDetails),
+      preferredDeliveryDate: payload?.preferredDeliveryDate ?? null,
+      priority: payload?.priority ?? null,
+    });
+    const body = createSchema.parse(payload);
     const preferredDeliveryDate = parseOptionalDate(body.preferredDeliveryDate);
     const order = await prisma.$transaction(async (tx) => {
+      logger.info("order_create_transaction_start", { requestId, shopId, userId: session.id, role: session.role, customerId: body.customerId });
       const customer = await tx.customer.findFirst({ where: { id: body.customerId, shopId }, select: { id: true } });
       if (!customer) throw new Error("CUSTOMER_NOT_FOUND");
 
@@ -220,19 +340,9 @@ export async function POST(request: Request) {
           orderDetails: body.orderDetails,
           preferredDeliveryDate,
           priority: body.priority,
-          status: "ORDER_RECEIVED",
+          status: legacyReceivedStatus,
           sourceModule: "ORDER_DESK",
           visitSource: "Order Desk",
-        },
-      });
-      await tx.orderActivity.create({
-        data: {
-          shopId,
-          orderId: created.id,
-          userId: session.id,
-          action: "CREATED",
-          newStatus: created.status,
-          notes: "Order created from Order Desk",
         },
       });
       await tx.activityLog.create({
@@ -244,28 +354,53 @@ export async function POST(request: Request) {
           details: "Order created from Order Desk",
         },
       });
+      logger.info("order_create_transaction_success", { requestId, shopId, userId: session.id, orderId: created.id, status: created.status });
       return created;
+    });
+    await recordOrderActivitySafe({
+      requestId,
+      shopId,
+      orderId: order.id,
+      userId: session.id,
+      action: "CREATED",
+      newStatus: order.status,
+      notes: "Order created from Order Desk",
     });
     return NextResponse.json({ order }, { status: 201 });
   } catch (error) {
-    logger.warn("order_create_failed", {
+    logger.error("order_create_failed", {
+      requestId,
       userId: session.id,
+      role: session.role,
       shopId,
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
-    const message = error instanceof Error && error.message === "CUSTOMER_NOT_FOUND" ? "Customer was not found for this shop." : "Could not create order.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: clientOrderError(error) }, { status: 400 });
   }
 }
 
 export async function PATCH(request: Request) {
+  const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {
-    const body = patchSchema.parse(await request.json());
+    logger.info("order_update_request_start", { requestId, shopId, userId: session.id, role: session.role });
+    const payload = await request.json();
+    logger.info("order_update_payload_received", {
+      requestId,
+      shopId,
+      userId: session.id,
+      role: session.role,
+      orderId: payload?.orderId ?? null,
+      action: payload?.action ?? null,
+      status: payload?.status ?? null,
+      hasOrderDetails: Boolean(payload?.orderDetails),
+    });
+    const body = patchSchema.parse(payload);
     const action = body.action ?? actionForStatus(body.status as OrderStatus | undefined);
     const preferredDeliveryDate = body.preferredDeliveryDate === undefined ? undefined : parseOptionalDate(body.preferredDeliveryDate);
     const now = new Date();
@@ -300,17 +435,6 @@ export async function PATCH(request: Request) {
         },
       });
 
-      await tx.orderActivity.create({
-        data: {
-          shopId,
-          orderId: updated.id,
-          userId: session.id,
-          action: isEdit ? "EDITED" : action,
-          previousStatus: existing.status,
-          newStatus: updated.status,
-          notes: isEdit ? "Order details edited" : `Order status changed from ${existing.status} to ${updated.status}`,
-        },
-      });
       await tx.activityLog.create({
         data: {
           shopId,
@@ -322,12 +446,25 @@ export async function PATCH(request: Request) {
       });
       return updated;
     });
+    await recordOrderActivitySafe({
+      requestId,
+      shopId,
+      orderId: order.id,
+      userId: session.id,
+      action: action === "EDIT" ? "EDITED" : action,
+      previousStatus: order.activities?.[0]?.newStatus ?? undefined,
+      newStatus: order.status,
+      notes: action === "EDIT" ? "Order details edited" : `Order status updated to ${order.status}`,
+    });
     return NextResponse.json({ order });
   } catch (error) {
-    logger.warn("order_update_failed", {
+    logger.error("order_update_failed", {
+      requestId,
       userId: session.id,
+      role: session.role,
       shopId,
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
     const message =
       error instanceof Error && error.message === "ORDER_READ_ONLY"
