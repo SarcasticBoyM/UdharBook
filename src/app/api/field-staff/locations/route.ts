@@ -70,6 +70,19 @@ export async function GET(request: Request) {
     locations.forEach((location) => {
       if (!latestByStaff.has(location.staffId)) latestByStaff.set(location.staffId, location);
     });
+    const invalidLatestLocations = staff.filter((person) => {
+      const latest = latestByStaff.get(person.id);
+      return !latest || !Number.isFinite(latest.latitude) || !Number.isFinite(latest.longitude) || latest.latitude < -90 || latest.latitude > 90 || latest.longitude < -180 || latest.longitude > 180;
+    }).length;
+    console.log("[Live Tracking API] staff location fetch", {
+      mode: staffId ? "single_staff" : "all_staff",
+      shopId,
+      requestedStaffId: staffId ?? null,
+      staffCount: staff.length,
+      locationRows: locations.length,
+      validLatestLocations: staff.length - invalidLatestLocations,
+      invalidLatestLocations,
+    });
 
     const openVisitByStaff = new Map(openVisits.map((visit) => [visit.staffId, visit]));
     const attendanceByStaff = new Map(attendances.map((attendance) => [attendance.staffId, attendance]));
