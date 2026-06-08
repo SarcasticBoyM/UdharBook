@@ -131,6 +131,14 @@ export async function middleware(request: NextRequest) {
     const role = payload.role as string | undefined;
     const shopId = payload.shopId as string | undefined;
 
+    if (!role) {
+      logMiddleware("warn", "middleware_reject_missing_role", { path: pathname, shopId });
+      if (pathname.startsWith("/api/")) {
+        return clearSessionCookie(secure(NextResponse.json({ error: "Unauthorized" }, { status: 401 })));
+      }
+      return clearSessionCookie(secure(NextResponse.redirect(new URL("/login", request.url))));
+    }
+
     if (role === "SUPER_ADMIN" && SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix))) {
       logMiddleware("warn", "middleware_redirect_super_admin_business_page_blocked", { path: pathname, role, shopId });
       return secure(NextResponse.redirect(new URL("/", request.url)));
@@ -174,9 +182,12 @@ export async function middleware(request: NextRequest) {
       logMiddleware("warn", "middleware_reject_staff_api_forbidden", { path: pathname, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
-    if (!shopId) {
+    if (role !== "SUPER_ADMIN" && !shopId) {
       logMiddleware("error", "middleware_redirect_missing_shop_id", { path: pathname, role });
       return secure(NextResponse.redirect(new URL("/login", request.url)));
+    }
+    if (role === "SUPER_ADMIN" && !shopId) {
+      logMiddleware("warn", "middleware_super_admin_missing_shop_id_non_blocking", { path: pathname, role });
     }
 
     logMiddleware("info", "middleware_session_validated", { path: pathname, role, shopId });

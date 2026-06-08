@@ -18,12 +18,21 @@ export async function POST(request: Request) {
 
   try {
     const body = schema.parse(await request.json());
+    logger.info("password_reset_completion_requested", { ip, tokenPrefix: body.token.slice(0, 8) });
     const ok = await resetPassword(body.token, body.password);
     if (!ok) return NextResponse.json({ error: "Invalid or expired reset token" }, { status: 400 });
     logger.info("password_reset_completed");
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      logger.warn("password_reset_completion_validation_failed", { ip, issues: error.issues });
+      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    }
+    logger.error("password_reset_completion_failed", {
+      ip,
+      error: error instanceof Error ? error.message : "Unknown password reset completion error",
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-

@@ -17,6 +17,7 @@ export async function POST(request: Request) {
 
   try {
     const body = schema.parse(await request.json());
+    logger.info("password_reset_request_received", { email: body.email.toLowerCase(), ip });
     const reset = await createPasswordReset(body.email);
     if (reset) logger.info("password_reset_requested", { email: reset.email });
 
@@ -25,8 +26,16 @@ export async function POST(request: Request) {
       message: "If this email exists, a reset link has been prepared.",
       resetUrl: process.env.NODE_ENV === "production" ? undefined : reset?.resetUrl,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      logger.warn("password_reset_request_validation_failed", { ip, issues: error.issues });
+      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    }
+    logger.error("password_reset_request_failed", {
+      ip,
+      error: error instanceof Error ? error.message : "Unknown password reset request error",
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }
-
