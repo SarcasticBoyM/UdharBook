@@ -303,7 +303,6 @@ export async function GET(request: Request) {
   tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
 
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
-  const fieldSalesChequeScope: Prisma.ChequeWhereInput = session.role === "FIELD_SALES" ? { collectedById: session.id } : {};
   if (session.role === "FIELD_SALES" && format) {
     return NextResponse.json({ error: "Field sales users cannot export cheque reports" }, { status: 403 });
   }
@@ -346,7 +345,6 @@ export async function GET(request: Request) {
   if (staffId) conditions.push({ collectedById: staffId });
   if (minAmount !== undefined) conditions.push({ amount: { gte: minAmount } });
   if (maxAmount !== undefined) conditions.push({ amount: { lte: maxAmount } });
-  if (session.role === "FIELD_SALES") conditions.push(fieldSalesChequeScope);
 
   const where: Prisma.ChequeWhereInput = { AND: conditions };
 
@@ -387,20 +385,20 @@ export async function GET(request: Request) {
         take: format ? 1000 : limit,
       }),
       prisma.cheque.count({ where }),
-      prisma.user.findMany({ where: { shopId, ...(session.role === "FIELD_SALES" ? { id: session.id } : {}) }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, collectionDateTime: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, depositDateTime: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, clearedAt: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, status: "BOUNCED" } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope, amount: { gte: HIGH_VALUE } } }),
-      prisma.cheque.count({ where: { shopId, ...fieldSalesChequeScope } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, status: "DEPOSITED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, status: "CLEARED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, status: "BOUNCED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, depositDateTime: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, ...fieldSalesChequeScope, clearedAt: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
+      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "STAFF", "FIELD_SALES"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
+      prisma.cheque.count({ where: { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } } }),
+      prisma.cheque.count({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } } }),
+      prisma.cheque.count({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } } }),
+      prisma.cheque.count({ where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } } }),
+      prisma.cheque.count({ where: { shopId, status: "BOUNCED" } }),
+      prisma.cheque.count({ where: { shopId, amount: { gte: HIGH_VALUE } } }),
+      prisma.cheque.count({ where: { shopId } }),
+      prisma.cheque.aggregate({ where: { shopId, status: "DEPOSITED" }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { shopId, status: "CLEARED" }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { shopId, status: "BOUNCED" }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { AND: [where, { status: "DEPOSITED" }] }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { AND: [where, { status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }] }, _sum: { amount: true } }),
@@ -459,10 +457,10 @@ export async function GET(request: Request) {
       bounced,
       highValue,
       stale: await prisma.cheque.count({
-        where: { shopId, ...fieldSalesChequeScope, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } },
+        where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } },
       }),
       chequeDateTomorrow: await prisma.cheque.count({
-        where: { shopId, ...fieldSalesChequeScope, chequeDate: { gte: tomorrowStart, lte: tomorrowEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
+        where: { shopId, chequeDate: { gte: tomorrowStart, lte: tomorrowEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
       }),
     },
     summary: {
@@ -505,9 +503,6 @@ export async function POST(request: Request) {
       : null;
     if (body.staffVisitId && !linkedVisit) {
       return NextResponse.json({ error: "Linked visit not found for this customer" }, { status: 404 });
-    }
-    if (session.role === "FIELD_SALES" && !linkedVisit) {
-      return NextResponse.json({ error: "Field sales cheque collection must be linked to an active visit" }, { status: 403 });
     }
     if (linkedVisit && (!["STAFF", "FIELD_SALES"].includes(session.role) || linkedVisit.staffId !== session.id || linkedVisit.status !== "CHECKED_IN")) {
       return NextResponse.json({ error: "Linked visit cannot be modified by this user" }, { status: 403 });

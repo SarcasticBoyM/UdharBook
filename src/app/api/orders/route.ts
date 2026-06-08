@@ -40,8 +40,8 @@ const priorityRank: Record<string, number> = {
   Normal: 2,
 };
 
-function isOrderManager(role: string) {
-  return role === "SHOP_ADMIN" || role === "STAFF";
+function isOrderOperator(role: string) {
+  return role === "SHOP_ADMIN" || role === "STAFF" || role === "FIELD_SALES";
 }
 
 function parseOptionalDate(value?: string | null) {
@@ -128,7 +128,6 @@ export async function GET(request: Request) {
   try {
     logger.info("orders_fetch_start", { shopId, userId: session.id, role: session.role, filter });
     const where: Prisma.OrderWhereInput = { shopId };
-    if (session.role === "FIELD_SALES") where.createdById = session.id;
     if (filter === "high") where.priority = "High";
     if (filter === "sales") where.visitSource = "Sales Visit";
     if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
@@ -139,6 +138,11 @@ export async function GET(request: Request) {
       include: {
         customer: { select: { partyName: true, contactNumber: true } },
         createdBy: { select: { name: true, role: true } },
+        activities: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          include: { user: { select: { name: true, role: true } } },
+        },
       },
       orderBy: { createdAt: "desc" },
       take: 500,
@@ -198,7 +202,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!isOrderManager(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {
@@ -216,9 +220,19 @@ export async function POST(request: Request) {
           orderDetails: body.orderDetails,
           preferredDeliveryDate,
           priority: body.priority,
-          status: "PENDING",
+          status: "ORDER_RECEIVED",
           sourceModule: "ORDER_DESK",
           visitSource: "Order Desk",
+        },
+      });
+      await tx.orderActivity.create({
+        data: {
+          shopId,
+          orderId: created.id,
+          userId: session.id,
+          action: "CREATED",
+          newStatus: created.status,
+          notes: "Order created from Order Desk",
         },
       });
       await tx.activityLog.create({
@@ -247,7 +261,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!isOrderManager(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {
@@ -278,9 +292,25 @@ export async function PATCH(request: Request) {
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true } },
           createdBy: { select: { name: true, role: true } },
+          activities: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            include: { user: { select: { name: true, role: true } } },
+          },
         },
       });
 
+      await tx.orderActivity.create({
+        data: {
+          shopId,
+          orderId: updated.id,
+          userId: session.id,
+          action: isEdit ? "EDITED" : action,
+          previousStatus: existing.status,
+          newStatus: updated.status,
+          notes: isEdit ? "Order details edited" : `Order status changed from ${existing.status} to ${updated.status}`,
+        },
+      });
       await tx.activityLog.create({
         data: {
           shopId,

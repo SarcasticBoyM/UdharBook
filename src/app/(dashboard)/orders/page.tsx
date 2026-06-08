@@ -19,6 +19,7 @@ type OrderRow = {
   cancelledAt?: string | null;
   customer: { partyName: string; contactNumber: string };
   createdBy: { name: string; role: string };
+  activities?: { action: string; createdAt: string; user: { name: string; role: string } }[];
 };
 
 type CustomerSuggestion = {
@@ -135,7 +136,7 @@ export default function OrderDeskPage() {
   const [orderDetails, setOrderDetails] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [priority, setPriority] = useState("Normal");
-  const canManageOrders = role === "SHOP_ADMIN" || role === "STAFF";
+  const canManageOrders = role === "SHOP_ADMIN" || role === "STAFF" || role === "FIELD_SALES";
   const canCreateOrders = canManageOrders;
 
   async function load() {
@@ -319,9 +320,10 @@ export default function OrderDeskPage() {
               </div>
             </div>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{order.orderDetails}</p>
-            <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-5">
               <span>Delivery: {formatDate(order.preferredDeliveryDate)}</span>
-              <span>By: {order.createdBy.name}</span>
+              <span>Created By: {order.createdBy.name}</span>
+              <span>Last Updated By: {order.activities?.[0]?.user.name ?? order.createdBy.name}</span>
               <span>Source: {order.visitSource ?? order.sourceModule ?? "Field visit"}</span>
               <span>Order date: {formatDateTime(order.createdAt)}</span>
             </div>
