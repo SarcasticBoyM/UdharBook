@@ -4,6 +4,8 @@ import { getSession, hashPassword } from "@/lib/auth";
 import { canManageShop, isSuperAdmin } from "@/lib/tenant";
 import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
+import { fallbackOperationalRoles } from "@/lib/operational-roles";
+import { logger } from "@/lib/logger";
 
 export async function POST(
   _request: Request,
@@ -28,10 +30,20 @@ export async function POST(
       passwordResetRequired: true,
       tempPasswordExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     },
-    include: {
-      shop: { select: { shopName: true } },
-      roleAssignments: { select: { role: true, createdAt: true } },
-    },
+    include: { shop: { select: { shopName: true } } },
+  });
+  const roleAssignments = await prisma.userRoleAssignment.findMany({
+    where: { userId: updated.id, shopId: updated.shopId },
+    select: { role: true, createdAt: true },
+  }).catch((error) => {
+    logger.error("user_reset_password_role_assignment_lookup_failed_fallback_legacy_role", {
+      actorId: session.id,
+      userId: updated.id,
+      shopId: updated.shopId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return fallbackOperationalRoles(updated.role).map((role) => ({ role, createdAt: new Date(0) }));
   });
   await logActivity({
     action: "user_password_reset",
@@ -39,5 +51,5 @@ export async function POST(
     shopId: updated.shopId,
     details: updated.email,
   });
-  return NextResponse.json({ user: updated, temporaryPassword });
+  return NextResponse.json({ user: { ...updated, roleAssignments }, temporaryPassword });
 }

@@ -6,6 +6,7 @@ import { prisma, withPrismaRetry } from "./db";
 import type { SessionUser } from "@/types";
 import { logger } from "@/lib/logger";
 import { passwordHashDiagnostics, safeAuthRuntimeDiagnostics } from "@/lib/auth-diagnostics";
+import { fallbackOperationalRoles } from "@/lib/operational-roles";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -25,6 +26,44 @@ function sessionLogMeta(user: SessionUser) {
     role: user.role,
     shopId: user.shopId,
   };
+}
+
+async function ensureLegacyRoleAssignments(user: { id: string; role: SessionUser["role"]; shopId: string }, traceId?: string) {
+  if (user.role === "SUPER_ADMIN") return;
+  const fallbackRoles = fallbackOperationalRoles(user.role);
+  if (fallbackRoles.length === 0) return;
+  try {
+    const existingCount = await prisma.userRoleAssignment.count({ where: { userId: user.id } });
+    if (existingCount > 0) {
+      logger.info("auth_role_assignment_existing", { traceId, userId: user.id, role: user.role, shopId: user.shopId, existingCount });
+      return;
+    }
+    await prisma.userRoleAssignment.createMany({
+      data: fallbackRoles.map((role) => ({
+        userId: user.id,
+        shopId: user.shopId,
+        role,
+      })),
+      skipDuplicates: true,
+    });
+    logger.info("auth_legacy_role_assignments_backfilled", {
+      traceId,
+      userId: user.id,
+      role: user.role,
+      shopId: user.shopId,
+      resolvedRoles: fallbackRoles,
+    });
+  } catch (error) {
+    logger.error("auth_legacy_role_assignment_backfill_failed_non_blocking", {
+      traceId,
+      userId: user.id,
+      role: user.role,
+      shopId: user.shopId,
+      fallbackRoles,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
 }
 
 export async function createSession(user: SessionUser, traceId?: string) {
@@ -294,6 +333,7 @@ export async function login(email: string, password: string, traceId?: string): 
     return null;
   }
   logger.info("login_password_validated", { traceId, userId: user.id, email: user.email, role: user.role });
+  await ensureLegacyRoleAssignments(user, traceId);
   await prisma.user.update({
     where: { id: user.id },
     data: { lastLoginAt: new Date() },
