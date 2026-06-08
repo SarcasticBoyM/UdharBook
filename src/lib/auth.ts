@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { prisma, withPrismaRetry } from "./db";
 import type { SessionUser } from "@/types";
 import { logger } from "@/lib/logger";
+import { passwordHashDiagnostics, safeAuthRuntimeDiagnostics } from "@/lib/auth-diagnostics";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -26,9 +27,14 @@ function sessionLogMeta(user: SessionUser) {
   };
 }
 
-export async function createSession(user: SessionUser) {
+export async function createSession(user: SessionUser, traceId?: string) {
   let token: string;
   try {
+    logger.info("auth_trace_session_token_sign_start", {
+      traceId,
+      ...sessionLogMeta(user),
+      diagnostics: safeAuthRuntimeDiagnostics(),
+    });
     token = await new SignJWT({
       id: user.id,
       name: user.name,
@@ -42,6 +48,7 @@ export async function createSession(user: SessionUser) {
       .sign(getSecret());
   } catch (error) {
     logger.error("session_create_token_failed", {
+      traceId,
       ...sessionLogMeta(user),
       error: error instanceof Error ? error.message : "Unknown session token error",
       stack: error instanceof Error ? error.stack : undefined,
@@ -52,6 +59,14 @@ export async function createSession(user: SessionUser) {
   }
 
   const cookieStore = await cookies();
+  logger.info("auth_trace_session_cookie_write_start", {
+    traceId,
+    ...sessionLogMeta(user),
+    tokenLength: token.length,
+    secureCookie: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+  });
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -60,6 +75,7 @@ export async function createSession(user: SessionUser) {
     path: "/",
   });
   logger.info("session_created", {
+    traceId,
     ...sessionLogMeta(user),
     maxAge: MAX_AGE,
     secureCookie: process.env.NODE_ENV === "production",
@@ -94,12 +110,18 @@ export async function getSession(): Promise<SessionUser | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
     const userId = payload.id as string | undefined;
+    logger.info("auth_trace_session_jwt_verified", {
+      userId: userId ?? null,
+      role: typeof payload.role === "string" ? payload.role : null,
+      shopId: typeof payload.shopId === "string" ? payload.shopId : null,
+    });
     if (!userId) {
       logger.warn("session_decode_missing_user_id");
       await clearSessionIfWritable();
       return null;
     }
 
+    logger.info("auth_trace_session_user_lookup_start", { userId });
     const user = await withPrismaRetry(() => prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -144,7 +166,11 @@ export async function getSession(): Promise<SessionUser | null> {
       shopId: user.shopId,
       shopName: user.shop?.shopName ?? null,
     };
-    logger.info("session_validated", sessionLogMeta(session));
+    logger.info("session_validated", {
+      ...sessionLogMeta(session),
+      shopAttached: Boolean(user.shop),
+      disabled: Boolean(user.disabledAt),
+    });
     return session;
   } catch (error) {
     logger.warn("session_decode_failed", {
@@ -156,9 +182,13 @@ export async function getSession(): Promise<SessionUser | null> {
   }
 }
 
-export async function login(email: string, password: string): Promise<SessionUser | null> {
+export async function login(email: string, password: string, traceId?: string): Promise<SessionUser | null> {
   const normalizedEmail = email.toLowerCase();
-  logger.info("login_lookup_started", { email: normalizedEmail });
+  logger.info("login_lookup_started", {
+    traceId,
+    email: normalizedEmail,
+    diagnostics: safeAuthRuntimeDiagnostics(),
+  });
   let user: {
     id: string;
     name: string;
@@ -171,6 +201,7 @@ export async function login(email: string, password: string): Promise<SessionUse
     shop: { id: string; shopName: string } | null;
   } | null;
   try {
+    logger.info("auth_trace_login_user_lookup_start", { traceId, email: normalizedEmail });
     user = await withPrismaRetry(() => prisma.user.findUnique({
       where: { email: normalizedEmail },
       select: {
@@ -187,6 +218,7 @@ export async function login(email: string, password: string): Promise<SessionUse
     }), { operation: "login_user_lookup", email: normalizedEmail });
   } catch (error) {
     logger.error("login_user_lookup_failed", {
+      traceId,
       email: normalizedEmail,
       error: error instanceof Error ? error.message : "Unknown user lookup error",
       stack: error instanceof Error ? error.stack : undefined,
@@ -194,37 +226,55 @@ export async function login(email: string, password: string): Promise<SessionUse
     throw error;
   }
   if (!user) {
-    logger.warn("login_failed_user_missing", { email: normalizedEmail });
+    logger.warn("login_failed_user_missing", { traceId, email: normalizedEmail });
     return null;
   }
-  logger.info("login_user_found", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
+  logger.info("login_user_found", {
+    traceId,
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    shopId: user.shopId,
+    shopAttached: Boolean(user.shop),
+    disabled: Boolean(user.disabledAt),
+    tempPasswordExpiresAt: user.tempPasswordExpiresAt?.toISOString() ?? null,
+    passwordHash: passwordHashDiagnostics(user.passwordHash),
+  });
   if (user.disabledAt) {
-    logger.warn("login_failed_disabled_user", { userId: user.id, email: user.email, role: user.role });
+    logger.warn("login_failed_disabled_user", { traceId, userId: user.id, email: user.email, role: user.role });
     return null;
   }
   if (!user.shop && user.role !== "SUPER_ADMIN") {
-    logger.error("login_failed_missing_shop", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
+    logger.error("login_failed_missing_shop", { traceId, userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
     return null;
   }
   if (!user.shop && user.role === "SUPER_ADMIN") {
     logger.warn("login_super_admin_platform_shop_missing_non_blocking", {
+      traceId,
       userId: user.id,
       email: user.email,
       role: user.role,
       shopId: user.shopId,
     });
   } else {
-    logger.info("login_shop_validated", { userId: user.id, shopId: user.shopId, shopName: user.shop?.shopName });
+    logger.info("login_shop_validated", { traceId, userId: user.id, shopId: user.shopId, shopName: user.shop?.shopName });
   }
   if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
-    logger.warn("login_failed_temp_password_expired", { userId: user.id, email: user.email, role: user.role });
+    logger.warn("login_failed_temp_password_expired", { traceId, userId: user.id, email: user.email, role: user.role });
     return null;
   }
   let valid = false;
   try {
+    logger.info("auth_trace_login_password_compare_start", {
+      traceId,
+      userId: user.id,
+      role: user.role,
+      passwordHash: passwordHashDiagnostics(user.passwordHash),
+    });
     valid = await bcrypt.compare(password, user.passwordHash);
   } catch (error) {
     logger.error("login_password_compare_failed", {
+      traceId,
       userId: user.id,
       email: user.email,
       role: user.role,
@@ -234,15 +284,22 @@ export async function login(email: string, password: string): Promise<SessionUse
     throw error;
   }
   if (!valid) {
-    logger.warn("login_failed_invalid_password", { userId: user.id, email: user.email, role: user.role });
+    logger.warn("login_failed_invalid_password", {
+      traceId,
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      passwordHash: passwordHashDiagnostics(user.passwordHash),
+    });
     return null;
   }
-  logger.info("login_password_validated", { userId: user.id, email: user.email, role: user.role });
+  logger.info("login_password_validated", { traceId, userId: user.id, email: user.email, role: user.role });
   await prisma.user.update({
     where: { id: user.id },
     data: { lastLoginAt: new Date() },
   }).catch((error) => {
     logger.error("login_last_login_update_failed_non_blocking", {
+      traceId,
       userId: user.id,
       email: user.email,
       role: user.role,
@@ -259,6 +316,7 @@ export async function login(email: string, password: string): Promise<SessionUse
     },
   }).catch((error) => {
     logger.error("login_activity_log_failed", {
+      traceId,
       userId: user.id,
       email: user.email,
       role: user.role,
@@ -266,7 +324,7 @@ export async function login(email: string, password: string): Promise<SessionUse
       error: error instanceof Error ? error.message : "Unknown activity log error",
     });
   });
-  logger.info("login_success", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
+  logger.info("login_success", { traceId, userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
   return {
     id: user.id,
     name: user.name,
@@ -291,9 +349,13 @@ function resetTokenHash(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export async function createPasswordReset(email: string) {
+export async function createPasswordReset(email: string, traceId?: string) {
   const normalizedEmail = email.toLowerCase();
-  logger.info("password_reset_lookup_started", { email: normalizedEmail });
+  logger.info("password_reset_lookup_started", {
+    traceId,
+    email: normalizedEmail,
+    diagnostics: safeAuthRuntimeDiagnostics(),
+  });
   let user: { id: string; email: string; role: SessionUser["role"]; disabledAt: Date | null } | null;
   try {
     user = await withPrismaRetry(() => prisma.user.findUnique({
@@ -302,6 +364,7 @@ export async function createPasswordReset(email: string) {
     }), { operation: "password_reset_user_lookup", email: normalizedEmail });
   } catch (error) {
     logger.error("password_reset_user_lookup_failed", {
+      traceId,
       email: normalizedEmail,
       error: error instanceof Error ? error.message : "Unknown password reset lookup error",
       stack: error instanceof Error ? error.stack : undefined,
@@ -309,11 +372,11 @@ export async function createPasswordReset(email: string) {
     throw error;
   }
   if (!user) {
-    logger.warn("password_reset_user_missing", { email: normalizedEmail });
+    logger.warn("password_reset_user_missing", { traceId, email: normalizedEmail });
     return null;
   }
   if (user.disabledAt) {
-    logger.warn("password_reset_user_disabled", { userId: user.id, email: user.email, role: user.role });
+    logger.warn("password_reset_user_disabled", { traceId, userId: user.id, email: user.email, role: user.role });
     return null;
   }
 
@@ -326,9 +389,10 @@ export async function createPasswordReset(email: string) {
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       },
     }), { operation: "password_reset_token_create", userId: user.id });
-    logger.info("password_reset_token_created", { userId: user.id, email: user.email, role: user.role });
+    logger.info("password_reset_token_created", { traceId, userId: user.id, email: user.email, role: user.role });
   } catch (error) {
     logger.error("password_reset_token_create_failed", {
+      traceId,
       userId: user.id,
       email: user.email,
       role: user.role,
@@ -345,31 +409,32 @@ export async function createPasswordReset(email: string) {
   };
 }
 
-export async function resetPassword(token: string, password: string) {
+export async function resetPassword(token: string, password: string, traceId?: string) {
   const tokenHash = resetTokenHash(token);
-  logger.info("password_reset_token_validation_started", { tokenHashPrefix: tokenHash.slice(0, 8) });
+  logger.info("password_reset_token_validation_started", { traceId, tokenHashPrefix: tokenHash.slice(0, 8) });
   const record = await withPrismaRetry(() => prisma.passwordResetToken.findUnique({
     where: { tokenHash },
     include: { user: { select: { id: true, email: true, role: true, disabledAt: true } } },
   }), { operation: "password_reset_token_lookup" });
   if (!record) {
-    logger.warn("password_reset_token_missing", { tokenHashPrefix: tokenHash.slice(0, 8) });
+    logger.warn("password_reset_token_missing", { traceId, tokenHashPrefix: tokenHash.slice(0, 8) });
     return false;
   }
   if (record.usedAt) {
-    logger.warn("password_reset_token_already_used", { tokenId: record.id, userId: record.userId });
+    logger.warn("password_reset_token_already_used", { traceId, tokenId: record.id, userId: record.userId });
     return false;
   }
   if (record.expiresAt < new Date()) {
-    logger.warn("password_reset_token_expired", { tokenId: record.id, userId: record.userId, expiresAt: record.expiresAt.toISOString() });
+    logger.warn("password_reset_token_expired", { traceId, tokenId: record.id, userId: record.userId, expiresAt: record.expiresAt.toISOString() });
     return false;
   }
   if (record.user.disabledAt) {
-    logger.warn("password_reset_user_disabled_on_complete", { userId: record.user.id, email: record.user.email, role: record.user.role });
+    logger.warn("password_reset_user_disabled_on_complete", { traceId, userId: record.user.id, email: record.user.email, role: record.user.role });
     return false;
   }
 
   try {
+    logger.info("password_reset_hash_start", { traceId, userId: record.userId, role: record.user.role });
     await prisma.$transaction([
       prisma.user.update({
         where: { id: record.userId },
@@ -380,9 +445,10 @@ export async function resetPassword(token: string, password: string) {
         data: { usedAt: new Date() },
       }),
     ]);
-    logger.info("password_reset_password_updated", { userId: record.userId, role: record.user.role });
+    logger.info("password_reset_password_updated", { traceId, userId: record.userId, role: record.user.role });
   } catch (error) {
     logger.error("password_reset_transaction_failed", {
+      traceId,
       userId: record.userId,
       role: record.user.role,
       error: error instanceof Error ? error.message : "Unknown password reset transaction error",
