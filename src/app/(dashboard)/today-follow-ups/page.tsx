@@ -678,8 +678,8 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <main className="space-y-5">
+      <div className="mt-4 grid w-full min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,380px)] 2xl:grid-cols-[minmax(0,1fr)_400px]">
+        <main className="min-w-0 space-y-5">
           <ScheduledQueueSection
             customers={visibleScheduled}
             total={scheduled.length}
@@ -841,23 +841,23 @@ function ScheduledQueueSection({
   };
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-3">
+    <section className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0 max-w-3xl">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200">
               <CalendarClock className="h-5 w-5" />
             </span>
             <div className="min-w-0">
-              <h2 className="text-xl font-bold text-slate-950 dark:text-white">Scheduled Follow-ups</h2>
+              <h2 className="truncate whitespace-nowrap text-xl font-bold leading-tight text-slate-950 dark:text-white">Scheduled Follow-ups</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {total} scheduled recovery reminders, sorted by what needs attention next.
               </p>
             </div>
           </div>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center xl:justify-end">
-          <div className="grid grid-cols-3 gap-2 sm:min-w-[320px]">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center lg:justify-end">
+          <div className="grid w-full min-w-0 grid-cols-3 gap-2 sm:w-auto sm:min-w-[360px]">
             <ScheduledMetric label="Upcoming" value={grouped.upcoming.length} tone="blue" />
             <ScheduledMetric label="Due Today" value={grouped.today.length} tone="amber" />
             <ScheduledMetric label="Overdue" value={overdueCount} tone="red" />
@@ -865,7 +865,7 @@ function ScheduledQueueSection({
           <button
             type="button"
             onClick={onToggle}
-            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+            className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
           >
             {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
             {collapsed ? "Show" : "Hide"}
@@ -876,7 +876,7 @@ function ScheduledQueueSection({
       {!collapsed && (
         <>
           <div className="mt-5 overflow-x-auto pb-1">
-            <div className="inline-flex min-w-max rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
+            <div className="inline-flex min-w-max max-w-full rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
               {SCHEDULED_FILTERS.map((item) => (
                 <button
                   key={item.value}
@@ -946,9 +946,9 @@ function ScheduledMetric({ label, value, tone }: { label: string; value: number;
     red: "border-red-100 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-100",
   }[tone];
   return (
-    <div className={cn("rounded-xl border px-3 py-2 text-center", classes)}>
+    <div className={cn("min-w-0 rounded-xl border px-3 py-2 text-center", classes)}>
       <p className="text-lg font-extrabold leading-none">{value}</p>
-      <p className="mt-1 text-[11px] font-semibold uppercase text-current/70">{label}</p>
+      <p className="mt-1 truncate whitespace-nowrap text-[11px] font-semibold uppercase text-current/70">{label}</p>
     </div>
   );
 }
@@ -970,7 +970,7 @@ function ScheduledGroup({
 }) {
   if (customers.length === 0) return null;
   return (
-    <div>
+    <div className="min-w-0">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2 border-b border-slate-100 pb-2 dark:border-slate-800">
         <div>
           <h3 className="text-sm font-bold uppercase text-slate-800 dark:text-slate-100">{title}</h3>
@@ -978,7 +978,7 @@ function ScheduledGroup({
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{customers.length}</span>
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         {customers.map((customer) => (
           <ScheduledFollowUpCard
             key={customer.scheduledFollowUp.id}
@@ -1025,14 +1025,14 @@ function ScheduledFollowUpCard({
     <article
       onClick={onOpen}
       className={cn(
-        "cursor-pointer rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
+        "min-w-0 cursor-pointer overflow-hidden rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
         cardTone,
         active && "ring-2 ring-brand-500"
       )}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(270px,0.9fr)_190px] xl:items-center">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,260px)_minmax(160px,180px)] lg:items-stretch">
         <div className="min-w-0 space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="truncate text-lg font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
               <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{displayPhone(customer.contactNumber)}</p>
@@ -1047,8 +1047,8 @@ function ScheduledFollowUpCard({
           </div>
         </div>
 
-        <div className="rounded-xl border border-white/80 bg-white/80 p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-950/50">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+        <div className="min-w-0 rounded-xl border border-white/80 bg-white/80 p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-950/50">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
             <div>
               <p className="text-xs font-semibold uppercase text-slate-400">Outstanding</p>
               <p className="mt-1 text-lg font-extrabold text-slate-950 dark:text-white">{formatCurrency(customer.outstandingBalance)}</p>
@@ -1057,9 +1057,9 @@ function ScheduledFollowUpCard({
               <p className="text-xs font-semibold uppercase text-slate-400">
                 {isPromise ? "Payment Expected" : "Scheduled For"}
               </p>
-              <p className="mt-1 font-bold text-slate-800 dark:text-slate-100">{formatDateTime(dueAt)}</p>
+              <p className="mt-1 text-sm font-bold leading-5 text-slate-800 dark:text-slate-100">{formatDateTime(dueAt)}</p>
             </div>
-            <div className="flex flex-wrap gap-2 sm:col-span-2 xl:col-span-1">
+            <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
               <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 Priority: {customer.smartPriorityLabel || statusLabel(customer.smartPriority)}
               </span>
@@ -1070,17 +1070,17 @@ function ScheduledFollowUpCard({
           </div>
         </div>
 
-        <div className="flex flex-col gap-2 xl:min-w-44">
-          <span className={cn("rounded-xl px-3 py-2 text-center text-xs font-extrabold", badgeToneClass(stateTone))}>
+        <div className="flex min-w-0 flex-col gap-2 lg:min-w-[160px]">
+          <span className={cn("rounded-xl px-3 py-2 text-center text-xs font-extrabold leading-5", badgeToneClass(stateTone))}>
             {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
           <QuickButton label="Open Follow-up" onClick={onOpen} />
           <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
         </div>
       </div>
-      <div className="mt-4 flex items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
+      <div className="mt-4 flex min-w-0 items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
         <Bell className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-        <span>{isPromise ? "Payment reminder" : "Reminder"} scheduled for {formatDateTime(dueAt)}</span>
+        <span className="min-w-0 break-words">{isPromise ? "Payment reminder" : "Reminder"} scheduled for {formatDateTime(dueAt)}</span>
       </div>
     </article>
   );
@@ -1349,7 +1349,7 @@ function ActionPanel({
 
   if (!customer) {
     return (
-      <aside className="hidden rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 xl:block">
+      <aside className="hidden w-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 xl:block">
         Select a party to record the next follow-up action.
       </aside>
     );
@@ -1433,8 +1433,8 @@ function ActionPanel({
   };
 
   return (
-    <aside className="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-3 xl:sticky xl:top-5 xl:z-0 xl:block xl:h-[calc(100vh-2.5rem)] xl:bg-transparent xl:p-0">
-      <div className="ml-auto flex min-h-full w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 xl:min-h-0 xl:shadow-sm">
+    <aside className="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-3 xl:sticky xl:top-5 xl:z-0 xl:block xl:h-[calc(100vh-2.5rem)] xl:w-full xl:overflow-hidden xl:bg-transparent xl:p-0">
+      <div className="ml-auto flex min-h-full w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 xl:min-h-0 xl:max-w-none xl:shadow-sm">
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
           <div>
             <p className="text-xs font-bold uppercase text-brand-600 dark:text-brand-300">What happened?</p>
