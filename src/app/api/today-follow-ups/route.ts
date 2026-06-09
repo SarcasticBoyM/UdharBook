@@ -285,6 +285,7 @@ async function seedMissingFollowUps(shopId: string, userId: string) {
     where: {
       shopId,
       outstandingBalance: { gt: 0 },
+      NOT: { status: "CLEARED" },
       followUps: { none: {} },
     },
     include: {
@@ -368,7 +369,7 @@ export async function GET(request: Request) {
 
   const pendingWhere: Prisma.CustomerWhereInput = {
     AND: [
-      { shopId, outstandingBalance: { gt: 0 } },
+      { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       databaseFilter(filter, todayStart, todayEnd),
       databaseSearch(search),
     ],
@@ -412,7 +413,7 @@ export async function GET(request: Request) {
     where: {
       shopId,
       status: { notIn: CLOSED_STATUSES },
-      customer: { outstandingBalance: { gt: 0 } },
+      customer: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       OR: [
         { manualReminder: true },
         { reminderEnabled: true },

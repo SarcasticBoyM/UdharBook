@@ -52,8 +52,8 @@ function toDate(value: Date | string | null | undefined) {
 }
 
 function customerStatusFromFollowUp(status: FollowUpStatus, balance: number) {
-  if (status === "PAID" || balance === 0) return "CLEARED";
-  if (status === "COMPLETED") return balance === 0 ? "CLEARED" : "ACTIVE";
+  if (status === "PAID" || balance <= 0) return "CLEARED";
+  if (status === "COMPLETED") return balance <= 0 ? "CLEARED" : "ACTIVE";
   if (status === "MISSED") return "HIGH_RISK";
   if (status === "RESCHEDULED" || status === "CALLBACK" || status === "FOLLOW_UP_REQUIRED") return "PENDING";
   if (status === "NOT_REACHABLE" || status === "WRONG_NUMBER") return "HIGH_RISK";
@@ -151,6 +151,7 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
     where: { id: input.customerId },
     data: {
       ...(shouldUpdateFollowup ? { lastFollowupDate: now, nextFollowupDate: nextDate } : {}),
+      ...(newBalance <= 0 ? { nextFollowupDate: null } : {}),
       ...(shouldReduceBalance ? { outstandingBalance: newBalance } : {}),
       ...(shouldUpdateStatus ? { status: nextCustomerStatus } : {}),
       notes: input.notes ?? customer.notes,

@@ -18,6 +18,7 @@ export interface ImportSummary {
   created: number;
   duplicateNameCreated?: number;
   updated: number;
+  skippedZeroBalance?: number;
   /** Invalid or duplicate-in-file rows */
   skipped: number;
   errors: { row: number; message: string }[];

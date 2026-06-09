@@ -91,13 +91,11 @@ export async function GET(request: Request) {
   const overdueFollowups = active.filter(
     (c) => c.nextFollowupDate && c.nextFollowupDate < now
   ).length;
-  const highOutstanding = customers.filter((c) => c.outstandingBalance >= threshold).length;
-
-  const statusGroups = await prisma.customer.groupBy({
-    by: ["status"],
-    where: { shopId },
-    _count: { status: true },
-  });
+  const highOutstanding = active.filter((c) => c.outstandingBalance >= threshold).length;
+  const statusCounts = active.reduce<Record<string, number>>((counts, customer) => {
+    counts[customer.status] = (counts[customer.status] ?? 0) + 1;
+    return counts;
+  }, {});
 
   const agingMap: Record<string, number> = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
   for (const c of active) {
@@ -135,7 +133,7 @@ export async function GET(request: Request) {
   ]);
 
   const stats: DashboardStats = {
-    totalCustomers: customers.length,
+    totalCustomers: active.length,
     totalOutstanding,
     pendingFollowup,
     todayFollowups,
@@ -150,9 +148,9 @@ export async function GET(request: Request) {
       name: group.userId ? userMap.get(group.userId) ?? "Unknown" : "System",
       count: group._count.userId,
     })),
-    statusDistribution: statusGroups.map((g) => ({
-      status: g.status,
-      count: g._count.status,
+    statusDistribution: Object.entries(statusCounts).map(([status, count]) => ({
+      status,
+      count,
     })),
     collectionProgress: Array.from(monthMap.entries()).map(([month, collected]) => ({
       month,

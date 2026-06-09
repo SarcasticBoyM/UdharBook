@@ -29,6 +29,23 @@ function textContainsAllTerms(field: "partyName" | "geoAddress", terms: string[]
   return { AND: terms.map((term) => textContains(field, term)) };
 }
 
+function activeCustomerWhere(): Prisma.CustomerWhereInput {
+  return { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } };
+}
+
+function inactiveCustomerWhere(): Prisma.CustomerWhereInput {
+  return {
+    AND: [
+      {
+        OR: [
+          { outstandingBalance: { lte: 0 } },
+          { status: "CLEARED" },
+        ],
+      },
+    ],
+  };
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,7 +53,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const search = normalizeSearch(searchParams.get("search") ?? "");
   const status = searchParams.get("status");
-  const view = searchParams.get("view") ?? "all";
+  const view = searchParams.get("view") ?? "active";
   const sort = searchParams.get("sort") ?? "balance";
   const order = searchParams.get("order") === "asc" ? "asc" : "desc";
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
@@ -63,12 +80,8 @@ export async function GET(request: Request) {
     shopId,
     ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
     ...(searchOr.length ? { OR: searchOr } : {}),
-    ...(view === "pending"
-      ? {
-          outstandingBalance: { gt: 0 },
-          NOT: { status: "CLEARED" },
-        }
-      : {}),
+    ...(view === "active" || view === "pending" ? activeCustomerWhere() : {}),
+    ...(view === "inactive" ? inactiveCustomerWhere() : {}),
   };
 
   const orderBy: Prisma.CustomerOrderByWithRelationInput =
@@ -107,7 +120,7 @@ export async function POST(request: Request) {
         outstandingBalance: body.outstandingBalance,
         notes: body.notes,
         nextFollowupDate: body.nextFollowupDate ? new Date(body.nextFollowupDate) : null,
-        status: body.status ?? (body.outstandingBalance === 0 ? "CLEARED" : "PENDING"),
+        status: body.outstandingBalance <= 0 ? "CLEARED" : body.status === "CLEARED" ? "PENDING" : body.status ?? "PENDING",
       },
     });
 

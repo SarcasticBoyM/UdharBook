@@ -9,11 +9,13 @@ import { CallActions } from "@/components/CallActions";
 import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
 
+type CustomerView = "active" | "inactive" | "all" | "pending";
+
 export default function CustomersPage() {
   const [items, setItems] = useState<Customer[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState<"all" | "pending">("all");
+  const [view, setView] = useState<CustomerView>("active");
   const [sort, setSort] = useState("balance");
   const [order, setOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -89,7 +91,7 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold">Customers</h1>
           <p className="text-slate-500">
             {loading ? "Loading…" : `${total} customer${total === 1 ? "" : "s"} shown`}
-            {view === "pending" ? " (with outstanding balance)" : ""}
+            {view === "active" ? " (active dues)" : view === "inactive" ? " (inactive / zero balance)" : view === "pending" ? " (with outstanding balance)" : ""}
           </p>
         </div>
         {!isFieldSales && (
@@ -116,11 +118,13 @@ export default function CustomersPage() {
           value={view}
           onChange={(e) => {
             setPage(1);
-            setView(e.target.value as "all" | "pending");
+            setView(e.target.value as CustomerView);
           }}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         >
-          <option value="all">All customers</option>
+          <option value="active">Active Customers</option>
+          <option value="inactive">Inactive / Zero Balance Customers</option>
+          <option value="all">Show All</option>
           <option value="pending">Pending payments only</option>
         </select>
         <input
@@ -203,12 +207,15 @@ export default function CustomersPage() {
                 </td>
               </tr>
             ) : (
-              items.map((c) => (
+              items.map((c) => {
+                const inactive = c.outstandingBalance <= 0 || c.status === "CLEARED";
+                return (
                 <tr
                   key={c.id}
                   className={cn(
                     "border-t border-slate-100 dark:border-slate-800",
-                    followupRowClass(c.status, c.nextFollowupDate)
+                    followupRowClass(c.status, c.nextFollowupDate),
+                    inactive && "bg-slate-50 text-slate-500 opacity-75 dark:bg-slate-900/50"
                   )}
                 >
                   <td className="p-3">
@@ -231,6 +238,11 @@ export default function CustomersPage() {
                     <span className={cn("rounded-full px-2 py-0.5 text-xs", statusBadgeClass(c.status))}>
                       {formatStatus(c.status)}
                     </span>
+                    {inactive && (
+                      <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                        Zero balance
+                      </span>
+                    )}
                   </td>
                   <td className="p-3">
                     <div className="flex flex-col gap-2">
@@ -253,7 +265,8 @@ export default function CustomersPage() {
                     </div>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

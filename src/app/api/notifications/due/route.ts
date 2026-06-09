@@ -20,6 +20,7 @@ export async function GET(request: Request) {
         reminderSentAt: null,
         status: { in: ["CALLBACK", "FOLLOW_UP_REQUIRED"] },
         nextFollowUpDateTime: { lte: now },
+        customer: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       },
       include: {
         customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },

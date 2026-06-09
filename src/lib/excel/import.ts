@@ -57,11 +57,12 @@ function findField(row: Record<string, unknown>, ...keys: string[]): unknown {
 }
 
 function parseBalance(value: string | null): number | null {
-  if (!value) return null;
+  if (!value) return 0;
   const cleaned = value.replace(/[,\s]/g, "").replace(/[^0-9.-]/g, "");
-  if (!cleaned) return null;
+  if (!cleaned) return 0;
   const balance = Number.parseFloat(cleaned);
-  return Number.isFinite(balance) && balance >= 0 ? balance : null;
+  if (!Number.isFinite(balance)) return null;
+  return Math.max(0, balance);
 }
 
 export async function importCustomersFromExcel(buffer: Buffer, shopId: string): Promise<ImportSummary> {
@@ -86,6 +87,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
         created: 0,
         updated: 0,
         skipped: 0,
+        skippedZeroBalance: 0,
         errors: [{ row: 0, message: "No data found in Excel file" }],
       };
     }
@@ -94,6 +96,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
     let duplicateNameCreated = 0;
     let updated = 0;
     let skipped = 0;
+    let skippedZeroBalance = 0;
     const errors: ImportSummary["errors"] = [];
     const validRows: Array<{
       rowNumber: number;
@@ -112,7 +115,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
         skipped++;
         addImportError(errors, {
           row: rowNumber,
-          message: "Valid customer name and non-negative outstanding balance are required",
+          message: "Valid customer name and outstanding balance are required",
         });
         continue;
       }
@@ -153,6 +156,11 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
           updates.push({ ...row, customerId: matches[0].id });
           continue;
         }
+        if (row.outstandingBalance <= 0) {
+          skipped++;
+          skippedZeroBalance++;
+          continue;
+        }
 
         const contactNumber = reserveContactNumber(row.partyName, row.rowNumber, row.contactNumber, reservedContacts);
         creates.push({ ...row, contactNumber, duplicateName: matches.length > 1 });
@@ -172,7 +180,11 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
           updates.map((row) =>
             prisma.customer.update({
               where: { id: row.customerId },
-              data: { outstandingBalance: row.outstandingBalance },
+              data: {
+                outstandingBalance: row.outstandingBalance,
+                status: row.outstandingBalance <= 0 ? "CLEARED" : "PENDING",
+                nextFollowupDate: row.outstandingBalance <= 0 ? null : undefined,
+              },
             })
           )
         );
@@ -249,6 +261,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       duplicateNameCreated,
       updated,
       skipped,
+      skippedZeroBalance,
       errors: errors.length,
       durationMs: Date.now() - startedAt,
       memoryMb: memorySnapshotMb(),
@@ -260,6 +273,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       duplicateNameCreated,
       updated,
       skipped,
+      skippedZeroBalance,
       errors,
     };
   } catch (err: unknown) {
@@ -277,6 +291,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       duplicateNameCreated: 0,
       updated: 0,
       skipped: 0,
+      skippedZeroBalance: 0,
       errors: [{ row: 0, message: `Failed to parse Excel file: ${message}` }],
     };
   }

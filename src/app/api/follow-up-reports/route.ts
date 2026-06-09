@@ -463,7 +463,7 @@ export async function GET(request: Request) {
         _sum: { amount: true },
       }),
       prisma.customer.aggregate({
-        where: { shopId, outstandingBalance: { gt: 0 } },
+        where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
         _sum: { outstandingBalance: true },
         _count: { id: true },
       }),

@@ -126,6 +126,10 @@ export default function UploadPage() {
               <dd className="text-2xl font-bold text-amber-600">{summary.skipped}</dd>
             </div>
             <div>
+              <dt className="text-slate-500">Skipped zero balance customers</dt>
+              <dd className="text-2xl font-bold text-slate-600">{summary.skippedZeroBalance ?? 0}</dd>
+            </div>
+            <div>
               <dt className="text-slate-500">Failed rows</dt>
               <dd className="text-2xl font-bold text-red-600">{summary.errors.length}</dd>
             </div>

@@ -49,6 +49,7 @@ export async function POST(
         data: {
           outstandingBalance: newBalance,
           status: newBalance === 0 ? "CLEARED" : customer.status === "PENDING" ? "ACTIVE" : customer.status,
+          nextFollowupDate: newBalance === 0 ? null : customer.nextFollowupDate,
         },
       });
 

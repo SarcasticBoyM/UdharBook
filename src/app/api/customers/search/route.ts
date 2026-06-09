@@ -76,15 +76,18 @@ export async function GET(request: Request) {
     const shopId = requireShopId(request, session);
     const phoneQuery = query.replace(/\D/g, "");
     const today = getTodayRangeInIndia();
+    const activeWhere: Prisma.CustomerWhereInput = { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } };
 
     const sourceWhere: Prisma.CustomerWhereInput =
       source === "pending_recovery"
-        ? { outstandingBalance: { gt: 0 } }
+        ? activeWhere
         : source === "today_followup"
-          ? { nextFollowupDate: { gte: today.start, lt: today.end } }
+          ? { ...activeWhere, nextFollowupDate: { gte: today.start, lt: today.end } }
           : source === "high_amount"
-            ? { outstandingBalance: { gt: 0 } }
-            : {};
+            ? activeWhere
+            : query
+              ? {}
+              : activeWhere;
 
     const where: Prisma.CustomerWhereInput = {
       shopId,

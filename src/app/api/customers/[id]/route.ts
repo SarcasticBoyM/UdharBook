@@ -87,11 +87,22 @@ export async function PATCH(
   try {
     const body = updateSchema.parse(await request.json());
     const shopId = requireShopId(request, session);
+    const balanceStatus =
+      body.outstandingBalance === undefined
+        ? undefined
+        : body.outstandingBalance <= 0
+          ? "CLEARED"
+          : body.status === "CLEARED"
+            ? "PENDING"
+            : body.status;
     const data = {
       ...body,
       contactNumber: body.contactNumber ? normalizePhone(body.contactNumber) : undefined,
+      status: balanceStatus ?? body.status,
       nextFollowupDate:
-        body.nextFollowupDate === null
+        body.outstandingBalance !== undefined && body.outstandingBalance <= 0
+          ? null
+          : body.nextFollowupDate === null
           ? null
           : body.nextFollowupDate
             ? new Date(body.nextFollowupDate)

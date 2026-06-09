@@ -94,6 +94,7 @@ export async function POST(request: Request) {
       duplicateNameCreated: summary.duplicateNameCreated ?? 0,
       updated: summary.updated,
       skipped: summary.skipped,
+      skippedZeroBalance: summary.skippedZeroBalance ?? 0,
       errors: summary.errors.length,
       durationMs: Date.now() - startedAt,
     });
