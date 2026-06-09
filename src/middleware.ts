@@ -58,7 +58,6 @@ const FIELD_SALES_BLOCKED_PAGES = [
 ];
 const FIELD_SALES_BLOCKED_APIS = [
   "/api/bulk",
-  "/api/cheque-deposit-accounts",
   "/api/customers/import",
   "/api/dashboard/stats",
   "/api/follow-up-reports",

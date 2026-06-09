@@ -408,6 +408,7 @@ export default function ChequeCollectionsPage() {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [currentRole, setCurrentRole] = useState("");
   const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
+  const [depositAccountsError, setDepositAccountsError] = useState("");
   const [accountAudit, setAccountAudit] = useState<AccountAudit[]>([]);
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
   const [accountSaving, setAccountSaving] = useState(false);
@@ -472,6 +473,12 @@ export default function ChequeCollectionsPage() {
       const payload = await res.json();
       setDepositAccounts(payload.accounts ?? []);
       setAccountAudit(payload.audit ?? []);
+      setDepositAccountsError("");
+    } else {
+      const payload = await res.json().catch(() => ({}));
+      setDepositAccounts([]);
+      setAccountAudit([]);
+      setDepositAccountsError(payload.error ?? "Could not load deposit accounts.");
     }
   }, [currentRole, from, quick, showArchivedAccounts, staffId, to]);
 
@@ -1617,6 +1624,11 @@ export default function ChequeCollectionsPage() {
               className="mt-4 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
             <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+              {depositAccountsError && (
+                <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {depositAccountsError}
+                </p>
+              )}
               {depositAccounts
                 .filter((account) =>
                   `${account.bankName} ${account.accountName} ${account.lastFourDigits}`
@@ -1641,7 +1653,7 @@ export default function ChequeCollectionsPage() {
                     <span className="font-semibold">{account.lastFourDigits}</span>
                   </button>
                 ))}
-              {depositAccounts.length === 0 && (
+              {!depositAccountsError && depositAccounts.length === 0 && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                   No active deposit accounts. Ask admin to add one in Manage Deposit Accounts.
                 </p>

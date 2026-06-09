@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canManageShop } from "@/lib/tenant";
 import { requireShopId } from "@/lib/tenant";
+import { normalizeOperationalRoles } from "@/lib/operational-roles";
+
+const depositAccountAccessRoles = new Set(["SHOP_ADMIN", "ACCOUNTING_STAFF", "CHEQUE_OPERATIONS", "FIELD_SALES_PERSON"]);
 
 const accountSchema = z.object({
   accountName: z.string().min(1),
@@ -17,9 +20,17 @@ function accountLabel(account: { bankName: string; accountName: string; lastFour
   return `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}`;
 }
 
+function canViewDepositAccounts(session: Awaited<ReturnType<typeof getSession>>) {
+  if (!session) return false;
+  if (session.role === "SUPER_ADMIN" || session.role === "SHOP_ADMIN") return true;
+  const roles = normalizeOperationalRoles(session.role, session.roles ?? []);
+  return roles.some((role) => depositAccountAccessRoles.has(role));
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canViewDepositAccounts(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
