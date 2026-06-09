@@ -7,6 +7,8 @@ import {
   CalendarClock,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Clock3,
   History,
@@ -245,36 +247,75 @@ const REMINDERS = [
   { label: "Tomorrow 5 PM", tomorrowHour: 17 },
 ];
 
+const APP_TIME_ZONE = "Asia/Kolkata";
+const IST_OFFSET_MINUTES = 330;
+
+function istParts(value: Date | string) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value ?? 0);
+  return {
+    year: part("year"),
+    month: part("month"),
+    day: part("day"),
+    hour: part("hour"),
+    minute: part("minute"),
+  };
+}
+
+function reminderInputFromDate(value: Date | string | null | undefined) {
+  if (!value) return "";
+  const parts = istParts(value);
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}:${pad2(parts.minute)}`;
+}
+
+function reminderInputToIso(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match.map(Number);
+  const utcMs = Date.UTC(year, month - 1, day, hour, minute) - IST_OFFSET_MINUTES * 60000;
+  return new Date(utcMs).toISOString();
+}
+
+function todayReminderDateValue() {
+  return reminderDatePart(reminderInputFromDate(new Date()));
+}
+
 function formatDateTime(date: string | Date | null | undefined) {
   if (!date) return "-";
   return new Intl.DateTimeFormat("en-IN", {
+    timeZone: APP_TIME_ZONE,
     day: "2-digit",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
+    hour12: true,
   }).format(new Date(date));
 }
 
 function startOfToday() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return new Date(reminderInputToIso(`${todayReminderDateValue()}T00:00`) ?? new Date());
 }
 
 function endOfToday() {
-  const date = new Date();
-  date.setHours(23, 59, 59, 999);
-  return date;
+  return new Date(reminderInputToIso(`${todayReminderDateValue()}T23:59`) ?? new Date());
 }
 
 function nextReminderDate(minutes?: number, tomorrowHour?: number) {
-  const date = new Date();
-  if (minutes) date.setMinutes(date.getMinutes() + minutes);
+  const date = new Date(Date.now() + (minutes ?? 0) * 60000);
   if (tomorrowHour !== undefined) {
-    date.setDate(date.getDate() + 1);
-    date.setHours(tomorrowHour, 0, 0, 0);
+    const current = istParts(new Date());
+    const utcMs = Date.UTC(current.year, current.month - 1, current.day + 1, tomorrowHour, 0) - IST_OFFSET_MINUTES * 60000;
+    return reminderInputFromDate(new Date(utcMs));
   }
-  return date.toISOString().slice(0, 16);
+  return reminderInputFromDate(date);
 }
 
 function pad2(value: number) {
@@ -305,13 +346,18 @@ function monthLabel(date: Date) {
 
 function dateButtonLabel(value: string) {
   if (!value) return "Select date";
-  return new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "2-digit", month: "short" }).format(new Date(`${reminderDatePart(value)}T00:00:00`));
+  const [year, month, day] = reminderDatePart(value).split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
 function timeButtonLabel(value: string) {
   const time = reminderTimePart(value);
   if (!time) return "Select time";
-  return new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(new Date(`2000-01-01T${time}:00`));
+  const [hourText, minute] = time.split(":");
+  const hour = Number(hourText);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${minute} ${suffix}`;
 }
 
 function calendarCells(month: Date) {
@@ -638,7 +684,7 @@ export default function TodayFollowUpsPage() {
   };
 
   const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string) => {
-    const nextDate = status === "RESCHEDULED" ? nextReminderDate(undefined, 10) : customer.nextFollowupDate;
+    const nextDate = status === "RESCHEDULED" ? reminderInputToIso(nextReminderDate(undefined, 10)) : customer.nextFollowupDate;
     const paidAmount = status === "PAID" ? customer.outstandingBalance : 0;
     applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
     await fetch("/api/follow-ups", {
@@ -1417,7 +1463,7 @@ function ActionPanel({
     setPaidAmount("");
     setSetReminder(false);
     setPriority(derivedPriority(customer));
-    const existingDate = customer.nextFollowupDate ? new Date(customer.nextFollowupDate).toISOString().slice(0, 16) : "";
+    const existingDate = reminderInputFromDate(customer.nextFollowupDate);
     setNextDate(existingDate);
     setVisibleReminderMonth(monthStart(existingDate));
     setDatePickerOpen(false);
@@ -1438,8 +1484,7 @@ function ActionPanel({
   const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || primaryAction === "NO_RESPONSE" || status === "PAYMENT_PROMISED";
   const selectedReminderDate = reminderDatePart(nextDate);
   const selectedReminderTime = reminderTimePart(nextDate);
-  const today = new Date();
-  const todayValue = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+  const todayValue = todayReminderDateValue();
   const visibleCalendarCells = calendarCells(visibleReminderMonth);
   const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate);
   const reminderWhatsAppUrl = whatsappHref(customer.contactNumber, reminderMessage);
@@ -1514,7 +1559,7 @@ function ActionPanel({
     event.preventDefault();
     setSaving(true);
     const closesQueue = COMPLETE_STATUSES.includes(status);
-    const scheduledAt = !closesQueue && nextDate ? new Date(nextDate).toISOString() : null;
+    const scheduledAt = !closesQueue && nextDate ? reminderInputToIso(nextDate) : null;
     const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
     const finalNotes =
       notes ||
@@ -1734,13 +1779,16 @@ function ActionPanel({
             </div>
 
             {showScheduleFields && (
-              <div className={cn("rounded-lg border p-3", primaryAction === "FOLLOW_UP_LATER" ? "border-brand-300 bg-brand-50 dark:border-brand-900 dark:bg-brand-950/40" : "border-slate-200 dark:border-slate-800")}>
-                <div className="flex items-center gap-2">
-                  <CalendarClock className="h-4 w-4 text-brand-600" />
-                  <p className="text-sm font-bold">Next Follow-up Date</p>
+              <div className={cn("rounded-xl border p-3", primaryAction === "FOLLOW_UP_LATER" ? "border-brand-300 bg-brand-50 dark:border-brand-900 dark:bg-brand-950/40" : "border-slate-200 dark:border-slate-800")}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <CalendarClock className="h-4 w-4 text-brand-600" />
+                    <p className="text-sm font-bold">Next Follow-up Reminder</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-slate-500 shadow-sm dark:bg-slate-900">IST</span>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <div className="relative">
+                  <div className="relative min-w-0">
                     <label className="text-sm font-semibold">Reminder Date</label>
                     <button
                       type="button"
@@ -1754,24 +1802,24 @@ function ActionPanel({
                       <CalendarClock className="h-4 w-4 text-brand-600" />
                     </button>
                     {datePickerOpen && (
-                      <div className="absolute left-0 right-0 top-full z-30 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-950">
+                      <div className="absolute left-0 top-full z-50 mt-2 w-full min-w-[280px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-80">
                         <div className="flex items-center justify-between gap-2">
                           <button
                             type="button"
                             onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold dark:border-slate-700"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
                             aria-label="Previous month"
                           >
-                            ‹
+                            <ChevronLeft className="h-4 w-4" />
                           </button>
-                          <p className="text-sm font-bold">{monthLabel(visibleReminderMonth)}</p>
+                          <p className="text-sm font-extrabold text-slate-900 dark:text-white">{monthLabel(visibleReminderMonth)}</p>
                           <button
                             type="button"
                             onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold dark:border-slate-700"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
                             aria-label="Next month"
                           >
-                            ›
+                            <ChevronRight className="h-4 w-4" />
                           </button>
                         </div>
                         <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[11px] font-bold uppercase text-slate-400">
@@ -1784,7 +1832,7 @@ function ActionPanel({
                               type="button"
                               onClick={() => updateReminderDate(day.value)}
                               className={cn(
-                                "aspect-square rounded-lg text-sm font-semibold transition",
+                                "flex aspect-square min-h-9 items-center justify-center rounded-lg text-sm font-bold transition",
                                 day.value === selectedReminderDate
                                   ? "bg-brand-600 text-white"
                                   : day.value === todayValue
@@ -1800,7 +1848,7 @@ function ActionPanel({
                       </div>
                     )}
                   </div>
-                  <div className="relative">
+                  <div className="relative min-w-0">
                     <label className="text-sm font-semibold">Reminder Time</label>
                     <button
                       type="button"
@@ -1814,8 +1862,14 @@ function ActionPanel({
                       <Clock3 className="h-4 w-4 text-brand-600" />
                     </button>
                     {timePickerOpen && (
-                      <div className="absolute left-0 right-0 top-full z-30 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-950">
-                        <p className="text-xs font-bold uppercase text-slate-500">Pick a callback time</p>
+                      <div className="absolute right-0 top-full z-50 mt-2 w-full min-w-[280px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-80">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-bold uppercase text-slate-500">Pick callback time</p>
+                            <p className="mt-0.5 text-sm font-extrabold text-slate-900 dark:text-white">{timeButtonLabel(nextDate)}</p>
+                          </div>
+                          <Clock3 className="h-5 w-5 text-brand-600" />
+                        </div>
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           {REMINDER_TIME_OPTIONS.map((time) => (
                             <button
@@ -1823,7 +1877,7 @@ function ActionPanel({
                               type="button"
                               onClick={() => updateReminderTime(time)}
                               className={cn(
-                                "min-h-11 rounded-lg border px-3 text-sm font-semibold",
+                                "min-h-11 rounded-lg border px-3 text-sm font-bold transition",
                                 time === selectedReminderTime
                                   ? "border-brand-500 bg-brand-600 text-white"
                                   : "border-slate-200 bg-white text-slate-700 hover:border-brand-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
@@ -1836,20 +1890,6 @@ function ActionPanel({
                       </div>
                     )}
                   </div>
-                  <div>
-                    <label className="text-sm font-semibold">Priority</label>
-                    <select
-                      value={priority}
-                      onChange={(event) => setPriority(event.target.value as FollowUpPriority)}
-                      className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                    >
-                      {(["LOW", "MEDIUM", "HIGH", "URGENT"] as FollowUpPriority[]).map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {REMINDERS.map((reminder) => (
@@ -1861,13 +1901,29 @@ function ActionPanel({
                         setNextDate(reminderDate);
                         setVisibleReminderMonth(monthStart(reminderDate));
                         setSetReminder(true);
+                        setDatePickerOpen(false);
+                        setTimePickerOpen(false);
                       }}
-                      className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm dark:bg-slate-900 dark:text-slate-200"
+                      className="inline-flex min-h-9 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:text-brand-700 dark:bg-slate-900 dark:text-slate-200"
                     >
                       <Bell className="h-3.5 w-3.5" />
                       {reminder.label}
                     </button>
                   ))}
+                </div>
+                <div className="mt-3">
+                  <label className="text-sm font-semibold">Priority</label>
+                  <select
+                    value={priority}
+                    onChange={(event) => setPriority(event.target.value as FollowUpPriority)}
+                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                  >
+                    {(["LOW", "MEDIUM", "HIGH", "URGENT"] as FollowUpPriority[]).map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             )}
