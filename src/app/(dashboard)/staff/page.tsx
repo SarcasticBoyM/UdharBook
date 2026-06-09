@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { OperationalRole } from "@prisma/client";
-import { Check, KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
-import { operationalRoleLabels } from "@/lib/operational-roles";
+import { KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
+import { assignableFixedRoles, fixedRoleLabels, normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
 
 type Shop = {
   id: string;
@@ -21,31 +20,9 @@ type ManagedUser = {
   lastLoginAt: string | null;
   shopId: string;
   shop: { shopName: string } | null;
-  roleAssignments?: { role: OperationalRole; createdAt: string }[];
 };
 
-const roleOptions: OperationalRole[] = [
-  "ACCOUNTING_STAFF",
-  "FIELD_SALES_PERSON",
-  "CHEQUE_OPERATIONS",
-  "ORDER_MANAGER",
-  "FOLLOWUP_MANAGER",
-  "SHOP_ADMIN",
-];
-
-const defaultRoles: OperationalRole[] = ["ACCOUNTING_STAFF"];
-
-function rolesForUser(user?: ManagedUser | null) {
-  if (!user) return defaultRoles;
-  if (user.roleAssignments?.length) return user.roleAssignments.map((item) => item.role);
-  if (user.role === "SHOP_ADMIN") return ["SHOP_ADMIN" as OperationalRole];
-  if (user.role === "FIELD_SALES") return ["FIELD_SALES_PERSON" as OperationalRole, "ORDER_MANAGER" as OperationalRole];
-  return ["ACCOUNTING_STAFF" as OperationalRole, "CHEQUE_OPERATIONS" as OperationalRole, "FOLLOWUP_MANAGER" as OperationalRole];
-}
-
-function roleBadges(roles: OperationalRole[]) {
-  return roles.length ? roles : defaultRoles;
-}
+const defaultRole: FixedShopRole = "ACCOUNT_STAFF";
 
 export default function StaffManagementPage() {
   const [role, setRole] = useState("");
@@ -56,7 +33,7 @@ export default function StaffManagementPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [roleFilter, setRoleFilter] = useState<OperationalRole | "ALL">("ALL");
+  const [roleFilter, setRoleFilter] = useState<FixedShopRole | "ALL">("ALL");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<ManagedUser | null>(null);
@@ -67,18 +44,18 @@ export default function StaffManagementPage() {
     jobTitle: "",
     password: "",
   });
-  const [selectedRoles, setSelectedRoles] = useState<OperationalRole[]>(defaultRoles);
+  const [selectedRole, setSelectedRole] = useState<FixedShopRole>(defaultRole);
 
   const isSuperAdmin = role === "SUPER_ADMIN";
-  const canSubmit = form.name.trim() && form.email.trim() && selectedRoles.length > 0 && !saving;
+  const canSubmit = form.name.trim() && form.email.trim() && selectedRole && !saving;
 
   const activeShopId = useMemo(() => selectedShopId || shops[0]?.id || "", [selectedShopId, shops]);
   const visibleUsers = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return users.filter((user) => {
-      const roles = rolesForUser(user);
+      const userRole = normalizeFixedRole(user.role) as FixedShopRole;
       const matchesText = !needle || [user.name, user.email, user.mobile ?? "", user.shop?.shopName ?? "", user.jobTitle ?? ""].join(" ").toLowerCase().includes(needle);
-      const matchesRole = roleFilter === "ALL" || roles.includes(roleFilter);
+      const matchesRole = roleFilter === "ALL" || userRole === roleFilter;
       const matchesStatus = statusFilter === "ALL" || (statusFilter === "ACTIVE" ? !user.disabledAt : Boolean(user.disabledAt));
       return matchesText && matchesRole && matchesStatus;
     });
@@ -120,7 +97,7 @@ export default function StaffManagementPage() {
   function resetForm() {
     setEditing(null);
     setForm({ name: "", email: "", mobile: "", jobTitle: "", password: "" });
-    setSelectedRoles(defaultRoles);
+    setSelectedRole(defaultRole);
   }
 
   function startEdit(user: ManagedUser) {
@@ -138,14 +115,7 @@ export default function StaffManagementPage() {
       jobTitle: user.jobTitle ?? "",
       password: "",
     });
-    setSelectedRoles(rolesForUser(user));
-  }
-
-  function toggleRole(nextRole: OperationalRole) {
-    setSelectedRoles((current) => {
-      const next = current.includes(nextRole) ? current.filter((item) => item !== nextRole) : [...current, nextRole];
-      return next.length ? next : current;
-    });
+    setSelectedRole(normalizeFixedRole(user.role) as FixedShopRole);
   }
 
   async function saveStaff(event: React.FormEvent) {
@@ -158,7 +128,7 @@ export default function StaffManagementPage() {
       ...(editing ? { userId: editing.id } : {}),
       ...form,
       password: form.password || undefined,
-      roles: selectedRoles,
+      role: selectedRole,
       shopId: isSuperAdmin ? activeShopId : undefined,
     };
     const res = await fetch("/api/users", {
@@ -238,23 +208,14 @@ export default function StaffManagementPage() {
           {!editing && <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Password or leave blank" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900 xl:col-span-2" />}
         </div>
         <div className="mt-4">
-          <p className="text-sm font-semibold">Assigned roles</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {roleOptions.map((item) => {
-              const selected = selectedRoles.includes(item);
-              return (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => toggleRole(item)}
-                  className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-3 text-sm font-semibold ${selected ? "border-brand-600 bg-brand-600 text-white" : "border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-200"}`}
-                >
-                  {selected && <Check className="h-4 w-4" />}
-                  {operationalRoleLabels[item]}
-                </button>
-              );
-            })}
-          </div>
+          <label className="text-sm font-semibold">Role</label>
+          <select
+            value={selectedRole}
+            onChange={(event) => setSelectedRole(event.target.value as FixedShopRole)}
+            className="mt-2 min-h-11 w-full max-w-md rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900"
+          >
+            {assignableFixedRoles.map((item) => <option key={item} value={item}>{fixedRoleLabels[item]}</option>)}
+          </select>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button disabled={!canSubmit} className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving..." : editing ? "Update Staff" : "Create Staff"}</button>
@@ -267,9 +228,9 @@ export default function StaffManagementPage() {
           <Search className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search staff by name, email, mobile, shop" className="min-h-11 w-full rounded-lg border py-2 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900" />
         </label>
-        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as OperationalRole | "ALL")} className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+        <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as FixedShopRole | "ALL")} className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
           <option value="ALL">All roles</option>
-          {roleOptions.map((item) => <option key={item} value={item}>{operationalRoleLabels[item]}</option>)}
+          {assignableFixedRoles.map((item) => <option key={item} value={item}>{fixedRoleLabels[item]}</option>)}
         </select>
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "ALL" | "ACTIVE" | "INACTIVE")} className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
           <option value="ALL">All status</option>
@@ -280,7 +241,7 @@ export default function StaffManagementPage() {
 
       <div className="mt-6 grid gap-3">
         {visibleUsers.map((user) => {
-          const roles = roleBadges(rolesForUser(user));
+          const userRole = normalizeFixedRole(user.role);
           const isCurrentAccount = user.id === currentUserId && (role === "SHOP_ADMIN" || role === "SUPER_ADMIN");
           return (
             <article key={user.id} className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -298,7 +259,7 @@ export default function StaffManagementPage() {
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {roles.map((item) => <span key={item} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{operationalRoleLabels[item]}</span>)}
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{roleLabel(userRole)}</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {!isCurrentAccount && (

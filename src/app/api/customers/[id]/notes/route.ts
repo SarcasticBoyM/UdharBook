@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { requireShopId } from "@/lib/tenant";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
+import { canManageCustomers } from "@/lib/permissions";
 
 const schema = z.object({
   note: z.string().min(1).max(2000),
@@ -16,8 +17,8 @@ export async function POST(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role === "FIELD_SALES") {
-    return NextResponse.json({ error: "Field sales notes must be recorded from an active visit workflow" }, { status: 403 });
+  if (!canManageCustomers(session.role)) {
+    return NextResponse.json({ error: "Sales Person notes must be recorded from an active visit workflow" }, { status: 403 });
   }
 
   try {

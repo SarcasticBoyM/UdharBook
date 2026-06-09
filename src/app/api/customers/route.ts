@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { canDelete } from "@/lib/permissions";
+import { canDelete, canManageCustomers } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/phone";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
@@ -103,8 +103,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role === "FIELD_SALES") {
-    return NextResponse.json({ error: "Field sales users can create leads from the field visit workflow" }, { status: 403 });
+  if (!canManageCustomers(session.role)) {
+    return NextResponse.json({ error: "Sales Person users can create leads from the field visit workflow" }, { status: 403 });
   }
 
   try {

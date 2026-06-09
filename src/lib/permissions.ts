@@ -1,20 +1,42 @@
-import type { OperationalRole, UserRole } from "@prisma/client";
-import { normalizeOperationalRoles } from "@/lib/operational-roles";
+import type { UserRole } from "@prisma/client";
+import { isAccountsRole, isSalesRole, isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
 
-export function canDelete(role: UserRole): boolean {
-  return role === "SHOP_ADMIN";
+export function canDelete(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
 }
 
-export function canImport(role: UserRole, assignedRoles: OperationalRole[] = []): boolean {
-  const roles = normalizeOperationalRoles(role, assignedRoles);
-  return roles.includes("SHOP_ADMIN") || roles.includes("ACCOUNTING_STAFF");
+export function canImport(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
 }
 
-export function canManageUsers(role: UserRole): boolean {
-  return role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+export function canManageUsers(role: UserRole | string): boolean {
+  return role === "SUPER_ADMIN" || isShopAdminRole(role);
 }
 
-export function canViewReports(role: UserRole, assignedRoles: OperationalRole[] = []): boolean {
-  const roles = normalizeOperationalRoles(role, assignedRoles);
-  return roles.includes("SHOP_ADMIN") || roles.includes("ACCOUNTING_STAFF") || roles.includes("FOLLOWUP_MANAGER");
+export function canViewReports(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
+}
+
+export function canManageCustomers(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
+}
+
+export function canReadCustomers(role: UserRole | string): boolean {
+  return canManageCustomers(role) || isSalesRole(role);
+}
+
+export function canUseOrders(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isSalesRole(role) || isAccountsRole(role);
+}
+
+export function canUseCheques(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isSalesRole(role) || isAccountsRole(role);
+}
+
+export function canUseFollowUps(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
+}
+
+export function isSuperAdminRole(role: UserRole | string) {
+  return normalizeFixedRole(role) === "SUPER_ADMIN";
 }

@@ -8,6 +8,7 @@ import { statusBadgeClass, formatStatus } from "@/lib/status-colors";
 import { CallActions } from "@/components/CallActions";
 import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
+import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
 type CustomerDetail = {
   id: string;
@@ -109,7 +110,7 @@ export default function CustomerDetailPage() {
   const [paymentNotes, setPaymentNotes] = useState("");
   const [note, setNote] = useState("");
   const [role, setRole] = useState("");
-  const isFieldSales = role === "FIELD_SALES";
+  const isReadOnlySales = isSalesRole(role) && !isAccountsRole(role) && !isShopAdminRole(role);
 
   const load = useCallback(() => {
     fetch(`/api/customers/${id}`)
@@ -194,7 +195,7 @@ export default function CustomerDetailPage() {
             {formatStatus(customer.status as Parameters<typeof formatStatus>[0])}
           </span>
         </div>
-        {!isFieldSales && (
+        {!isReadOnlySales && (
           <button
             type="button"
             onClick={() => setShowModal(true)}
@@ -268,7 +269,7 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      {!isFieldSales && <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      {!isReadOnlySales && <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <form onSubmit={addPayment} className="card">
           <h2 className="font-semibold">Record Payment</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -526,7 +527,7 @@ export default function CustomerDetailPage() {
         </ul>
       </div>
 
-      {showModal && !isFieldSales && (
+      {showModal && !isReadOnlySales && (
         <FollowUpModal
           customerId={customer.id}
           customerName={customer.partyName}

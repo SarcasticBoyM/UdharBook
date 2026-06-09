@@ -6,7 +6,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity, type FollowUpSourceModule } from "@/lib/follow-up-service";
-import { normalizeOperationalRoles } from "@/lib/operational-roles";
+import { canUseFollowUps } from "@/lib/permissions";
 
 const schema = z.object({
   customerId: z.string(),
@@ -50,10 +50,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const roles = normalizeOperationalRoles(session.role, session.roles ?? []);
-  if (session.role === "FIELD_SALES" && !roles.some((role) => role === "FOLLOWUP_MANAGER" || role === "ACCOUNTING_STAFF")) {
-    return NextResponse.json({ error: "Field sales follow-ups must be created from an active visit workflow" }, { status: 403 });
-  }
+  if (!canUseFollowUps(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const body = schema.parse(await request.json());

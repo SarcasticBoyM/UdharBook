@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
+import { canUseOrders } from "@/lib/permissions";
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
@@ -142,7 +143,7 @@ export default function OrderDeskPage() {
   const [orderDetails, setOrderDetails] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [priority, setPriority] = useState("Normal");
-  const canManageOrders = role === "SHOP_ADMIN" || role === "STAFF" || role === "FIELD_SALES";
+  const canManageOrders = canUseOrders(role);
   const canCreateOrders = canManageOrders;
 
   async function load() {

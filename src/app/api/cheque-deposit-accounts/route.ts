@@ -5,9 +5,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canManageShop } from "@/lib/tenant";
 import { requireShopId } from "@/lib/tenant";
-import { normalizeOperationalRoles } from "@/lib/operational-roles";
-
-const depositAccountAccessRoles = new Set(["SHOP_ADMIN", "ACCOUNTING_STAFF", "CHEQUE_OPERATIONS", "FIELD_SALES_PERSON"]);
+import { canUseCheques } from "@/lib/permissions";
 
 const accountSchema = z.object({
   accountName: z.string().min(1),
@@ -22,9 +20,7 @@ function accountLabel(account: { bankName: string; accountName: string; lastFour
 
 function canViewDepositAccounts(session: Awaited<ReturnType<typeof getSession>>) {
   if (!session) return false;
-  if (session.role === "SUPER_ADMIN" || session.role === "SHOP_ADMIN") return true;
-  const roles = normalizeOperationalRoles(session.role, session.roles ?? []);
-  return roles.some((role) => depositAccountAccessRoles.has(role));
+  return session.role === "SUPER_ADMIN" || canUseCheques(session.role);
 }
 
 export async function GET(request: Request) {

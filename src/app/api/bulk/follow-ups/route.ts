@@ -14,7 +14,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canImport(session.role, session.roles ?? [])) {
+  if (!canImport(session.role)) {
     return NextResponse.json({ error: "Admin only" }, { status: 403 });
   }
 

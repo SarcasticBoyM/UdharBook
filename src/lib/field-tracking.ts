@@ -1,5 +1,6 @@
 import type { StaffTrackingStatus } from "@prisma/client";
 import type { SessionUser } from "@/types";
+import { isSalesRole, isShopAdminRole } from "@/lib/operational-roles";
 
 export function startOfDay(value = new Date()) {
   const date = new Date(value);
@@ -14,11 +15,11 @@ export function endOfDay(value = new Date()) {
 }
 
 export function isFieldAdmin(session: SessionUser) {
-  return session.role === "SHOP_ADMIN";
+  return isShopAdminRole(session.role);
 }
 
 export function isFieldWorker(session: SessionUser) {
-  return session.role === "STAFF" || session.role === "FIELD_SALES";
+  return isSalesRole(session.role);
 }
 
 export function visibleStaffId(session: SessionUser, requested?: string | null) {

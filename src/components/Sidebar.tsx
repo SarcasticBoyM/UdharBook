@@ -29,8 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
 import { ShopSwitcher } from "./ShopSwitcher";
-import { canAccessModule, operationalRoleLabels } from "@/lib/operational-roles";
-import type { OperationalRole } from "@prisma/client";
+import { canAccessModule, roleLabel } from "@/lib/operational-roles";
 
 type SidebarLink = {
   href: string;
@@ -64,7 +63,7 @@ const platformLinks: SidebarLink[] = [
   { href: "/staff", label: "Staff Management", icon: ShieldCheck },
 ];
 
-export function Sidebar({ userName, role, operationalRoles = [] }: { userName: string; role: string; operationalRoles?: OperationalRole[] }) {
+export function Sidebar({ userName, role }: { userName: string; role: string }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -73,11 +72,9 @@ export function Sidebar({ userName, role, operationalRoles = [] }: { userName: s
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly && isAdmin) return true;
-    return canAccessModule(role, operationalRoles, link.href);
+    return canAccessModule(role, link.href);
   });
-  const roleLabel = operationalRoles.length > 0
-    ? operationalRoles.map((item) => operationalRoleLabels[item]).join(", ")
-    : role;
+  const displayRole = roleLabel(role);
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -115,7 +112,7 @@ export function Sidebar({ userName, role, operationalRoles = [] }: { userName: s
           <div className={cn(mobile ? "block min-w-0" : "hidden md:block")}>
             <h1 className="text-lg font-bold text-brand-700 dark:text-brand-400">UdharBook</h1>
             <p className="mt-1 truncate text-xs text-slate-500">
-              {userName} | {roleLabel}
+              {userName} | {displayRole}
             </p>
             <ShopSwitcher enabled={false} />
           </div>

@@ -369,8 +369,9 @@ export default function ReportsPage() {
             <select value={attendanceRole} onChange={(event) => setAttendanceRole(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950">
               <option value="">All roles</option>
               <option value="SHOP_ADMIN">Shop Admin</option>
-              <option value="STAFF">Accounting Staff</option>
-              <option value="FIELD_SALES">Field Sales Person</option>
+              <option value="ACCOUNT_STAFF">Account Staff</option>
+              <option value="SALES_PERSON">Sales Person</option>
+              <option value="SALES_PERSON_CUM_ACCOUNTS">Sales Person Cum Accounts</option>
               <option value="SUPER_ADMIN">Super Admin</option>
             </select>
           </label>

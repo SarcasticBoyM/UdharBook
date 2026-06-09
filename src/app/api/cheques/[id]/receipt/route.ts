@@ -8,6 +8,7 @@ import {
   receiptStorageConfigured,
   uploadDepositReceipt,
 } from "@/lib/storage/deposit-receipts";
+import { canUseCheques } from "@/lib/permissions";
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
 
@@ -17,7 +18,7 @@ export async function POST(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["SHOP_ADMIN", "STAFF", "FIELD_SALES"].includes(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canUseCheques(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   if (!receiptStorageConfigured()) {
     return NextResponse.json({ error: "Receipt storage is not configured" }, { status: 500 });
   }

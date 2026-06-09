@@ -11,6 +11,10 @@ datasource db {
 enum UserRole {
   SUPER_ADMIN
   SHOP_ADMIN
+  SALES_PERSON
+  ACCOUNT_STAFF
+  SALES_PERSON_CUM_ACCOUNTS
+  // Legacy roles retained only for safe migration/backward compatibility.
   STAFF
   FIELD_SALES
 }
@@ -241,7 +245,7 @@ model User {
   email        String     @unique
   mobile       String?
   passwordHash String
-  role         UserRole   @default(STAFF)
+  role         UserRole   @default(ACCOUNT_STAFF)
   jobTitle     String?
   shopId       String
   shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Restrict)

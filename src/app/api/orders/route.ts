@@ -6,6 +6,7 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
+import { canUseOrders } from "@/lib/permissions";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -50,10 +51,6 @@ const priorityRank: Record<string, number> = {
   Urgent: 1,
   Normal: 2,
 };
-
-function isOrderOperator(role: string) {
-  return role === "SHOP_ADMIN" || role === "STAFF" || role === "FIELD_SALES";
-}
 
 function parseOptionalDate(value?: string | null) {
   if (!value) return null;
@@ -331,7 +328,7 @@ export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canUseOrders(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {
@@ -441,7 +438,7 @@ export async function PATCH(request: Request) {
   const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!isOrderOperator(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canUseOrders(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   try {

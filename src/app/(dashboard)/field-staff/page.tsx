@@ -17,6 +17,7 @@ import {
   Settings,
   UserPlus,
 } from "lucide-react";
+import { isSalesRole, isShopAdminRole } from "@/lib/operational-roles";
 
 type CustomerSuggestion = {
   id: string;
@@ -78,7 +79,7 @@ type ChequeCollectionContext = {
   customer: { id?: string; partyName: string; contactNumber: string; outstandingBalance: number };
 };
 
-type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "STAFF" | "FIELD_SALES";
+type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "SALES_PERSON" | "ACCOUNT_STAFF" | "SALES_PERSON_CUM_ACCOUNTS" | "STAFF" | "FIELD_SALES";
 
 type StaffStatus = {
   id: string;
@@ -261,8 +262,8 @@ export default function FieldStaffPage() {
   const watchIdRef = useRef<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
 
-  const isFieldWorker = role === "FIELD_SALES" || role === "STAFF";
-  const isAdmin = role === "SHOP_ADMIN";
+  const isFieldWorker = isSalesRole(role ?? "");
+  const isAdmin = isShopAdminRole(role ?? "");
   const canSaveVisit = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && visitOutcomes.length > 0 && gpsState !== "checking" && !visitSaving);
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
   const chequeCollectionContext: ChequeCollectionContext | null = chequeVisit

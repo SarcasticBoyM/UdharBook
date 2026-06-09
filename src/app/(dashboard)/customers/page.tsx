@@ -8,6 +8,7 @@ import { statusBadgeClass, formatStatus, followupRowClass } from "@/lib/status-c
 import { CallActions } from "@/components/CallActions";
 import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
+import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
 type CustomerView = "active" | "inactive" | "all" | "pending";
 
@@ -25,7 +26,7 @@ export default function CustomersPage() {
   const [followUpId, setFollowUpId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [role, setRole] = useState("");
-  const isFieldSales = role === "FIELD_SALES";
+  const isReadOnlySales = isSalesRole(role) && !isAccountsRole(role) && !isShopAdminRole(role);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,7 +95,7 @@ export default function CustomersPage() {
             {view === "active" ? " (active dues)" : view === "inactive" ? " (inactive / zero balance)" : view === "pending" ? " (with outstanding balance)" : ""}
           </p>
         </div>
-        {!isFieldSales && (
+        {!isReadOnlySales && (
           <Link
             href="/customers/new"
             className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700"
@@ -102,7 +103,7 @@ export default function CustomersPage() {
             Add Customer
           </Link>
         )}
-        {!isFieldSales && (
+        {!isReadOnlySales && (
           <button
             type="button"
             onClick={exportExcel}
@@ -253,7 +254,7 @@ export default function CustomersPage() {
                         dueDate={c.nextFollowupDate}
                         compact
                       />
-                      {!isFieldSales && (
+                      {!isReadOnlySales && (
                         <button
                           type="button"
                           onClick={() => setFollowUpId(c.id)}

@@ -46,38 +46,53 @@ const SUPER_ADMIN_BLOCKED_APIS = [
   "/api/today-follow-ups",
 ];
 
-const FIELD_SALES_HOME = "/field-staff";
-const FIELD_SALES_BLOCKED_PAGES = [
-  "/today-follow-ups",
-  "/upload",
-  "/follow-ups",
-  "/reports",
-  "/live-tracking",
-  "/shops",
-  "/customers/new",
-];
-const FIELD_SALES_BLOCKED_APIS = [
-  "/api/bulk",
-  "/api/customers/import",
-  "/api/dashboard/stats",
-  "/api/follow-up-reports",
-  "/api/follow-ups",
-  "/api/onboarding",
-  "/api/reports",
-  "/api/shops",
-  "/api/today-follow-ups",
-  "/api/users",
-];
-const STAFF_BLOCKED_PAGES = ["/field-staff", "/daily-visits", "/orders", "/live-tracking"];
-const STAFF_BLOCKED_APIS = ["/api/field-staff", "/api/orders"];
-const FIELD_OPERATION_ROLES = ["FIELD_SALES_PERSON"];
-const ORDER_OPERATION_ROLES = ["ORDER_MANAGER", "ACCOUNTING_STAFF", "FIELD_SALES_PERSON"];
-const FOLLOWUP_OPERATION_ROLES = ["FOLLOWUP_MANAGER", "ACCOUNTING_STAFF"];
-const REPORT_OPERATION_ROLES = ["FOLLOWUP_MANAGER", "ACCOUNTING_STAFF"];
-const IMPORT_OPERATION_ROLES = ["ACCOUNTING_STAFF"];
+const SALES_HOME = "/field-staff";
 
-function hasAnyRole(roles: unknown, allowed: string[]) {
-  return Array.isArray(roles) && roles.some((role) => typeof role === "string" && allowed.includes(role));
+function normalizeRole(role?: string) {
+  if (role === "FIELD_SALES") return "SALES_PERSON";
+  if (role === "STAFF") return "ACCOUNT_STAFF";
+  return role;
+}
+
+function pathStarts(pathname: string, prefixes: string[]) {
+  return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+function canAccessPage(role: string, pathname: string) {
+  const normalized = normalizeRole(role);
+  if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix));
+  if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/shops");
+  if (normalized === "SALES_PERSON") {
+    return pathStarts(pathname, ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"]) && !pathname.startsWith("/customers/new");
+  }
+  if (normalized === "ACCOUNT_STAFF") {
+    return pathStarts(pathname, ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/reports", "/qrvcard"]) &&
+      !pathStarts(pathname, ["/staff", "/shops", "/field-staff", "/daily-visits", "/live-tracking", "/follow-ups", "/customers/new"]);
+  }
+  if (normalized === "SALES_PERSON_CUM_ACCOUNTS") {
+    return pathStarts(pathname, ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/field-staff", "/daily-visits", "/reports", "/qrvcard"]) &&
+      !pathStarts(pathname, ["/staff", "/shops", "/live-tracking", "/follow-ups", "/customers/new"]);
+  }
+  return false;
+}
+
+function canAccessApi(role: string, pathname: string) {
+  const normalized = normalizeRole(role);
+  if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix));
+  if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/api/shops") && !pathname.startsWith("/api/onboarding");
+  if (normalized === "SALES_PERSON") {
+    return pathStarts(pathname, ["/api/auth", "/api/orders", "/api/cheques", "/api/customers/search", "/api/customers"]) &&
+      !pathStarts(pathname, ["/api/customers/import", "/api/customers/new", "/api/follow-ups", "/api/reports", "/api/users", "/api/dashboard"]);
+  }
+  if (normalized === "ACCOUNT_STAFF") {
+    return pathStarts(pathname, ["/api/auth", "/api/customers", "/api/bulk", "/api/follow-ups", "/api/follow-up-reports", "/api/today-follow-ups", "/api/orders", "/api/cheques", "/api/cheque-deposit-accounts", "/api/reports", "/api/dashboard", "/api/qrvcard"]) &&
+      !pathStarts(pathname, ["/api/users", "/api/field-staff", "/api/shops", "/api/onboarding"]);
+  }
+  if (normalized === "SALES_PERSON_CUM_ACCOUNTS") {
+    return pathStarts(pathname, ["/api/auth", "/api/customers", "/api/bulk", "/api/follow-ups", "/api/follow-up-reports", "/api/today-follow-ups", "/api/orders", "/api/cheques", "/api/cheque-deposit-accounts", "/api/reports", "/api/dashboard", "/api/qrvcard", "/api/field-staff"]) &&
+      !pathStarts(pathname, ["/api/users", "/api/shops", "/api/onboarding"]);
+  }
+  return false;
 }
 
 function logMiddleware(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>) {
@@ -150,11 +165,10 @@ export async function middleware(request: NextRequest) {
       sessionSecretLengthOk: Boolean(process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 24),
     });
     const { payload } = await jwtVerify(token, getSecret());
-    const role = payload.role as string | undefined;
-    const roles = payload.roles;
+    const role = normalizeRole(payload.role as string | undefined);
     const shopId = payload.shopId as string | undefined;
     const userId = payload.id as string | undefined;
-    logMiddleware("info", "middleware_session_decode_success", { traceId, path: pathname, userId, role, roles: Array.isArray(roles) ? roles : [], shopId });
+    logMiddleware("info", "middleware_session_decode_success", { traceId, path: pathname, userId, role, shopId });
 
     if (!role) {
       logMiddleware("warn", "middleware_reject_missing_role", { traceId, path: pathname, userId, shopId });
@@ -186,41 +200,18 @@ export async function middleware(request: NextRequest) {
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
 
-    if (role === "FIELD_SALES" && pathname === "/") {
-      logMiddleware("info", "middleware_redirect_field_sales_home", { traceId, path: pathname, userId, role, shopId });
-      return secure(NextResponse.redirect(new URL(FIELD_SALES_HOME, request.url)));
+    if (role === "SALES_PERSON" && pathname === "/") {
+      logMiddleware("info", "middleware_redirect_sales_home", { traceId, path: pathname, userId, role, shopId });
+      return secure(NextResponse.redirect(new URL(SALES_HOME, request.url)));
     }
-    const fieldSalesAllowedByMultiRole =
-      ((pathname.startsWith("/today-follow-ups") || pathname.startsWith("/follow-ups")) && hasAnyRole(roles, FOLLOWUP_OPERATION_ROLES))
-      || pathname.startsWith("/reports") && hasAnyRole(roles, REPORT_OPERATION_ROLES)
-      || pathname.startsWith("/upload") && hasAnyRole(roles, IMPORT_OPERATION_ROLES);
-    const fieldSalesApiAllowedByMultiRole =
-      ((pathname.startsWith("/api/follow-ups") || pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/today-follow-ups")) && hasAnyRole(roles, FOLLOWUP_OPERATION_ROLES))
-      || (pathname.startsWith("/api/reports") || pathname.startsWith("/api/dashboard/stats")) && hasAnyRole(roles, REPORT_OPERATION_ROLES);
-
-    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix)) && !fieldSalesAllowedByMultiRole) {
-      logMiddleware("warn", "middleware_redirect_field_sales_page_forbidden", { traceId, path: pathname, userId, role, shopId });
-      return secure(NextResponse.redirect(new URL(FIELD_SALES_HOME, request.url)));
-    }
-    if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix)) && !fieldSalesApiAllowedByMultiRole) {
-      logMiddleware("warn", "middleware_reject_field_sales_api_forbidden", { traceId, path: pathname, userId, role, shopId });
+    if (pathname.startsWith("/api/") && !canAccessApi(role, pathname)) {
+      logMiddleware("warn", "middleware_reject_api_forbidden", { traceId, path: pathname, userId, role, shopId });
       return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
     }
-
-    const staffAllowedByMultiRole =
-      (pathname.startsWith("/field-staff") || pathname.startsWith("/daily-visits")) && hasAnyRole(roles, FIELD_OPERATION_ROLES)
-      || pathname.startsWith("/orders") && hasAnyRole(roles, ORDER_OPERATION_ROLES);
-    const staffApiAllowedByMultiRole =
-      pathname.startsWith("/api/field-staff") && hasAnyRole(roles, FIELD_OPERATION_ROLES)
-      || pathname.startsWith("/api/orders") && hasAnyRole(roles, ORDER_OPERATION_ROLES);
-
-    if (role === "STAFF" && STAFF_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix)) && !staffAllowedByMultiRole) {
-      logMiddleware("info", "middleware_redirect_staff_page_forbidden", { traceId, path: pathname, userId, role, shopId });
-      return secure(NextResponse.redirect(new URL("/today-follow-ups", request.url)));
-    }
-    if (role === "STAFF" && STAFF_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix)) && !staffApiAllowedByMultiRole) {
-      logMiddleware("warn", "middleware_reject_staff_api_forbidden", { traceId, path: pathname, userId, role, shopId });
-      return secure(NextResponse.json({ error: "Forbidden" }, { status: 403 }));
+    if (!pathname.startsWith("/api/") && !canAccessPage(role, pathname)) {
+      logMiddleware("warn", "middleware_redirect_page_forbidden", { traceId, path: pathname, userId, role, shopId });
+      const home = role === "SALES_PERSON" ? SALES_HOME : "/";
+      return secure(NextResponse.redirect(new URL(home, request.url)));
     }
     if (role !== "SUPER_ADMIN" && !shopId) {
       logMiddleware("error", "middleware_redirect_missing_shop_id", { traceId, path: pathname, userId, role });

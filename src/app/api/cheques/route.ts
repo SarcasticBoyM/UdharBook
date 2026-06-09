@@ -8,6 +8,8 @@ import { requireShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
+import { canViewReports } from "@/lib/permissions";
+import { isSalesRole } from "@/lib/operational-roles";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 
@@ -304,8 +306,8 @@ export async function GET(request: Request) {
   tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
 
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
-  if (session.role === "FIELD_SALES" && format) {
-    return NextResponse.json({ error: "Field sales users cannot export cheque reports" }, { status: 403 });
+  if (!canViewReports(session.role) && format) {
+    return NextResponse.json({ error: "This role cannot export cheque reports" }, { status: 403 });
   }
 
   if (q) {
@@ -386,7 +388,7 @@ export async function GET(request: Request) {
         take: format ? 1000 : limit,
       }),
       prisma.cheque.count({ where }),
-      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "STAFF", "FIELD_SALES"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
+      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS", "STAFF", "FIELD_SALES"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
       prisma.cheque.count({ where: { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } } }),
       prisma.cheque.count({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } } }),
       prisma.cheque.count({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } } }),
@@ -508,7 +510,7 @@ export async function POST(request: Request) {
     if (linkedVisit && !["CHECKED_IN", "COMPLETED"].includes(linkedVisit.status)) {
       return NextResponse.json({ error: "Linked visit cannot accept cheque collection" }, { status: 403 });
     }
-    if (linkedVisit && ["STAFF", "FIELD_SALES"].includes(session.role) && linkedVisit.staffId !== session.id) {
+    if (linkedVisit && isSalesRole(session.role) && linkedVisit.staffId !== session.id) {
       return NextResponse.json({ error: "Linked visit cannot be modified by this user" }, { status: 403 });
     }
     const depositAccount = body.depositedAccountId

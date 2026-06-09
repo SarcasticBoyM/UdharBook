@@ -4,8 +4,6 @@ import { getSession } from "@/lib/auth";
 import { isSuperAdmin } from "@/lib/tenant";
 import { canManageUsers } from "@/lib/permissions";
 import { logActivity } from "@/lib/activity";
-import { fallbackOperationalRoles } from "@/lib/operational-roles";
-import { logger } from "@/lib/logger";
 
 export async function POST(
   request: Request,
@@ -38,24 +36,11 @@ export async function POST(
     }
     return result;
   });
-  const roleAssignments = await prisma.userRoleAssignment.findMany({
-    where: { userId: updated.id, shopId: updated.shopId },
-    select: { role: true, createdAt: true },
-  }).catch((error) => {
-    logger.error("user_disable_role_assignment_lookup_failed_fallback_legacy_role", {
-      actorId: session.id,
-      userId: updated.id,
-      shopId: updated.shopId,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-    return fallbackOperationalRoles(updated.role).map((role) => ({ role, createdAt: new Date(0) }));
-  });
   await logActivity({
     action: disabled ? "user_disabled" : "user_enabled",
     userId: session.id,
     shopId: updated.shopId,
     details: updated.email,
   });
-  return NextResponse.json({ user: { ...updated, roleAssignments } });
+  return NextResponse.json({ user: updated });
 }
