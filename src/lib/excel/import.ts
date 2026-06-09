@@ -4,7 +4,7 @@ import { logger } from "@/lib/logger";
 import type { ImportSummary } from "@/types";
 
 const PLACEHOLDER_PREFIX = "NO-PH-";
-const IMPORT_BATCH_SIZE = 100;
+const IMPORT_BATCH_SIZE = 50;
 const MAX_ERROR_ROWS = 500;
 
 export function isPlaceholderContact(contact: string): boolean {
@@ -57,9 +57,9 @@ function findField(row: Record<string, unknown>, ...keys: string[]): unknown {
 }
 
 function parseBalance(value: string | null): number | null {
-  if (!value) return 0;
+  if (!value) return null;
   const cleaned = value.replace(/[,\s]/g, "").replace(/[^0-9.-]/g, "");
-  if (!cleaned) return 0;
+  if (!cleaned) return null;
   const balance = Number.parseFloat(cleaned);
   return Number.isFinite(balance) && balance >= 0 ? balance : null;
 }
@@ -168,36 +168,51 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       });
 
       try {
-        let batchCreated = 0;
-        await prisma.$transaction(async (tx) => {
-          if (creates.length > 0) {
-            const createResult = await tx.customer.createMany({
-              data: creates.map((row) => ({
+        const updateResults = await Promise.allSettled(
+          updates.map((row) =>
+            prisma.customer.update({
+              where: { id: row.customerId },
+              data: { outstandingBalance: row.outstandingBalance },
+            })
+          )
+        );
+        const createResults = await Promise.allSettled(
+          creates.map((row) =>
+            prisma.customer.create({
+              data: {
                 shopId,
                 partyName: row.partyName,
                 contactNumber: row.contactNumber,
                 outstandingBalance: row.outstandingBalance,
                 status: row.outstandingBalance === 0 ? "CLEARED" : "PENDING",
-              })),
-              skipDuplicates: true,
-            });
-            batchCreated = createResult.count;
-          }
+              },
+            })
+          )
+        );
 
-          for (const row of updates) {
-            await tx.customer.update({
-              where: { id: row.customerId },
-              data: { outstandingBalance: row.outstandingBalance },
-            });
-          }
-        }, { timeout: 20000 });
+        const batchUpdated = countFulfilled(updateResults);
+        const batchCreated = countFulfilled(createResults);
+        const failedUpdates = updateResults.length - batchUpdated;
+        const failedCreates = createResults.length - batchCreated;
+        const batchDuplicateNameCreated = creates
+          .filter((row, index) => row.duplicateName && createResults[index].status === "fulfilled")
+          .length;
 
-        const skippedDuplicates = creates.length - batchCreated;
-        const batchDuplicateNameCreated = creates.filter((row) => row.duplicateName).length;
+        updateResults.forEach((result, index) => {
+          if (result.status === "rejected") {
+            addImportError(errors, { row: updates[index].rowNumber, message: importErrorMessage(result.reason) });
+          }
+        });
+        createResults.forEach((result, index) => {
+          if (result.status === "rejected") {
+            addImportError(errors, { row: creates[index].rowNumber, message: importErrorMessage(result.reason) });
+          }
+        });
+
         created += batchCreated;
         duplicateNameCreated += batchDuplicateNameCreated;
-        updated += updates.length;
-        skipped += skippedDuplicates;
+        updated += batchUpdated;
+        skipped += failedUpdates + failedCreates;
         logger.info("customer_import_batch_complete", {
           shopId,
           batch: batchIndex + 1,
@@ -205,8 +220,8 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
           rows: batch.length,
           created: batchCreated,
           duplicateNameCreated: batchDuplicateNameCreated,
-          updated: updates.length,
-          skippedDuplicates,
+          updated: batchUpdated,
+          failedRows: failedUpdates + failedCreates,
           durationMs: Date.now() - batchStartedAt,
           totalDurationMs: Date.now() - startedAt,
           memoryMb: memorySnapshotMb(),
@@ -277,6 +292,15 @@ function chunk<T>(items: T[], size: number): T[][] {
     batches.push(items.slice(index, index + size));
   }
   return batches;
+}
+
+function countFulfilled<T>(results: PromiseSettledResult<T>[]) {
+  return results.filter((result) => result.status === "fulfilled").length;
+}
+
+function importErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 async function loadExistingCustomerLookup(shopId: string) {

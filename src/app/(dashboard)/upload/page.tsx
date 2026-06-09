@@ -97,7 +97,7 @@ export default function UploadPage() {
           disabled={!file || loading}
           className="mt-4 rounded-lg bg-brand-600 px-6 py-2 text-sm text-white disabled:opacity-50"
         >
-          {loading ? "Importing…" : "Import"}
+          {loading ? "Importing customers..." : "Import"}
         </button>
       </form>
 
@@ -124,6 +124,10 @@ export default function UploadPage() {
             <div>
               <dt className="text-slate-500">Invalid rows skipped</dt>
               <dd className="text-2xl font-bold text-amber-600">{summary.skipped}</dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Failed rows</dt>
+              <dd className="text-2xl font-bold text-red-600">{summary.errors.length}</dd>
             </div>
           </dl>
           {summary.errors.length > 0 && (
