@@ -19,7 +19,16 @@ function normalizeNameKey(name: string): string {
   return normalizeName(name).toLowerCase();
 }
 
-/** Stable placeholder when Excel has no usable unique contact number (satisfies unique contactNumber). */
+function normalizeBatchTag(tag?: string | null) {
+  const normalized = tag?.trim().replace(/\s+/g, " ").slice(0, 40);
+  return normalized || null;
+}
+
+function tagKey(tag?: string | null) {
+  return normalizeBatchTag(tag)?.toLowerCase() ?? "__untagged__";
+}
+
+/** Stable placeholder when Excel has no usable contact number. */
 function placeholderContact(partyName: string, suffix?: string | number): string {
   const slug =
     normalizeNameKey(partyName).replace(/[^a-z0-9]/g, "").slice(0, 32) || "unknown";
@@ -65,11 +74,13 @@ function parseBalance(value: string | null): number | null {
   return Math.max(0, balance);
 }
 
-export async function importCustomersFromExcel(buffer: Buffer, shopId: string): Promise<ImportSummary> {
+export async function importCustomersFromExcel(buffer: Buffer, shopId: string, options: { batchTag?: string | null } = {}): Promise<ImportSummary> {
   const startedAt = Date.now();
+  const batchTag = normalizeBatchTag(options.batchTag);
   try {
     logger.info("customer_import_parse_start", {
       shopId,
+      batchTag,
       fileBytes: buffer.length,
       memoryMb: memorySnapshotMb(),
     });
@@ -88,6 +99,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
         updated: 0,
         skipped: 0,
         skippedZeroBalance: 0,
+        batchTag,
         errors: [{ row: 0, message: "No data found in Excel file" }],
       };
     }
@@ -142,18 +154,18 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       memoryMb: memorySnapshotMb(),
     });
 
-    const reservedContacts = new Set(existingLookup.contactNumbers);
+    const reservedContacts = new Set<string>();
     const batches = chunk(validRows, IMPORT_BATCH_SIZE);
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       const batchStartedAt = Date.now();
       const batch = batches[batchIndex];
-      const updates: Array<(typeof batch)[number] & { customerId: string }> = [];
+      const updates: Array<(typeof batch)[number] & { customerId: string; assignBatchTag: boolean }> = [];
       const creates: Array<(typeof batch)[number] & { contactNumber: string; duplicateName: boolean }> = [];
 
       for (const row of batch) {
-        const matches = existingLookup.byName.get(row.nameKey) ?? [];
-        if (matches.length === 1) {
-          updates.push({ ...row, customerId: matches[0].id });
+        const match = findExistingLedgerMatch(existingLookup, row.nameKey, row.contactNumber, batchTag);
+        if (match) {
+          updates.push({ ...row, customerId: match.id, assignBatchTag: Boolean(batchTag && !match.batchTag) });
           continue;
         }
         if (row.outstandingBalance <= 0) {
@@ -163,7 +175,8 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
         }
 
         const contactNumber = reserveContactNumber(row.partyName, row.rowNumber, row.contactNumber, reservedContacts);
-        creates.push({ ...row, contactNumber, duplicateName: matches.length > 1 });
+        const existingNameCount = existingLookup.byName.get(row.nameKey)?.length ?? 0;
+        creates.push({ ...row, contactNumber, duplicateName: existingNameCount > 0 });
       }
       logger.info("customer_import_batch_start", {
         shopId,
@@ -184,6 +197,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
                 outstandingBalance: row.outstandingBalance,
                 status: row.outstandingBalance <= 0 ? "CLEARED" : "PENDING",
                 nextFollowupDate: row.outstandingBalance <= 0 ? null : undefined,
+                ...(row.assignBatchTag ? { batchTag } : {}),
               },
             })
           )
@@ -195,6 +209,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
                 shopId,
                 partyName: row.partyName,
                 contactNumber: row.contactNumber,
+                batchTag,
                 outstandingBalance: row.outstandingBalance,
                 status: row.outstandingBalance === 0 ? "CLEARED" : "PENDING",
               },
@@ -275,6 +290,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       skipped,
       skippedZeroBalance,
       errors,
+      batchTag,
     };
   } catch (err: unknown) {
     const message =
@@ -292,6 +308,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string): 
       updated: 0,
       skipped: 0,
       skippedZeroBalance: 0,
+      batchTag,
       errors: [{ row: 0, message: `Failed to parse Excel file: ${message}` }],
     };
   }
@@ -321,18 +338,48 @@ function importErrorMessage(error: unknown) {
 async function loadExistingCustomerLookup(shopId: string) {
   const customers = await prisma.customer.findMany({
     where: { shopId },
-    select: { id: true, partyName: true, contactNumber: true },
+    select: { id: true, partyName: true, contactNumber: true, batchTag: true },
   });
-  const byName = new Map<string, Array<{ id: string }>>();
+  const byName = new Map<string, Array<{ id: string; batchTag: string | null; contactNumber: string }>>();
+  const byContact = new Map<string, Array<{ id: string; batchTag: string | null; nameKey: string }>>();
   const contactNumbers = new Set<string>();
   customers.forEach((customer) => {
     const key = normalizeNameKey(customer.partyName);
     const matches = byName.get(key) ?? [];
-    matches.push({ id: customer.id });
+    matches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber });
     byName.set(key, matches);
+    const contactMatches = byContact.get(customer.contactNumber) ?? [];
+    contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key });
+    byContact.set(customer.contactNumber, contactMatches);
     contactNumbers.add(customer.contactNumber);
   });
-  return { byName, contactNumbers };
+  return { byName, byContact, contactNumbers };
+}
+
+function findExistingLedgerMatch(
+  lookup: Awaited<ReturnType<typeof loadExistingCustomerLookup>>,
+  nameKey: string,
+  contactNumber: string | null,
+  batchTag: string | null,
+) {
+  const targetTagKey = tagKey(batchTag);
+  const nameMatches = lookup.byName.get(nameKey) ?? [];
+  const contactMatches = contactNumber ? lookup.byContact.get(contactNumber) ?? [] : [];
+  const candidates = [
+    ...nameMatches,
+    ...contactMatches.map((match) => ({ id: match.id, batchTag: match.batchTag, contactNumber: contactNumber ?? "" })),
+  ].filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
+
+  const sameTag = candidates.find((candidate) => tagKey(candidate.batchTag) === targetTagKey);
+  if (sameTag) return sameTag;
+
+  if (batchTag) {
+    const untagged = candidates.filter((candidate) => !candidate.batchTag);
+    if (untagged.length === 1) return untagged[0];
+    return null;
+  }
+
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function reserveContactNumber(partyName: string, rowNumber: number, contactNumber: string | null, reservedContacts: Set<string>) {

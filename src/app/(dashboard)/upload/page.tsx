@@ -8,16 +8,18 @@ export default function UploadPage() {
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [batchTag, setBatchTag] = useState("");
 
   const upload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file) return;
+    if (!file || !batchTag.trim()) return;
     setLoading(true);
     setError("");
     setSummary(null);
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("batchTag", batchTag.trim());
 
     try {
       const res = await fetch("/api/customers/import", {
@@ -77,10 +79,21 @@ export default function UploadPage() {
       <p className="mt-1 text-slate-500">
         Columns: <strong>Customer Name</strong> (or Party Name),{" "}
         <strong>Contact Number</strong>, <strong>Outstanding Balance</strong>.
-        Matches customers by exact Customer Name only. If multiple matching names exist, a new customer is created safely.
+        Add a Batch / Firm tag first, then upload customer balances for that ledger.
       </p>
 
       <form onSubmit={upload} className="card mt-6">
+        <label className="mb-4 block">
+          <span className="text-sm font-semibold">Batch / Firm Name</span>
+          <input
+            value={batchTag}
+            onChange={(event) => setBatchTag(event.target.value)}
+            placeholder="Example: YE, BT, Balaji, Cement"
+            className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+            maxLength={40}
+            required
+          />
+        </label>
         <input
           type="file"
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -89,12 +102,12 @@ export default function UploadPage() {
         />
         <p className="mt-2 text-xs text-slate-500">
           Existing customers are updated by name; new rows are created with Pending status. Empty rows
-          with no usable data are ignored.
+          with no usable data are ignored. Matching is scoped to the Batch / Firm tag.
         </p>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <button
           type="submit"
-          disabled={!file || loading}
+          disabled={!file || !batchTag.trim() || loading}
           className="mt-4 rounded-lg bg-brand-600 px-6 py-2 text-sm text-white disabled:opacity-50"
         >
           {loading ? "Importing customers..." : "Import"}
@@ -105,6 +118,10 @@ export default function UploadPage() {
         <div className="card mt-6">
           <h2 className="font-semibold">Import Summary</h2>
           <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-slate-500">Batch / Firm tag</dt>
+              <dd className="text-2xl font-bold text-sky-600">{summary.batchTag ?? "-"}</dd>
+            </div>
             <div>
               <dt className="text-slate-500">Total rows processed</dt>
               <dd className="text-2xl font-bold">{summary.totalProcessed}</dd>

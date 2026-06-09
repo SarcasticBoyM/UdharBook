@@ -18,9 +18,9 @@ type OrderRow = {
   createdAt: string;
   deliveredAt: string | null;
   cancelledAt?: string | null;
-  customer: { partyName: string; contactNumber: string };
-  createdBy: { name: string; role: string };
-  activities?: { action: string; createdAt: string; user: { name: string; role: string } }[];
+  customer: { partyName: string; contactNumber: string; batchTag?: string | null };
+  createdBy: { name: string; role?: string };
+  activities?: { action: string; createdAt: string; user: { name: string; role?: string } }[];
 };
 
 type CustomerMode = "existing" | "new";
@@ -29,6 +29,7 @@ type CustomerSuggestion = {
   id: string;
   partyName: string;
   contactNumber: string;
+  batchTag?: string | null;
   outstandingBalance: number;
 };
 
@@ -129,6 +130,7 @@ export default function OrderDeskPage() {
   const [summary, setSummary] = useState<Summary>(emptySummary);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -189,12 +191,17 @@ export default function OrderDeskPage() {
     const needle = query.trim().toLowerCase();
     if (!needle) return orders;
     return orders.filter((order) =>
-      [order.customer.partyName, order.customer.contactNumber, order.orderDetails, order.createdBy.name, order.visitSource ?? "", displayStatus(order.status)]
+      [order.customer.partyName, order.customer.batchTag ?? "", order.customer.contactNumber, order.orderDetails, order.createdBy.name, order.visitSource ?? "", displayStatus(order.status)]
         .join(" ")
         .toLowerCase()
         .includes(needle),
     );
   }, [orders, query]);
+  const filteredOrders = useMemo(() => {
+    const tag = batchFilter.trim().toLowerCase();
+    if (!tag) return visibleOrders;
+    return visibleOrders.filter((order) => (order.customer.batchTag ?? "").toLowerCase().includes(tag));
+  }, [batchFilter, visibleOrders]);
 
   function openCreate() {
     setMessage("");
@@ -330,16 +337,18 @@ export default function OrderDeskPage() {
         <Search className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search orders, customers, mobile, staff" className="min-h-12 w-full rounded-lg border py-3 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900" />
       </div>
+      <input value={batchFilter} onChange={(e) => setBatchFilter(e.target.value)} placeholder="Filter by firm / batch" className="mt-3 min-h-11 w-full rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-900 sm:max-w-xs" />
 
       <div className="mt-4 space-y-3">
         {loading && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">Loading orders...</div>}
-        {!loading && visibleOrders.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No orders found.</div>}
-        {visibleOrders.map((order) => (
+        {!loading && filteredOrders.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No orders found.</div>}
+        {filteredOrders.map((order) => (
           <article key={order.id} className={`rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status)) ? "opacity-70" : ""}`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-bold">{order.customer.partyName}</h2>
+                  {order.customer.batchTag && <span className="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-bold text-sky-700">{order.customer.batchTag}</span>}
                   <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${order.sourceModule === "NEW_CUSTOMER_ORDER" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-700"}`}>
                     {order.sourceModule === "NEW_CUSTOMER_ORDER" ? "New" : "Existing"}
                   </span>
@@ -416,7 +425,7 @@ export default function OrderDeskPage() {
                     <div className="mt-3">
                       <label className="text-sm font-semibold">Customer</label>
                       <input value={customerQuery} onChange={(e) => { setCustomerQuery(e.target.value); setSelectedCustomer(null); }} placeholder="Search customer or mobile" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                      {selectedCustomer && <p className="mt-2 text-xs font-semibold text-emerald-700">Selected: {selectedCustomer.partyName} - {selectedCustomer.contactNumber}</p>}
+                      {selectedCustomer && <p className="mt-2 text-xs font-semibold text-emerald-700">Selected: {selectedCustomer.partyName}{selectedCustomer.batchTag ? ` [${selectedCustomer.batchTag}]` : ""} - {selectedCustomer.contactNumber}</p>}
                       {!selectedCustomer && customerResults.length > 0 && (
                         <div className="mt-2 max-h-48 overflow-auto rounded-lg border dark:border-slate-700">
                           {customerResults.map((customer) => (
@@ -431,6 +440,7 @@ export default function OrderDeskPage() {
                               className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 dark:border-slate-700"
                             >
                               <span className="font-semibold">{customer.partyName}</span>
+                              {customer.batchTag && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700">{customer.batchTag}</span>}
                               <span className="block text-xs text-slate-500">{customer.contactNumber}</span>
                             </button>
                           ))}

@@ -25,6 +25,7 @@ type ReportRow = {
   id: string;
   customerId: string;
   customerName: string;
+  ledgerTag: string;
   mobileNumber: string;
   currentBalance: number;
   summary: string;
@@ -217,6 +218,7 @@ function rowsToCsv(rows: ReportRow[]) {
   return reportToCsv(
     [
       "Customer Name",
+      "Batch / Firm",
       "Mobile Number",
       "Balance Amount",
       "Follow-up Summary",
@@ -238,6 +240,7 @@ function rowsToCsv(rows: ReportRow[]) {
     ],
     rows.map((row) => [
       row.customerName,
+      row.ledgerTag,
       row.mobileNumber,
       String(row.currentBalance),
       row.summary,
@@ -265,6 +268,7 @@ async function rowsToExcel(rows: ReportRow[]) {
   const sheet = workbook.addWorksheet("Follow-up Reports");
   sheet.columns = [
     { header: "Customer Name", key: "customerName", width: 28 },
+    { header: "Batch / Firm", key: "ledgerTag", width: 14 },
     { header: "Mobile Number", key: "mobileNumber", width: 16 },
     { header: "Balance Amount", key: "currentBalance", width: 18 },
     { header: "Follow-up Summary", key: "summary", width: 52 },
@@ -305,6 +309,7 @@ body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;bo
 @media print{@page{size:landscape;margin:12mm}}
 </style></head><body><h1>Follow-up Reports</h1><table><thead><tr>${[
     "Customer Name",
+    "Batch / Firm",
     "Mobile Number",
     "Balance Amount",
     "Summary",
@@ -317,7 +322,7 @@ body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;bo
     .join("")}</tr></thead><tbody>${rows
     .map(
       (row) =>
-        `<tr><td>${escape(row.customerName)}</td><td>${escape(row.mobileNumber)}</td><td>${row.currentBalance}</td><td>${escape(row.summary)}</td><td>${escape(row.nextAction)}</td><td>${escape(row.status)}</td><td>${escape(row.createdBy)}</td><td>${escape(row.relativeActivityTime)}</td></tr>`,
+        `<tr><td>${escape(row.customerName)}</td><td>${escape(row.ledgerTag)}</td><td>${escape(row.mobileNumber)}</td><td>${row.currentBalance}</td><td>${escape(row.summary)}</td><td>${escape(row.nextAction)}</td><td>${escape(row.status)}</td><td>${escape(row.createdBy)}</td><td>${escape(row.relativeActivityTime)}</td></tr>`,
     )
     .join("")}</tbody></table><script>window.print()</script></body></html>`;
 }
@@ -336,6 +341,7 @@ export async function GET(request: Request) {
   const to = asDate(searchParams.get("to"), true);
   const staffId = searchParams.get("staffId") || undefined;
   const customer = searchParams.get("customer")?.trim();
+  const batchTag = searchParams.get("batchTag")?.trim();
   const status = searchParams.get("status") || undefined;
   const minAmount = Number(searchParams.get("minAmount") || "");
   const maxAmount = Number(searchParams.get("maxAmount") || "");
@@ -352,6 +358,7 @@ export async function GET(request: Request) {
 
   const customerWhere: Prisma.CustomerWhereInput = {
     shopId,
+    ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     ...(customer
       ? {
           OR: [
@@ -430,7 +437,7 @@ export async function GET(request: Request) {
       prisma.staffVisit.findMany({
         where: visitWhere,
         include: {
-          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
           staff: { select: { id: true, name: true, role: true } },
           photos: { orderBy: { createdAt: "desc" }, take: 6 },
           cheques: { orderBy: { createdAt: "desc" }, take: 3, include: { depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } } } },
@@ -441,7 +448,7 @@ export async function GET(request: Request) {
       prisma.paymentEntry.findMany({
         where: paymentWhere,
         include: {
-          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
           createdBy: { select: { id: true, name: true, role: true } },
         },
         orderBy: { paidAt: "desc" },
@@ -450,7 +457,7 @@ export async function GET(request: Request) {
       prisma.cheque.findMany({
         where: chequeWhere,
         include: {
-          customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, nextFollowupDate: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
           collectedBy: { select: { id: true, name: true, role: true } },
           depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } },
         },
@@ -459,23 +466,23 @@ export async function GET(request: Request) {
       }),
       prisma.user.findMany({ where: { shopId }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
       prisma.paymentEntry.aggregate({
-        where: { shopId, paidAt: { gte: todayStart, lte: todayEnd } },
+        where: { shopId, paidAt: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
         _sum: { amount: true },
       }),
       prisma.customer.aggregate({
-        where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+        where: { shopId, ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}), outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
         _sum: { outstandingBalance: true },
         _count: { id: true },
       }),
-      prisma.followUp.count({ where: { shopId, followupDate: { gte: todayStart, lte: todayEnd } } }),
+      prisma.followUp.count({ where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) } }),
       prisma.followUp.groupBy({
         by: ["createdById"],
-        where: { shopId, followupDate: { gte: todayStart, lte: todayEnd } },
+        where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
         orderBy: { createdById: "asc" },
         _count: { _all: true },
       }),
       prisma.paymentEntry.findMany({
-        where: { shopId },
+        where: { shopId, ...(batchTag ? { customer: customerWhere } : {}) },
         orderBy: { paidAt: "asc" },
         take: 180,
         select: { amount: true, paidAt: true },
@@ -520,6 +527,7 @@ export async function GET(request: Request) {
       id: `followup-${followUp.id}`,
       customerId: followUp.customerId,
       customerName: followUp.customer.partyName,
+      ledgerTag: followUp.customer.batchTag ?? "",
       mobileNumber: followUp.customer.contactNumber,
       currentBalance: followUp.customer.outstandingBalance,
       summary,
@@ -600,6 +608,7 @@ export async function GET(request: Request) {
       id: `visit-${visit.id}`,
       customerId: visit.customerId,
       customerName: visit.customer.partyName,
+      ledgerTag: visit.customer.batchTag ?? "",
       mobileNumber: visit.customer.contactNumber,
       currentBalance: visit.customer.outstandingBalance,
       summary,
@@ -639,6 +648,7 @@ export async function GET(request: Request) {
       id: `payment-${payment.id}`,
       customerId: payment.customerId,
       customerName: payment.customer.partyName,
+      ledgerTag: payment.customer.batchTag ?? "",
       mobileNumber: payment.customer.contactNumber,
       currentBalance: payment.customer.outstandingBalance,
       summary: `Payment recovered ${formatMoney(payment.amount)}`,
@@ -697,6 +707,7 @@ export async function GET(request: Request) {
       id: `cheque-${cheque.id}`,
       customerId: cheque.customerId,
       customerName: cheque.customer.partyName,
+      ledgerTag: cheque.customer.batchTag ?? "",
       mobileNumber: cheque.customer.contactNumber,
       currentBalance: cheque.customer.outstandingBalance,
       summary,

@@ -10,6 +10,12 @@ import { logger } from "@/lib/logger";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+function normalizeBatchTag(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") return null;
+  const tag = value.trim().replace(/\s+/g, " ").slice(0, 40);
+  return tag || null;
+}
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
   try {
@@ -27,6 +33,7 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const file = formData.get("file");
+    const batchTag = normalizeBatchTag(formData.get("batchTag"));
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
@@ -36,6 +43,7 @@ export async function POST(request: Request) {
       fileName: file.name,
       fileSize: file.size,
       fileType: file.type,
+      batchTag,
       durationMs: Date.now() - startedAt,
     });
 
@@ -78,7 +86,7 @@ export async function POST(request: Request) {
       bufferBytes: buffer.length,
       durationMs: Date.now() - startedAt,
     });
-    const summary = await importCustomersFromExcel(buffer, shopId);
+    const summary = await importCustomersFromExcel(buffer, shopId, { batchTag });
     await logActivity({
       action: "excel_imported",
       userId: session.id,
@@ -95,6 +103,7 @@ export async function POST(request: Request) {
       updated: summary.updated,
       skipped: summary.skipped,
       skippedZeroBalance: summary.skippedZeroBalance ?? 0,
+      batchTag: summary.batchTag ?? null,
       errors: summary.errors.length,
       durationMs: Date.now() - startedAt,
     });

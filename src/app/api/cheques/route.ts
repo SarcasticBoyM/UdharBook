@@ -81,7 +81,7 @@ function dateRangeCondition(
 
 function chequeInclude() {
   return {
-    customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
+    customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true } },
     collectedBy: { select: { id: true, name: true, role: true } },
     depositedBy: { select: { id: true, name: true, role: true } },
     depositReceiptUploadedBy: { select: { id: true, name: true, role: true } },
@@ -285,6 +285,7 @@ export async function GET(request: Request) {
   const q = searchParams.get("q")?.trim();
   const partyName = searchParams.get("partyName")?.trim();
   const bankName = searchParams.get("bankName")?.trim();
+  const batchTag = searchParams.get("batchTag")?.trim();
   const staffId = searchParams.get("staffId") || undefined;
   const depositedAccountId = searchParams.get("depositedAccountId") || undefined;
   const minAmount = asNumber(searchParams.get("minAmount"));
@@ -318,12 +319,14 @@ export async function GET(request: Request) {
         { bankName: { contains: q, mode: "insensitive" } },
         { branch: { contains: q, mode: "insensitive" } },
         { customer: { partyName: { contains: q, mode: "insensitive" } } },
+        { customer: { batchTag: { contains: q, mode: "insensitive" } } },
         ...(phoneQuery ? [{ customer: { contactNumber: { contains: phoneQuery } } }] : []),
         ...(Number.isFinite(Number(q)) ? [{ amount: Number(q) }] : []),
       ],
     });
   }
   if (partyName) conditions.push({ customer: { partyName: { contains: partyName, mode: "insensitive" } } });
+  if (batchTag) conditions.push({ customer: { batchTag: { equals: batchTag, mode: "insensitive" } } });
   if (bankName) conditions.push({ bankName: { contains: bankName, mode: "insensitive" } });
 
   const quickStatus: ChequeStatus | undefined =

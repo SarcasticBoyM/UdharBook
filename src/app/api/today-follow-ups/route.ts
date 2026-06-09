@@ -342,12 +342,18 @@ export async function GET(request: Request) {
   const sort = (searchParams.get("sort") ?? "priority_desc") as SortKey;
   const filter = searchParams.get("filter") ?? "all";
   const search = (searchParams.get("search") ?? "").trim().toLowerCase();
+  const batchTag = (searchParams.get("batchTag") ?? "").trim();
   const requestedMode = searchParams.get("mode");
   const shopId = requireShopId(request, session);
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
 
-  const activeBaseWhere: Prisma.CustomerWhereInput = { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } };
+  const activeBaseWhere: Prisma.CustomerWhereInput = {
+    shopId,
+    ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+    outstandingBalance: { gt: 0 },
+    NOT: { status: "CLEARED" },
+  };
   const totalActiveCustomers = await prisma.customer.count({ where: activeBaseWhere });
   const lightweightMode = requestedMode === "compact" || (requestedMode !== "full" && totalActiveCustomers > LIGHTWEIGHT_THRESHOLD);
   const take = Math.min(requestedTake, lightweightMode ? LIGHTWEIGHT_PAGE_LIMIT : 100);
@@ -398,6 +404,7 @@ export async function GET(request: Request) {
     prisma.customer.findMany({
       where: {
         shopId,
+        ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
         ...databaseSearch(search),
         followUps: {
           some: realActionTodayWhere,

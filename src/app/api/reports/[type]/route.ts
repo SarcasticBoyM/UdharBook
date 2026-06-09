@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { customersToExcel, followUpsToExcel, reportToCsv } from "@/lib/excel/export";
@@ -44,12 +45,13 @@ export async function GET(
   const format = searchParams.get("format") ?? "xlsx";
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const batchTag = searchParams.get("batchTag")?.trim();
   const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } });
   const shopName = shop?.shopName ?? "UdharBook";
 
   if (type === "outstanding") {
     const customers = await prisma.customer.findMany({
-      where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      where: { shopId, ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}), outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       orderBy: { outstandingBalance: "desc" },
     });
 
@@ -63,9 +65,10 @@ export async function GET(
       });
     }
 
-    const headers = ["Party Name", "Contact", "Balance", "Status", "Next Follow-up"];
+    const headers = ["Party Name", "Batch / Firm", "Contact", "Balance", "Status", "Next Follow-up"];
     const rows = customers.map((c) => [
         c.partyName,
+        c.batchTag ?? "",
         c.contactNumber,
         String(c.outstandingBalance),
         c.status,
@@ -75,7 +78,7 @@ export async function GET(
       return new NextResponse(printableReportHtml({
         title: "Outstanding Report",
         shopName,
-        filters: ["Outstanding customers only"],
+        filters: ["Outstanding customers only", batchTag ? `Batch: ${batchTag}` : ""].filter(Boolean),
         summary: {
           Customers: customers.length,
           "Total Outstanding": customers.reduce((sum, item) => sum + item.outstandingBalance, 0),
@@ -94,16 +97,11 @@ export async function GET(
   }
 
   if (type === "follow-up") {
-    const where =
-      from && to
-        ? {
-            shopId,
-            followupDate: {
-              gte: new Date(from),
-              lte: new Date(to),
-            },
-          }
-        : { shopId };
+    const where: Prisma.FollowUpWhereInput = {
+      shopId,
+      ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
+      ...(from && to ? { followupDate: { gte: new Date(from), lte: new Date(to) } } : {}),
+    };
 
     const followUps = await prisma.followUp.findMany({
       where,
@@ -124,10 +122,11 @@ export async function GET(
       });
     }
 
-    const headers = ["Date", "Party", "Status", "Notes"];
+    const headers = ["Date", "Party", "Batch / Firm", "Status", "Notes"];
     const rows = followUps.map((f) => [
         f.followupDate.toISOString().slice(0, 10),
         f.customer.partyName,
+        f.customer.batchTag ?? "",
         f.status,
         f.notes ?? "",
       ]);
@@ -135,7 +134,7 @@ export async function GET(
       return new NextResponse(printableReportHtml({
         title: "Follow-up Report",
         shopName,
-        filters: [from ? `From: ${new Date(from).toISOString().slice(0, 10)}` : "", to ? `To: ${new Date(to).toISOString().slice(0, 10)}` : ""].filter(Boolean),
+        filters: [from ? `From: ${new Date(from).toISOString().slice(0, 10)}` : "", to ? `To: ${new Date(to).toISOString().slice(0, 10)}` : "", batchTag ? `Batch: ${batchTag}` : ""].filter(Boolean),
         summary: { "Follow-ups": followUps.length },
         headers,
         rows,
@@ -152,7 +151,7 @@ export async function GET(
 
   if (type === "aging") {
     const customers = await prisma.customer.findMany({
-      where: { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      where: { shopId, ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}), outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
     });
 
     const buckets: Record<string, typeof customers> = {
@@ -179,9 +178,10 @@ export async function GET(
       });
     }
 
-    const headers = ["Party Name", "Balance", "Aging Bucket"];
+    const headers = ["Party Name", "Batch / Firm", "Balance", "Aging Bucket"];
     const rows = customers.map((c) => [
         c.partyName,
+        c.batchTag ?? "",
         String(c.outstandingBalance),
         agingBucketLabel(agingBucket(c.balanceAsOfDate)),
       ]);
@@ -189,7 +189,7 @@ export async function GET(
       return new NextResponse(printableReportHtml({
         title: "Customer Aging Report",
         shopName,
-        filters: ["Outstanding customers only"],
+        filters: ["Outstanding customers only", batchTag ? `Batch: ${batchTag}` : ""].filter(Boolean),
         summary: {
           Customers: customers.length,
           "Total Outstanding": customers.reduce((sum, item) => sum + item.outstandingBalance, 0),

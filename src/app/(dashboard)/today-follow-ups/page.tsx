@@ -61,6 +61,7 @@ type QueueCustomer = {
   id: string;
   partyName: string;
   contactNumber: string;
+  batchTag?: string | null;
   outstandingBalance: number;
   lastFollowupDate: string | null;
   nextFollowupDate: string | null;
@@ -491,6 +492,7 @@ export default function TodayFollowUpsPage() {
   const [sections, setSections] = useState<TodayResponse["sections"]>({ urgent: 0, today: 0, recent: 0, done: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [batchTag, setBatchTag] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("priority_desc");
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -536,6 +538,7 @@ export default function TodayFollowUpsPage() {
           filter,
           search: debouncedQuery,
         });
+        if (batchTag.trim()) params.set("batchTag", batchTag.trim());
         const res = await fetch(`/api/today-follow-ups?${params.toString()}`);
         const data = (await res.json()) as TodayResponse;
         mergeQueue(data, reset);
@@ -544,7 +547,7 @@ export default function TodayFollowUpsPage() {
         setLoadingMore(false);
       }
     },
-    [debouncedQuery, filter, mergeQueue, sort]
+    [batchTag, debouncedQuery, filter, mergeQueue, sort]
   );
 
   useEffect(() => {
@@ -766,6 +769,15 @@ export default function TodayFollowUpsPage() {
             className="w-full bg-transparent text-sm outline-none"
           />
         </label>
+        <input
+          value={batchTag}
+          onChange={(event) => {
+            setBatchTag(event.target.value);
+            setPending([]);
+          }}
+          placeholder="Filter by firm / batch"
+          className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 sm:max-w-xs"
+        />
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex gap-2 overflow-x-auto pb-1">
             {FILTERS.map((item) => (
@@ -1179,7 +1191,10 @@ function ScheduledFollowUpCard({
         <div className="min-w-0 space-y-3">
           <div className="flex min-w-0 items-start gap-2">
             <div className="min-w-0">
-              <h3 className="truncate text-lg font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+              <div className="flex min-w-0 items-center gap-2">
+                <h3 className="truncate text-lg font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+                <BatchBadge tag={customer.batchTag} />
+              </div>
               <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{displayPhone(customer.contactNumber)}</p>
             </div>
           </div>
@@ -1233,6 +1248,11 @@ function ScheduledFollowUpCard({
 
 function Badge({ children, tone }: { children: React.ReactNode; tone: "blue" | "red" | "violet" | "amber" | "green" | "slate" }) {
   return <span className={cn("inline-flex w-fit max-w-full shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold uppercase", badgeToneClass(tone))}>{children}</span>;
+}
+
+function BatchBadge({ tag }: { tag?: string | null }) {
+  if (!tag) return null;
+  return <span className="inline-flex w-fit shrink-0 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-extrabold uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-200">{tag}</span>;
 }
 
 function badgeToneClass(tone: "blue" | "red" | "violet" | "amber" | "green" | "slate") {
@@ -1313,6 +1333,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
         <div className="flex min-w-0 items-center gap-2">
           <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", priority === "URGENT" ? "bg-red-500" : priority === "HIGH" ? "bg-orange-500" : "bg-amber-400")} />
           <h3 className="truncate text-sm font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+          <BatchBadge tag={customer.batchTag} />
         </div>
         <p className="mt-1 truncate text-xs font-semibold text-slate-500">{displayPhone(customer.contactNumber)}</p>
       </div>
@@ -1450,8 +1471,11 @@ function CustomerCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="truncate text-lg font-bold">{customer.partyName}</h3>
-              <p className="truncate text-sm text-slate-500">Business/shop: {customer.partyName}</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <h3 className="truncate text-lg font-bold">{customer.partyName}</h3>
+                <BatchBadge tag={customer.batchTag} />
+              </div>
+              <p className="truncate text-sm text-slate-500">Ledger: {customer.batchTag ?? customer.partyName}</p>
               <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{displayPhone(customer.contactNumber)}</p>
             </div>
             <div className="text-right">
@@ -1536,7 +1560,10 @@ function DoneCard({ customer, onOpen }: { customer: QueueCustomer; onOpen: () =>
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate font-bold">{customer.partyName}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="truncate font-bold">{customer.partyName}</h3>
+            <BatchBadge tag={customer.batchTag} />
+          </div>
           <p className="text-sm text-slate-600 dark:text-slate-300">{statusLabel(action?.status)} by {action?.createdBy.name ?? "Staff"}</p>
         </div>
         <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">{formatDateTime(action?.completedAt ?? action?.actionLoggedAt ?? action?.followupDate)}</span>

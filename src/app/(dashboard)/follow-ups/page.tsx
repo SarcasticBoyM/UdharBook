@@ -23,6 +23,7 @@ type ReportRow = {
   id: string;
   customerId: string;
   customerName: string;
+  ledgerTag: string;
   mobileNumber: string;
   currentBalance: number;
   summary: string;
@@ -109,7 +110,7 @@ type ChequeReportRow = {
     checkInLng: number;
     verified: boolean;
   } | null;
-  customer: { partyName: string; contactNumber: string };
+  customer: { partyName: string; contactNumber: string; batchTag?: string | null };
   collectedBy: { name: string };
   depositedAccount: { bankName: string; accountName: string; lastFourDigits: string } | null;
 };
@@ -210,6 +211,7 @@ export default function FollowUpReportsPage() {
     to: "",
     staffId: "",
     customer: "",
+    batchTag: "",
     status: "",
     minAmount: "",
     maxAmount: "",
@@ -257,11 +259,12 @@ export default function FollowUpReportsPage() {
     if (filters.from) search.set("from", filters.from);
     if (filters.to) search.set("to", filters.to);
     if (filters.staffId) search.set("staffId", filters.staffId);
+    if (filters.batchTag) search.set("batchTag", filters.batchTag);
     if (chequeFilters.status) search.set("status", chequeFilters.status);
     if (chequeFilters.accountId) search.set("depositedAccountId", chequeFilters.accountId);
     if (chequeFilters.bankOrCustomer) search.set("q", chequeFilters.bankOrCustomer);
     return search;
-  }, [chequeFilters.accountId, chequeFilters.bankOrCustomer, chequeFilters.status, filters.from, filters.staffId, filters.to]);
+  }, [chequeFilters.accountId, chequeFilters.bankOrCustomer, chequeFilters.status, filters.batchTag, filters.from, filters.staffId, filters.to]);
 
   const loadChequeSummary = useCallback(async () => {
     setChequeLoading(true);
@@ -385,6 +388,7 @@ export default function FollowUpReportsPage() {
             </select>
           </label>
           <Input label="Customer-wise" value={filters.customer} onChange={(value) => updateFilter("customer", value)} placeholder="Name or mobile" />
+          <Input label="Batch / Firm" value={filters.batchTag} onChange={(value) => updateFilter("batchTag", value)} placeholder="YE, BT, Balaji" />
           <label className="text-sm">
             <span className="font-medium text-slate-600 dark:text-slate-300">Status-wise</span>
             <select
@@ -541,7 +545,7 @@ export default function FollowUpReportsPage() {
               {chequeReportData.items.length ? (
                 chequeReportData.items.map((cheque) => (
                   <tr key={cheque.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <Td>{cheque.customer.partyName}</Td>
+                    <Td>{cheque.customer.partyName}{cheque.customer.batchTag ? ` [${cheque.customer.batchTag}]` : ""}</Td>
                     <Td>{cheque.chequeNumber}</Td>
                     <Td>{formatCurrency(cheque.amount)}</Td>
                     <Td><StatusPill status={cheque.status} /></Td>
@@ -611,7 +615,7 @@ export default function FollowUpReportsPage() {
               <Fragment key={row.id}>
                 <div className={cn("grid gap-3 p-4 text-sm lg:grid-cols-[220px_130px_minmax(260px,1fr)_210px_140px_150px_90px] lg:items-center", row.isOverdue && "bg-red-50/60 dark:bg-red-950/20", row.isPromise && !row.isOverdue && "bg-blue-50/60 dark:bg-blue-950/20")}>
                   <div className="min-w-0">
-                    <p className="truncate font-semibold">{row.customerName}</p>
+                    <p className="truncate font-semibold">{row.customerName}{row.ledgerTag ? ` [${row.ledgerTag}]` : ""}</p>
                     <p className="text-xs text-slate-500">{row.mobileNumber}</p>
                   </div>
                   <div>
@@ -651,6 +655,7 @@ export default function FollowUpReportsPage() {
                       <p className="font-semibold">Activity Timeline</p>
                       <div className="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300 md:grid-cols-2 xl:grid-cols-4">
                         <Detail label="Follow-up Type" value={row.followUpType} />
+                        <Detail label="Batch / Firm" value={row.ledgerTag || "-"} />
                         <Detail label="Payment Status" value={row.paymentStatus} />
                         <Detail label="Promise Date" value={formatDateTime(row.promiseDate)} />
                         <Detail label="Next Follow-up" value={formatDateTime(row.nextActionAt)} />

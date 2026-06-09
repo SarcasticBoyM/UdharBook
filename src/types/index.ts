@@ -18,6 +18,7 @@ export interface ImportSummary {
   duplicateNameCreated?: number;
   updated: number;
   skippedZeroBalance?: number;
+  batchTag?: string | null;
   /** Invalid or duplicate-in-file rows */
   skipped: number;
   errors: { row: number; message: string }[];

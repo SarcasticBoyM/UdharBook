@@ -8,6 +8,7 @@ export async function customersToExcel(customers: Customer[], sheetName: string)
 
   sheet.columns = [
     { header: "Party Name", key: "partyName", width: 28 },
+    { header: "Batch / Firm", key: "batchTag", width: 14 },
     { header: "Contact Number", key: "contactNumber", width: 18 },
     { header: "Outstanding Balance", key: "outstandingBalance", width: 20 },
     { header: "Status", key: "status", width: 18 },
@@ -22,6 +23,7 @@ export async function customersToExcel(customers: Customer[], sheetName: string)
   for (const c of customers) {
     sheet.addRow({
       partyName: c.partyName,
+      batchTag: c.batchTag ?? "",
       contactNumber: c.contactNumber,
       outstandingBalance: c.outstandingBalance,
       status: c.status,
@@ -44,6 +46,7 @@ export async function followUpsToExcel(
   sheet.columns = [
     { header: "Date", key: "followupDate", width: 14 },
     { header: "Party Name", key: "partyName", width: 28 },
+    { header: "Batch / Firm", key: "batchTag", width: 14 },
     { header: "Contact", key: "contactNumber", width: 16 },
     { header: "Status", key: "status", width: 18 },
     { header: "Notes", key: "notes", width: 40 },
@@ -57,6 +60,7 @@ export async function followUpsToExcel(
     sheet.addRow({
       followupDate: r.followupDate.toISOString().slice(0, 10),
       partyName: r.customer.partyName,
+      batchTag: r.customer.batchTag ?? "",
       contactNumber: r.customer.contactNumber,
       status: r.status,
       notes: r.notes ?? "",

@@ -202,9 +202,24 @@ export async function POST(request: Request) {
           throw new Error("CUSTOMER_OR_LEAD_REQUIRED");
         }
         const phone = normalizePhone(body.mobileNumber) || temporaryLeadPhone();
-        const createdCustomer = await tx.customer.upsert({
-          where: { shopId_contactNumber: { shopId, contactNumber: phone } },
-          create: {
+        const existingLead = await tx.customer.findFirst({
+          where: { shopId, contactNumber: phone, batchTag: null },
+          select: { id: true },
+        });
+        const createdCustomer = existingLead
+          ? await tx.customer.update({
+              where: { id: existingLead.id },
+              data: {
+                partyName: name,
+                notes: body.notes ? `Field visit note: ${body.notes}` : undefined,
+                latitude: body.latitude,
+                longitude: body.longitude,
+                geoAddress: body.address,
+              },
+              select: { id: true, latitude: true, longitude: true },
+            })
+          : await tx.customer.create({
+              data: {
             shopId,
             partyName: name,
             contactNumber: phone,
@@ -219,15 +234,8 @@ export async function POST(request: Request) {
             longitude: body.longitude,
             geoAddress: body.address,
           },
-          update: {
-            partyName: name,
-            notes: body.notes ? `Field visit note: ${body.notes}` : undefined,
-            latitude: body.latitude,
-            longitude: body.longitude,
-            geoAddress: body.address,
-          },
-          select: { id: true, latitude: true, longitude: true },
-        });
+              select: { id: true, latitude: true, longitude: true },
+            });
         customer = createdCustomer;
       }
 

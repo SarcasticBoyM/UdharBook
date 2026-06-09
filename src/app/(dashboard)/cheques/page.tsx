@@ -28,6 +28,7 @@ type CustomerOption = {
   id: string;
   partyName: string;
   contactNumber: string;
+  batchTag?: string | null;
   outstandingBalance: number;
   lastFollowupDate?: string | null;
   matchScore?: number;
@@ -384,6 +385,7 @@ export default function ChequeCollectionsPage() {
   const [activeStatus, setActiveStatus] = useState<ChequeStatus | "ALL">("PENDING_DEPOSIT");
   const [quick, setQuick] = useState("");
   const [query, setQuery] = useState("");
+  const [batchTag, setBatchTag] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [staffId, setStaffId] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
@@ -434,13 +436,14 @@ export default function ChequeCollectionsPage() {
     if (activeStatus !== "ALL" && !quick) search.set("status", activeStatus);
     if (quick) search.set("quick", quick);
     if (debouncedQuery) search.set("q", debouncedQuery);
+    if (batchTag.trim()) search.set("batchTag", batchTag.trim());
     if (staffId) search.set("staffId", staffId);
     if (accountFilter) search.set("depositedAccountId", accountFilter);
     if (from) search.set("from", from);
     if (to) search.set("to", to);
     search.set("limit", "40");
     return search;
-  }, [accountFilter, activeStatus, debouncedQuery, from, quick, staffId, to]);
+  }, [accountFilter, activeStatus, batchTag, debouncedQuery, from, quick, staffId, to]);
 
   const loadCheques = useCallback(async () => {
     setLoading(true);
@@ -1105,7 +1108,7 @@ export default function ChequeCollectionsPage() {
               ))}
             </div>
 
-            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(220px,1fr)_160px_180px_160px_160px]">
+            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_160px_180px_150px_150px]">
               <label className="relative block">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                 <input
@@ -1115,6 +1118,12 @@ export default function ChequeCollectionsPage() {
                   className="min-h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
                 />
               </label>
+              <input
+                value={batchTag}
+                onChange={(e) => setBatchTag(e.target.value)}
+                placeholder="Firm / batch"
+                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              />
               <select
                 value={staffId}
                 onChange={(e) => setStaffId(e.target.value)}
@@ -1236,6 +1245,11 @@ export default function ChequeCollectionsPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-base font-bold">{cheque.customer.partyName}</h2>
+                        {cheque.customer.batchTag && (
+                          <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">
+                            {cheque.customer.batchTag}
+                          </span>
+                        )}
                         <span className={cn("rounded-full px-2 py-1 text-xs font-semibold ring-1", statusTone[cheque.status])}>
                           {formatStatus(cheque.status)}
                         </span>
@@ -1512,7 +1526,7 @@ export default function ChequeCollectionsPage() {
                 {selectedCustomer && (
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
                     <span>
-                      Selected: <strong>{selectedCustomer.partyName}</strong> | {selectedCustomer.contactNumber}
+                      Selected: <strong>{selectedCustomer.partyName}</strong>{selectedCustomer.batchTag ? ` [${selectedCustomer.batchTag}]` : ""} | {selectedCustomer.contactNumber}
                     </span>
                     <button
                       type="button"
@@ -1554,6 +1568,7 @@ export default function ChequeCollectionsPage() {
                           <span className="min-w-0">
                             <span className="block font-semibold">
                               <HighlightedText text={customer.partyName} query={form.customerSearch || suggestedCustomerQuery} />
+                              {customer.batchTag && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700">{customer.batchTag}</span>}
                             </span>
                             <span className="mt-1 block text-xs text-slate-500">
                               <HighlightedText text={customer.contactNumber} query={form.customerSearch} />

@@ -53,6 +53,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const search = normalizeSearch(searchParams.get("search") ?? "");
   const status = searchParams.get("status");
+  const batchTag = searchParams.get("batchTag")?.trim();
   const view = searchParams.get("view") ?? "active";
   const sort = searchParams.get("sort") ?? "balance";
   const order = searchParams.get("order") === "asc" ? "asc" : "desc";
@@ -73,11 +74,13 @@ export async function GET(request: Request) {
             ]
           : []),
         ...(phoneSearch ? [{ contactNumber: { contains: phoneSearch } }] : []),
+        { batchTag: { contains: search, mode: "insensitive" } },
       ]
     : [];
 
   const where: Prisma.CustomerWhereInput = {
     shopId,
+    ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
     ...(searchOr.length ? { OR: searchOr } : {}),
     ...(view === "active" || view === "pending" ? activeCustomerWhere() : {}),

@@ -14,6 +14,7 @@ type CustomerDetail = {
   id: string;
   partyName: string;
   contactNumber: string;
+  batchTag: string | null;
   outstandingBalance: number;
   status: string;
   notes: string | null;
@@ -186,6 +187,11 @@ export default function CustomerDetailPage() {
       <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{customer.partyName}</h1>
+          {customer.batchTag && (
+            <span className="mt-2 mr-2 inline-block rounded-full bg-sky-100 px-3 py-1 text-sm font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">
+              {customer.batchTag}
+            </span>
+          )}
           <span
             className={cn(
               "mt-2 inline-block rounded-full px-3 py-1 text-sm",

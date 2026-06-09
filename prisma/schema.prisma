@@ -300,6 +300,7 @@ model Customer {
   shop               Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
   partyName          String
   contactNumber      String
+  batchTag           String?
   outstandingBalance Float          @default(0)
   lastFollowupDate   DateTime?
   nextFollowupDate   DateTime?
@@ -327,6 +328,9 @@ model Customer {
   @@index([partyName])
   @@index([createdAt])
   @@index([shopId, partyName])
+  @@index([shopId, batchTag])
+  @@index([shopId, batchTag, partyName])
+  @@index([shopId, batchTag, contactNumber])
   @@index([shopId, contactNumber])
   @@index([shopId, nextFollowupDate])
   @@index([shopId, outstandingBalance])
@@ -334,7 +338,6 @@ model Customer {
   @@index([shopId, lastFollowupDate])
   @@index([shopId, updatedAt])
   @@index([shopId, status])
-  @@unique([shopId, contactNumber])
 }
 
 model StaffLocation {

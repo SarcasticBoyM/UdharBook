@@ -33,7 +33,7 @@ type ChequeItem = {
   bounceReason: string | null;
   clearedAt: string | null;
   bouncedAt: string | null;
-  customer: { partyName: string; contactNumber: string };
+  customer: { partyName: string; contactNumber: string; batchTag?: string | null };
   collectedBy: UserOption;
   depositedAccount: DepositAccount | null;
   activities: ChequeActivity[];
@@ -116,6 +116,7 @@ export default function ReportsPage() {
   const [to, setTo] = useState("");
   const [status, setStatus] = useState("");
   const [partyName, setPartyName] = useState("");
+  const [batchTag, setBatchTag] = useState("");
   const [bankName, setBankName] = useState("");
   const [query, setQuery] = useState("");
   const [staffId, setStaffId] = useState("");
@@ -139,6 +140,7 @@ export default function ReportsPage() {
     if (to) params.set("to", to);
     if (status) params.set("status", status);
     if (partyName) params.set("partyName", partyName);
+    if (batchTag) params.set("batchTag", batchTag);
     if (bankName) params.set("bankName", bankName);
     if (query) params.set("q", query);
     if (staffId) params.set("staffId", staffId);
@@ -146,7 +148,7 @@ export default function ReportsPage() {
     if (maxAmount) params.set("maxAmount", maxAmount);
     params.set("limit", "50");
     return params;
-  }, [bankName, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
+  }, [bankName, batchTag, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
   const attendanceParams = useMemo(() => {
     const params = new URLSearchParams({ preset: attendancePreset });
     if (attendancePreset === "custom") {
@@ -194,6 +196,7 @@ export default function ReportsPage() {
     const params = new URLSearchParams({ format });
     if (from) params.set("from", new Date(from).toISOString());
     if (to) params.set("to", new Date(to).toISOString());
+    if (batchTag) params.set("batchTag", batchTag);
     window.open(`/api/reports/${type}?${params.toString()}`, "_blank");
   };
 
@@ -243,6 +246,7 @@ export default function ReportsPage() {
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Input label="Party Name" value={partyName} onChange={setPartyName} placeholder="Customer or party" />
+          <Input label="Batch / Firm" value={batchTag} onChange={setBatchTag} placeholder="YE, BT, Balaji" />
           <Input label="Bank Name" value={bankName} onChange={setBankName} placeholder="Cheque bank" />
           <Input label="Search" value={query} onChange={setQuery} placeholder="Mobile, cheque no, amount" icon />
           <label className="text-sm">
@@ -269,21 +273,22 @@ export default function ReportsPage() {
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
-          <table className="hidden min-w-[1180px] text-left text-sm lg:table">
+          <table className="hidden min-w-[1240px] text-left text-sm lg:table">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
               <tr>
-                {["Party Name", "Mobile Number", "Amount", "Cheque Number", "Bank Name", "Cheque Date", "Collected Date", "Deposit Date", "Clearance Date", "Bounce Date", "Current Status", "Collected By", "Deposit Account", "Notes"].map((header) => (
+                {["Party Name", "Batch / Firm", "Mobile Number", "Amount", "Cheque Number", "Bank Name", "Cheque Date", "Collected Date", "Deposit Date", "Clearance Date", "Bounce Date", "Current Status", "Collected By", "Deposit Account", "Notes"].map((header) => (
                   <th key={header} className="px-3 py-2">{header}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
+                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
               ) : data?.items.length ? (
                 data.items.map((cheque) => (
                   <tr key={cheque.id} className="border-t border-slate-200 dark:border-slate-800">
                     <td className="px-3 py-2 font-semibold">{cheque.customer.partyName}</td>
+                    <td className="px-3 py-2">{cheque.customer.batchTag ?? "-"}</td>
                     <td className="px-3 py-2">{cheque.customer.contactNumber}</td>
                     <td className="px-3 py-2 font-semibold">{formatCurrency(cheque.amount)}</td>
                     <td className="px-3 py-2">{cheque.chequeNumber}</td>
@@ -300,7 +305,7 @@ export default function ReportsPage() {
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">No cheques match this report.</td></tr>
+                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">No cheques match this report.</td></tr>
               )}
             </tbody>
           </table>
@@ -314,7 +319,7 @@ export default function ReportsPage() {
                   <button type="button" onClick={() => setExpandedId((current) => current === cheque.id ? null : cheque.id)} className="w-full text-left">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <h3 className="font-bold">{cheque.customer.partyName}</h3>
+                        <h3 className="font-bold">{cheque.customer.partyName}{cheque.customer.batchTag ? ` [${cheque.customer.batchTag}]` : ""}</h3>
                         <p className="text-sm text-slate-500">{cheque.chequeNumber} | {cheque.bankName}</p>
                       </div>
                       <StatusBadge status={cheque.status} />

@@ -11,10 +11,12 @@ import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
 type CustomerView = "active" | "inactive" | "all" | "pending";
+type CustomerWithBatch = Customer & { batchTag?: string | null };
 
 export default function CustomersPage() {
-  const [items, setItems] = useState<Customer[]>([]);
+  const [items, setItems] = useState<CustomerWithBatch[]>([]);
   const [search, setSearch] = useState("");
+  const [batchTag, setBatchTag] = useState("");
   const [status, setStatus] = useState("");
   const [view, setView] = useState<CustomerView>("active");
   const [sort, setSort] = useState("balance");
@@ -39,13 +41,14 @@ export default function CustomersPage() {
       view,
     });
     if (status) params.set("status", status);
+    if (batchTag.trim()) params.set("batchTag", batchTag.trim());
     const res = await fetch(`/api/customers?${params}`);
     const data = await res.json();
     setItems(data.items ?? []);
     setPages(data.pagination?.pages ?? 1);
     setTotal(data.pagination?.total ?? 0);
     setLoading(false);
-  }, [search, status, view, sort, order, page]);
+  }, [batchTag, search, status, view, sort, order, page]);
 
   useEffect(() => {
     const t = setTimeout(load, 300);
@@ -137,6 +140,15 @@ export default function CustomersPage() {
           }}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 md:min-w-[240px]"
         />
+        <input
+          placeholder="Filter by firm / batch"
+          value={batchTag}
+          onChange={(e) => {
+            setPage(1);
+            setBatchTag(e.target.value);
+          }}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 md:w-[180px]"
+        />
         <select
           value={status}
           onChange={(e) => {
@@ -227,12 +239,22 @@ export default function CustomersPage() {
                     />
                   </td>
                   <td className="p-3">
-                    <Link href={`/customers/${c.id}`} className="font-medium text-brand-600 hover:underline">
-                      {c.partyName}
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link href={`/customers/${c.id}`} className="font-medium text-brand-600 hover:underline">
+                        {c.partyName}
+                      </Link>
+                      {c.batchTag && (
+                        <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">
+                          {c.batchTag}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="p-3">{c.contactNumber}</td>
-                  <td className="p-3 font-medium">{formatCurrency(c.outstandingBalance)}</td>
+                  <td className="p-3">
+                    <span className="font-medium">{formatCurrency(c.outstandingBalance)}</span>
+                    {c.batchTag && <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">{c.batchTag}</span>}
+                  </td>
                   <td className="p-3">{formatDate(c.lastFollowupDate)}</td>
                   <td className="p-3">{formatDate(c.nextFollowupDate)}</td>
                   <td className="p-3">
