@@ -124,7 +124,7 @@ export default function CustomersPage() {
           <option value="pending">Pending payments only</option>
         </select>
         <input
-          placeholder="Search by name or phone…"
+          placeholder="Search name, phone, or location..."
           value={search}
           onChange={(e) => {
             setPage(1);

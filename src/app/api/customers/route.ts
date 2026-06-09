@@ -17,12 +17,24 @@ const createSchema = z.object({
   status: z.enum(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"]).optional(),
 });
 
+function normalizeSearch(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function textContains(field: "partyName" | "geoAddress", value: string): Prisma.CustomerWhereInput {
+  return { [field]: { contains: value, mode: "insensitive" } };
+}
+
+function textContainsAllTerms(field: "partyName" | "geoAddress", terms: string[]): Prisma.CustomerWhereInput {
+  return { AND: terms.map((term) => textContains(field, term)) };
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const search = searchParams.get("search") ?? "";
+  const search = normalizeSearch(searchParams.get("search") ?? "");
   const status = searchParams.get("status");
   const view = searchParams.get("view") ?? "all";
   const sort = searchParams.get("sort") ?? "balance";
@@ -32,9 +44,17 @@ export async function GET(request: Request) {
   const skip = (page - 1) * limit;
   const shopId = requireShopId(request, session);
   const phoneSearch = search.replace(/\D/g, "");
+  const searchTerms = search.split(" ").filter(Boolean);
   const searchOr: Prisma.CustomerWhereInput[] = search
     ? [
-        { partyName: { contains: search } },
+        textContains("partyName", search),
+        textContains("geoAddress", search),
+        ...(searchTerms.length > 1
+          ? [
+              textContainsAllTerms("partyName", searchTerms),
+              textContainsAllTerms("geoAddress", searchTerms),
+            ]
+          : []),
         ...(phoneSearch ? [{ contactNumber: { contains: phoneSearch } }] : []),
       ]
     : [];
