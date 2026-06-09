@@ -211,7 +211,11 @@ export async function PATCH(request: Request) {
   try {
     const body = updateSchema.parse(await request.json());
     const existing = await findUserWithRoleFallback(body.userId, session.id, session.role);
-    if (!existing || existing.role === "SUPER_ADMIN") return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (existing.id === session.id) {
+      return NextResponse.json({ error: "You cannot edit your own Staff Management access. Use password reset only for your current account." }, { status: 400 });
+    }
+    if (existing.role === "SUPER_ADMIN") return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!isSuperAdmin(session) && existing.shopId !== session.shopId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const requestedRoles = body.roles?.length

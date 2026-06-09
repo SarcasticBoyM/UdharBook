@@ -17,7 +17,11 @@ export async function POST(
 
   const { id } = await params;
   const user = await prisma.user.findUnique({ where: { id } });
-  if (!user || user.role === "SUPER_ADMIN") return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (user.id === session.id) {
+    return NextResponse.json({ error: "You cannot deactivate your own account." }, { status: 400 });
+  }
+  if (user.role === "SUPER_ADMIN") return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (!isSuperAdmin(session) && user.shopId !== session.shopId) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
