@@ -1,5 +1,5 @@
-const CACHE_NAME = "udharbook-v1";
-const APP_SHELL = ["/", "/login", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "udharbook-v2";
+const APP_SHELL = ["/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -20,6 +20,8 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/_next/")) return;
+  if (request.mode === "navigate") return;
 
   event.respondWith(
     fetch(request)

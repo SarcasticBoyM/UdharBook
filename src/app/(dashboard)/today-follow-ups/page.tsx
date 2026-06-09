@@ -220,10 +220,14 @@ const PAYMENT_OUTCOMES: { value: QueueStatus; label: string; notes: string; resp
 ];
 
 const NO_RESPONSE_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
-  { value: "NOT_REACHABLE", label: "Not Reachable", notes: "Customer was not reachable." },
-  { value: "WRONG_NUMBER", label: "Wrong Number", notes: "Wrong number confirmed." },
+  { value: "NOT_REACHABLE", label: "Call not answered", notes: "Call was not answered." },
+  { value: "CALLBACK", label: "Replied with Text", notes: "Customer replied with text; callback required.", response: "Replied with text" },
   { value: "CALLBACK", label: "Customer Busy", notes: "Customer was busy; callback required.", response: "Customer busy" },
   { value: "CALLBACK", label: "Call Back Requested", notes: "Customer requested callback.", response: "Callback requested" },
+];
+
+const FOLLOW_UP_LATER_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
+  { value: "RESCHEDULED", label: "WhatsApp Reminder Sent", notes: "WhatsApp reminder sent.", response: "WhatsApp reminder sent" },
 ];
 
 const NOTE_TEMPLATES = [
@@ -232,7 +236,6 @@ const NOTE_TEMPLATES = [
   "Not reachable after multiple attempts.",
   "WhatsApp reminder sent.",
   "Payment collector visit required.",
-  "Wrong number confirmed.",
 ];
 
 const REMINDERS = [
@@ -1643,6 +1646,29 @@ function ActionPanel({
                         "min-h-11 rounded-lg border px-3 text-sm font-semibold",
                         status === outcome.value && notes === outcome.notes
                           ? "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-100"
+                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      )}
+                    >
+                      {outcome.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {primaryAction === "FOLLOW_UP_LATER" && (
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <p className="text-sm font-semibold">Follow-up action</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {FOLLOW_UP_LATER_OUTCOMES.map((outcome) => (
+                    <button
+                      key={outcome.label}
+                      type="button"
+                      onClick={() => applyOutcome(outcome)}
+                      className={cn(
+                        "min-h-11 rounded-lg border px-3 text-sm font-semibold",
+                        status === outcome.value && notes === outcome.notes
+                          ? "border-brand-300 bg-brand-50 text-brand-800 dark:bg-brand-950 dark:text-brand-100"
                           : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                       )}
                     >
