@@ -70,6 +70,14 @@ type Visit = {
   }[];
 };
 
+type ChequeCollectionContext = {
+  id?: string;
+  checkInLat?: number;
+  checkInLng?: number;
+  accuracy?: number | null;
+  customer: { id?: string; partyName: string; contactNumber: string; outstandingBalance: number };
+};
+
 type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "STAFF" | "FIELD_SALES";
 
 type StaffStatus = {
@@ -265,6 +273,13 @@ export default function FieldStaffPage() {
   const isAdmin = role === "SHOP_ADMIN";
   const canSaveVisit = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && visitOutcomes.length > 0 && gpsState !== "checking" && !visitSaving);
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
+  const chequeCollectionContext: ChequeCollectionContext | null = chequeVisit
+    ? chequeVisit
+    : selectedCustomer
+      ? { customer: selectedCustomer }
+      : leadName.trim()
+        ? { customer: { partyName: leadName.trim(), contactNumber: leadMobile, outstandingBalance: 0 } }
+        : null;
   const summary = useMemo(
     () => ({
       visits: visits.length,
@@ -315,8 +330,8 @@ export default function FieldStaffPage() {
   }, [result, visitType]);
 
   useEffect(() => {
-    setShowChequeFlow(isPaymentOutcome(visitType, visitOutcomes) && paymentMode === "Cheque Collected");
-  }, [paymentMode, visitOutcomes, visitType]);
+    setShowChequeFlow(Boolean(chequeVisit) || (isPaymentOutcome(visitType, visitOutcomes) && paymentMode === "Cheque Collected"));
+  }, [chequeVisit, paymentMode, visitOutcomes, visitType]);
 
   const stopGpsWatcher = useCallback(() => {
     if (watchIdRef.current !== null && navigator.geolocation) {
@@ -1019,9 +1034,9 @@ export default function FieldStaffPage() {
           )}
 
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
-          {chequeVisit && showChequeFlow && (
+          {showChequeFlow && chequeCollectionContext && (
             <VisitChequeCollection
-              visit={chequeVisit}
+              visit={chequeCollectionContext}
               onSaved={async () => {
                 setMessage("Cheque saved to Recovery Desk.");
                 setChequeVisit(null);
@@ -1294,7 +1309,7 @@ function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
   );
 }
 
-function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () => void }) {
+function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionContext; onSaved: () => void }) {
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
@@ -1317,6 +1332,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
   });
 
   const canSave =
+    Boolean(visit.id) &&
     Boolean(visit.customer.id) &&
     form.chequeNumber.trim() &&
     Number(form.amount) > 0 &&
@@ -1405,6 +1421,10 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
   }
 
   async function saveCheque() {
+    if (!visit.id) {
+      setError("Save the visit first to link this cheque with the field visit.");
+      return;
+    }
     if (!canSave || !visit.customer.id) {
       setError("Please complete cheque number, amount, bank, date, and account holder.");
       return;
@@ -1463,7 +1483,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
     <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase text-brand-600">Cheque Collection</p>
+          <p className="text-xs font-semibold uppercase text-brand-600">Centralized Cheque Collection</p>
           <h3 className="font-bold">{visit.customer.partyName}</h3>
           <p className="text-xs text-slate-500">{visit.customer.contactNumber} · Balance {money(visit.customer.outstandingBalance)}</p>
         </div>
@@ -1487,6 +1507,11 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
       )}
       {scanning && <p className="mt-2 text-sm text-blue-700">Scanning cheque...</p>}
       {error && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">{error}</p>}
+      {!visit.id && (
+        <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-sm text-blue-800">
+          Cheque workflow is ready. Save the visit to attach GPS and visit linkage, then save the cheque.
+        </p>
+      )}
 
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <Input label="Bank Name" value={form.bankName} onChange={(value) => setField("bankName", value)} required />
@@ -1522,7 +1547,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
       )}
       <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} placeholder="Cheque notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
       <button type="button" onClick={saveCheque} disabled={saving || !canSave} className="mt-3 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
-        {saving ? "Saving cheque..." : "Save Cheque to Recovery Desk"}
+        {saving ? "Saving cheque..." : visit.id ? "Save Cheque to Recovery Desk" : "Save Visit First"}
       </button>
     </div>
   );
