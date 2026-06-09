@@ -567,9 +567,40 @@ export default function FieldStaffPage() {
     setResult(outcome);
   }
 
-  async function saveVisitAtLocation(position: GeolocationPosition) {
-    if (!isFieldWorker) return;
-    if (!selectedCustomer && !leadName.trim()) return;
+  async function captureVisitPosition() {
+    if (!navigator.geolocation) throw new Error("Geolocation not supported");
+    if (!window.isSecureContext) throw new Error("GPS works only on HTTPS. Open https://app.qrvcard.in");
+    setGpsState("checking");
+    setGpsError("");
+    return new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLocation(position);
+          setGpsState("active");
+          setGpsError("");
+          setLastGpsSyncAt(new Date().toISOString());
+          resolve(position);
+        },
+        (error) => {
+          const message =
+            error.code === 1
+              ? "Location permission blocked. Chrome -> lock icon -> Site settings -> Location -> Allow."
+              : error.code === 3
+                ? "GPS timeout. Turn on phone location, move near a window, then retry."
+                : error.message || "Could not capture GPS location.";
+          setGpsState(error.code === 1 ? "denied" : error.code === 3 ? "timeout" : "error");
+          setGpsError(message);
+          reject(new Error(message));
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      );
+    });
+  }
+
+  async function saveVisitAtLocation(position: GeolocationPosition, options: { resetForm?: boolean; successMessage?: string } = {}): Promise<Visit | null> {
+    const shouldResetForm = options.resetForm ?? true;
+    if (!isFieldWorker) return null;
+    if (!selectedCustomer && !leadName.trim()) return null;
     const outcomeText = combinedOutcomeText(visitOutcomes, result);
     const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
     const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
@@ -580,72 +611,82 @@ export default function FieldStaffPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-        customerId: selectedCustomer?.id,
-        customerName: selectedCustomer?.partyName ?? leadName.trim(),
-        mobileNumber: selectedCustomer?.contactNumber ?? leadMobile,
-        address: leadAddress || undefined,
-        visitType,
-        outcome: outcomeText,
-        visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
-        nextAction: hasOrder ? undefined : nextAction || undefined,
-        nextVisitDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
-        orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
-        orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
-        orderPriority: hasOrder ? orderPriority || undefined : undefined,
-        paymentMode: hasPayment ? paymentMode : undefined,
-        paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
-        paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
-        paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
-        leadArea: leadArea || undefined,
-        leadContactPerson: leadContactPerson || undefined,
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        notes,
-        recoveryAmount: (hasPayment && paymentMode !== "Cheque Collected") || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-        nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+          customerId: selectedCustomer?.id,
+          customerName: selectedCustomer?.partyName ?? leadName.trim(),
+          mobileNumber: selectedCustomer?.contactNumber ?? leadMobile,
+          address: leadAddress || undefined,
+          visitType,
+          outcome: outcomeText,
+          visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
+          nextAction: hasOrder ? undefined : nextAction || undefined,
+          nextVisitDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+          orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
+          orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
+          orderPriority: hasOrder ? orderPriority || undefined : undefined,
+          paymentMode: hasPayment ? paymentMode : undefined,
+          paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
+          paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
+          paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
+          leadArea: leadArea || undefined,
+          leadContactPerson: leadContactPerson || undefined,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          notes,
+          recoveryAmount: (hasPayment && paymentMode !== "Cheque Collected") || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+          nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
         }),
       });
       const data = await res.json();
       if (!data.success) {
         setMessage(data.error ?? "Could not save visit.");
-        return;
+        return null;
       }
       const needsCheque = hasPayment && paymentMode === "Cheque Collected";
       setChequeVisit(needsCheque ? data.visit : null);
       setShowChequeFlow(needsCheque);
-      setSelectedCustomer(null);
-      setSearch("");
-      setCustomers([]);
-      setShowNewVisit(false);
-      setLeadName("");
-      setLeadContactPerson("");
-      setLeadMobile("");
-      setLeadAddress("");
-      setLeadArea("");
-      setNotes("");
-      setVisitOutcomes([]);
-      setRecoveryAmount("");
-      setNextFollowupDate("");
-      setNextAction("");
-      setOrderExpectedDelivery("");
-      setOrderProductCategory("");
-      setOrderPriority("Normal");
-      setPaymentMode(paymentModes[0]);
-      setPaymentReference("");
-      setPaymentBankName("");
-      setPaymentScreenshotUrl("");
-      setMessage(needsCheque ? "Visit saved. Add cheque details below." : "Visit saved successfully.");
+      if (shouldResetForm) {
+        setSelectedCustomer(null);
+        setSearch("");
+        setCustomers([]);
+        setShowNewVisit(false);
+        setLeadName("");
+        setLeadContactPerson("");
+        setLeadMobile("");
+        setLeadAddress("");
+        setLeadArea("");
+        setNotes("");
+        setVisitOutcomes([]);
+        setRecoveryAmount("");
+        setNextFollowupDate("");
+        setNextAction("");
+        setOrderExpectedDelivery("");
+        setOrderProductCategory("");
+        setOrderPriority("Normal");
+        setPaymentMode(paymentModes[0]);
+        setPaymentReference("");
+        setPaymentBankName("");
+        setPaymentScreenshotUrl("");
+      }
+      setMessage(options.successMessage ?? (needsCheque ? "Visit saved. Add cheque details below." : "Visit saved successfully."));
       await loadVisits();
+      return data.visit as Visit;
     } finally {
       setVisitSaving(false);
     }
-      }
+  }
+
+  async function ensureVisitForCheque() {
+    if (chequeVisit?.id) return chequeVisit;
+    setMessage("Saving visit and linking cheque...");
+    const position = await captureVisitPosition();
+    return saveVisitAtLocation(position, { resetForm: false, successMessage: "Visit linked. Saving cheque..." });
+  }
 
   function saveVisit() {
     if (!isFieldWorker) return;
     if (!canSaveVisit) return;
-    runDirectGpsRequest({ status: "ACTIVE", onSuccess: saveVisitAtLocation });
+    runDirectGpsRequest({ status: "ACTIVE", onSuccess: async (position) => { await saveVisitAtLocation(position); } });
   }
 
   function startNewVisit(prefill = search) {
@@ -1029,6 +1070,7 @@ export default function FieldStaffPage() {
           {showChequeFlow && chequeCollectionContext && (
             <VisitChequeCollection
               visit={chequeCollectionContext}
+              onEnsureVisit={ensureVisitForCheque}
               onSaved={async () => {
                 setMessage("Cheque saved to Recovery Desk.");
                 setChequeVisit(null);
@@ -1301,7 +1343,15 @@ function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
   );
 }
 
-function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionContext; onSaved: () => void }) {
+function VisitChequeCollection({
+  visit,
+  onEnsureVisit,
+  onSaved,
+}: {
+  visit: ChequeCollectionContext;
+  onEnsureVisit: () => Promise<ChequeCollectionContext | null>;
+  onSaved: () => void;
+}) {
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1321,7 +1371,6 @@ function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionCont
   });
 
   const canSave =
-    Boolean(visit.id) &&
     Boolean(visit.customer.id) &&
     form.chequeNumber.trim() &&
     Number(form.amount) > 0 &&
@@ -1383,16 +1432,28 @@ function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionCont
   }
 
   async function saveCheque() {
-    if (!visit.id) {
-      setError("Save the visit first to link this cheque with the field visit.");
-      return;
-    }
     if (!canSave || !visit.customer.id) {
       setError("Please complete cheque number, amount, bank, date, and account holder.");
       return;
     }
     setSaving(true);
     setError("");
+    let linkedVisit = visit;
+    try {
+      if (!linkedVisit.id) {
+        const savedVisit = await onEnsureVisit();
+        if (!savedVisit?.id) {
+          setError("Could not save the visit for this cheque. Please retry.");
+          setSaving(false);
+          return;
+        }
+        linkedVisit = savedVisit;
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not save the visit for this cheque.");
+      setSaving(false);
+      return;
+    }
     const res = await fetch("/api/cheques", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1405,16 +1466,16 @@ function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionCont
         amount: Number(form.amount),
         accountHolderName: form.accountHolderName.trim(),
         collectionDateTime: new Date().toISOString(),
-        collectionNotes: form.notes || `Collected during field visit ${visit.id}`,
-        staffVisitId: visit.id,
+        collectionNotes: form.notes || `Collected during field visit ${linkedVisit.id}`,
+        staffVisitId: linkedVisit.id,
         frontImageUrl: imageDataUrl || undefined,
         micrCode: form.micrCode || undefined,
         ifscCode: form.ifscCode || undefined,
         ocrRawText: form.ocrRawText || undefined,
         ocrConfidence: confidence ?? undefined,
-        collectionLatitude: visit.checkInLat,
-        collectionLongitude: visit.checkInLng,
-        collectionAccuracy: visit.accuracy ?? undefined,
+        collectionLatitude: linkedVisit.checkInLat,
+        collectionLongitude: linkedVisit.checkInLng,
+        collectionAccuracy: linkedVisit.accuracy ?? undefined,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1469,7 +1530,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionCont
       {error && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">{error}</p>}
       {!visit.id && (
         <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-sm text-blue-800">
-          Cheque workflow is ready. Save the visit to attach GPS and visit linkage, then save the cheque.
+          Cheque workflow is ready. Saving the cheque will capture GPS and link the visit automatically.
         </p>
       )}
 
@@ -1485,7 +1546,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: ChequeCollectionCont
       </div>
       <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} placeholder="Cheque notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
       <button type="button" onClick={saveCheque} disabled={saving || !canSave} className="mt-3 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
-        {saving ? "Saving cheque..." : visit.id ? "Save Cheque to Recovery Desk" : "Save Visit First"}
+        {saving ? "Saving cheque..." : "Save Cheque to Recovery Desk"}
       </button>
     </div>
   );
