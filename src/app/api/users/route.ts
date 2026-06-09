@@ -35,6 +35,18 @@ function fixedUserRole(role: FixedShopRole | undefined, fallback: UserRole = "AC
   return (role ? normalizeFixedRole(role) : fallback) as UserRole;
 }
 
+async function ensureFixedUserRoleEnumValues() {
+  try {
+    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SALES_PERSON'`);
+    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'ACCOUNT_STAFF'`);
+    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SALES_PERSON_CUM_ACCOUNTS'`);
+  } catch (error) {
+    logger.warn("staff_role_enum_prepare_failed_non_blocking", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 type StaffListRow = {
   id: string;
   name: string;
@@ -143,6 +155,7 @@ export async function POST(request: Request) {
     const temporaryPassword = body.password ?? generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
     const role = fixedUserRole(body.role);
+    await ensureFixedUserRoleEnumValues();
     const user = await prisma.user.create({
       data: {
         name: body.name,
@@ -196,6 +209,7 @@ export async function PATCH(request: Request) {
     if (!isSuperAdmin(session) && existing.shopId !== session.shopId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const role = fixedUserRole(body.role, normalizeFixedRole(existing.role || "ACCOUNT_STAFF") as UserRole);
+    await ensureFixedUserRoleEnumValues();
     const updated = await prisma.user.update({
       where: { id: existing.id },
       data: {

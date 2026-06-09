@@ -221,14 +221,14 @@ export async function GET(request: Request) {
 
     const baseInclude = {
       customer: { select: { partyName: true, contactNumber: true } },
-      createdBy: { select: { name: true, role: true } },
+      createdBy: { select: { name: true } },
     } satisfies Prisma.OrderInclude;
     const fullInclude = {
       ...baseInclude,
       activities: {
         orderBy: { createdAt: "desc" },
         take: 1,
-        include: { user: { select: { name: true, role: true } } },
+        include: { user: { select: { name: true } } },
       },
     } satisfies Prisma.OrderInclude;
 
@@ -494,7 +494,7 @@ export async function PATCH(request: Request) {
         },
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true } },
-          createdBy: { select: { name: true, role: true } },
+          createdBy: { select: { name: true } },
         },
       });
       logger.info("order_transition_update_success", {
