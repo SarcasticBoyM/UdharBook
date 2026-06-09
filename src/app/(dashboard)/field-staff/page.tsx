@@ -567,36 +567,6 @@ export default function FieldStaffPage() {
     setResult(outcome);
   }
 
-  async function captureVisitPosition() {
-    if (!navigator.geolocation) throw new Error("Geolocation not supported");
-    if (!window.isSecureContext) throw new Error("GPS works only on HTTPS. Open https://app.qrvcard.in");
-    setGpsState("checking");
-    setGpsError("");
-    return new Promise<GeolocationPosition>((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setLocation(position);
-          setGpsState("active");
-          setGpsError("");
-          setLastGpsSyncAt(new Date().toISOString());
-          resolve(position);
-        },
-        (error) => {
-          const message =
-            error.code === 1
-              ? "Location permission blocked. Chrome -> lock icon -> Site settings -> Location -> Allow."
-              : error.code === 3
-                ? "GPS timeout. Turn on phone location, move near a window, then retry."
-                : error.message || "Could not capture GPS location.";
-          setGpsState(error.code === 1 ? "denied" : error.code === 3 ? "timeout" : "error");
-          setGpsError(message);
-          reject(new Error(message));
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-      );
-    });
-  }
-
   async function saveVisitAtLocation(position: GeolocationPosition, options: { resetForm?: boolean; successMessage?: string } = {}): Promise<Visit | null> {
     const shouldResetForm = options.resetForm ?? true;
     if (!isFieldWorker) return null;
@@ -674,13 +644,6 @@ export default function FieldStaffPage() {
     } finally {
       setVisitSaving(false);
     }
-  }
-
-  async function ensureVisitForCheque() {
-    if (chequeVisit?.id) return chequeVisit;
-    setMessage("Saving visit and linking cheque...");
-    const position = await captureVisitPosition();
-    return saveVisitAtLocation(position, { resetForm: false, successMessage: "Visit linked. Saving cheque..." });
   }
 
   function saveVisit() {
@@ -1070,7 +1033,7 @@ export default function FieldStaffPage() {
           {showChequeFlow && chequeCollectionContext && (
             <VisitChequeCollection
               visit={chequeCollectionContext}
-              onEnsureVisit={ensureVisitForCheque}
+              location={location}
               onSaved={async () => {
                 setMessage("Cheque saved to Recovery Desk.");
                 setChequeVisit(null);
@@ -1345,11 +1308,11 @@ function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
 
 function VisitChequeCollection({
   visit,
-  onEnsureVisit,
+  location,
   onSaved,
 }: {
   visit: ChequeCollectionContext;
-  onEnsureVisit: () => Promise<ChequeCollectionContext | null>;
+  location: GeolocationPosition | null;
   onSaved: () => void;
 }) {
   const [imageDataUrl, setImageDataUrl] = useState("");
@@ -1438,22 +1401,14 @@ function VisitChequeCollection({
     }
     setSaving(true);
     setError("");
-    let linkedVisit = visit;
-    try {
-      if (!linkedVisit.id) {
-        const savedVisit = await onEnsureVisit();
-        if (!savedVisit?.id) {
-          setError("Could not save the visit for this cheque. Please retry.");
-          setSaving(false);
-          return;
-        }
-        linkedVisit = savedVisit;
-      }
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not save the visit for this cheque.");
-      setSaving(false);
-      return;
-    }
+    const collectionLatitude = visit.checkInLat ?? location?.coords.latitude;
+    const collectionLongitude = visit.checkInLng ?? location?.coords.longitude;
+    const collectionAccuracy = visit.accuracy ?? location?.coords.accuracy;
+    const collectionNotes = [
+      form.notes.trim(),
+      "Collected During Visit",
+      visit.id ? `Visit: ${visit.id}` : "",
+    ].filter(Boolean).join(" | ");
     const res = await fetch("/api/cheques", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1466,16 +1421,16 @@ function VisitChequeCollection({
         amount: Number(form.amount),
         accountHolderName: form.accountHolderName.trim(),
         collectionDateTime: new Date().toISOString(),
-        collectionNotes: form.notes || `Collected during field visit ${linkedVisit.id}`,
-        staffVisitId: linkedVisit.id,
+        collectionNotes,
+        staffVisitId: visit.id || undefined,
         frontImageUrl: imageDataUrl || undefined,
         micrCode: form.micrCode || undefined,
         ifscCode: form.ifscCode || undefined,
         ocrRawText: form.ocrRawText || undefined,
         ocrConfidence: confidence ?? undefined,
-        collectionLatitude: linkedVisit.checkInLat,
-        collectionLongitude: linkedVisit.checkInLng,
-        collectionAccuracy: linkedVisit.accuracy ?? undefined,
+        collectionLatitude,
+        collectionLongitude,
+        collectionAccuracy,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1530,7 +1485,7 @@ function VisitChequeCollection({
       {error && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">{error}</p>}
       {!visit.id && (
         <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-sm text-blue-800">
-          Cheque workflow is ready. Saving the cheque will capture GPS and link the visit automatically.
+          Cheque will save directly to the centralized module. Visit and GPS details will attach when available.
         </p>
       )}
 
@@ -1546,7 +1501,7 @@ function VisitChequeCollection({
       </div>
       <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} placeholder="Cheque notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
       <button type="button" onClick={saveCheque} disabled={saving || !canSave} className="mt-3 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
-        {saving ? "Saving cheque..." : "Save Cheque to Recovery Desk"}
+        {saving ? "Saving cheque..." : "Save Collected Cheque"}
       </button>
     </div>
   );
