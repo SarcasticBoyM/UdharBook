@@ -18,8 +18,10 @@ export const assignableFixedRoles: FixedShopRole[] = [
 ];
 
 export function normalizeFixedRole(role: AppRole): AppRole {
-  if (role === "FIELD_SALES") return "SALES_PERSON";
-  if (role === "STAFF") return "ACCOUNT_STAFF";
+  if (["FIELD_SALES", "FIELD_STAFF", "FIELD_SALES_PERSON", "SALES"].includes(String(role))) return "SALES_PERSON";
+  if (["STAFF", "ACCOUNTING", "ACCOUNTING_STAFF", "ACCOUNTS"].includes(String(role))) return "ACCOUNT_STAFF";
+  if (["FIELD_SALES_AND_ACCOUNTING", "SALES_AND_ACCOUNTS", "SALES_PERSON_AND_ACCOUNT_STAFF"].includes(String(role))) return "SALES_PERSON_CUM_ACCOUNTS";
+  if (["SHOP_OWNER_ADMIN", "ADMIN"].includes(String(role))) return "SHOP_ADMIN";
   return role;
 }
 

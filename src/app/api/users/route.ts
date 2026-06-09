@@ -8,9 +8,13 @@ import { canManageUsers } from "@/lib/permissions";
 import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
 import { logger } from "@/lib/logger";
-import { normalizeFixedRole, roleLabel } from "@/lib/operational-roles";
+import { normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
 
-const fixedRoleSchema = z.enum(["SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"]);
+const fixedRoleValues = ["SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"] as const;
+const fixedRoleSchema = z.preprocess(
+  (value) => normalizeFixedRole(String(value ?? "")),
+  z.enum(fixedRoleValues),
+);
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -27,7 +31,7 @@ const updateSchema = createSchema.partial().extend({
   disabled: z.boolean().optional(),
 });
 
-function fixedUserRole(role: string | undefined, fallback: UserRole = "ACCOUNT_STAFF" as UserRole) {
+function fixedUserRole(role: FixedShopRole | undefined, fallback: UserRole = "ACCOUNT_STAFF" as UserRole) {
   return (role ? normalizeFixedRole(role) : fallback) as UserRole;
 }
 

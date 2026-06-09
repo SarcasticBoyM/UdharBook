@@ -175,7 +175,7 @@ export default function StaffManagementPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Staff Management</h1>
-          <p className="text-slate-500">Create staff, assign multiple roles, and manage access safely.</p>
+          <p className="text-slate-500">Create staff, assign one fixed role, and manage access safely.</p>
         </div>
         <button type="button" onClick={resetForm} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">
           <UserPlus className="h-4 w-4" />

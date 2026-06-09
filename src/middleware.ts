@@ -49,8 +49,11 @@ const SUPER_ADMIN_BLOCKED_APIS = [
 const SALES_HOME = "/field-staff";
 
 function normalizeRole(role?: string) {
-  if (role === "FIELD_SALES") return "SALES_PERSON";
-  if (role === "STAFF") return "ACCOUNT_STAFF";
+  if (!role) return role;
+  if (["FIELD_SALES", "FIELD_STAFF", "FIELD_SALES_PERSON", "SALES"].includes(role)) return "SALES_PERSON";
+  if (["STAFF", "ACCOUNTING", "ACCOUNTING_STAFF", "ACCOUNTS"].includes(role)) return "ACCOUNT_STAFF";
+  if (["FIELD_SALES_AND_ACCOUNTING", "SALES_AND_ACCOUNTS", "SALES_PERSON_AND_ACCOUNT_STAFF"].includes(role)) return "SALES_PERSON_CUM_ACCOUNTS";
+  if (["SHOP_OWNER_ADMIN", "ADMIN"].includes(role)) return "SHOP_ADMIN";
   return role;
 }
 

@@ -79,7 +79,7 @@ type ChequeCollectionContext = {
   customer: { id?: string; partyName: string; contactNumber: string; outstandingBalance: number };
 };
 
-type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "SALES_PERSON" | "ACCOUNT_STAFF" | "SALES_PERSON_CUM_ACCOUNTS" | "STAFF" | "FIELD_SALES";
+type UserRole = "SUPER_ADMIN" | "SHOP_ADMIN" | "SALES_PERSON" | "ACCOUNT_STAFF" | "SALES_PERSON_CUM_ACCOUNTS";
 
 type StaffStatus = {
   id: string;

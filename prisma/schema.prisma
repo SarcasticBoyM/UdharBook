@@ -14,9 +14,6 @@ enum UserRole {
   SALES_PERSON
   ACCOUNT_STAFF
   SALES_PERSON_CUM_ACCOUNTS
-  // Legacy roles retained only for safe migration/backward compatibility.
-  STAFF
-  FIELD_SALES
 }
 
 enum OperationalRole {

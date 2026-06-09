@@ -388,7 +388,7 @@ export async function GET(request: Request) {
         take: format ? 1000 : limit,
       }),
       prisma.cheque.count({ where }),
-      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS", "STAFF", "FIELD_SALES"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
+      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
       prisma.cheque.count({ where: { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } } }),
       prisma.cheque.count({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } } }),
       prisma.cheque.count({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } } }),

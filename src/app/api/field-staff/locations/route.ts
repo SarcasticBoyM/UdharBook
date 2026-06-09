@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     dayEnd.setHours(23, 59, 59, 999);
 
     const staff = await prisma.user.findMany({
-      where: { shopId, ...(staffId ? { id: staffId } : { role: { in: ["SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS", "FIELD_SALES"] } }) },
+      where: { shopId, ...(staffId ? { id: staffId } : { role: { in: ["SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"] } }) },
       select: { id: true, name: true, role: true },
       orderBy: { name: "asc" },
     });

@@ -94,7 +94,7 @@ async function main() {
         name: "Staff User",
         email: "staff@udharbook.local",
         password: staffPassword,
-        role: UserRole.STAFF,
+        role: UserRole.ACCOUNT_STAFF,
         shopId: primaryShop.id,
       })
     : null;
