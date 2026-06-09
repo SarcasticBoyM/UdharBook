@@ -17,13 +17,13 @@ import {
   Menu,
   Moon,
   Sun,
-  Upload,
   Users,
   WalletCards,
   Store,
   ShieldCheck,
   UserRoundCheck,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
@@ -31,24 +31,32 @@ import { ShopSwitcher } from "./ShopSwitcher";
 import { canAccessModule, operationalRoleLabels } from "@/lib/operational-roles";
 import type { OperationalRole } from "@prisma/client";
 
-const links = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2 },
-  { href: "/cheques", label: "Cheque Collections", icon: Landmark },
-  { href: "/field-staff", label: "Field Staff", icon: UserRoundCheck },
-  { href: "/orders", label: "Order Desk", icon: ClipboardList },
-  { href: "/live-tracking", label: "Live Tracking", icon: MapPinned, adminOnly: true },
-  { href: "/daily-visits", label: "Daily Visits", icon: Map },
-  { href: "/customers", label: "Customers", icon: Users },
-  { href: "/upload", label: "Upload Excel", icon: Upload },
-  { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true },
-  { href: "/reports", label: "Reports", icon: FileBarChart, adminOnly: true },
-  { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true },
-  { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true },
-  { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true },
+type SidebarLink = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  section?: string;
+  adminOnly?: boolean;
+  superOnly?: boolean;
+};
+
+const links: SidebarLink[] = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, section: "Main" },
+  { href: "/customers", label: "Customers", icon: Users, section: "Operations" },
+  { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2, section: "Operations" },
+  { href: "/orders", label: "Order Desk", icon: ClipboardList, section: "Operations" },
+  { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
+  { href: "/field-staff", label: "Sales Person", icon: UserRoundCheck, section: "Team" },
+  { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
+  { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
+  { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
+  { href: "/reports", label: "All Reports", icon: FileBarChart, adminOnly: true, section: "Reports" },
+  { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true, section: "Business Profile" },
+  { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true, section: "Admin" },
+  { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true, section: "Platform" },
 ];
 
-const platformLinks = [
+const platformLinks: SidebarLink[] = [
   { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
   { href: "/shops", label: "Onboard Shop", icon: Store },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck },
@@ -122,25 +130,31 @@ export function Sidebar({ userName, role, operationalRoles = [] }: { userName: s
         </div>
       </div>
       <nav className="flex-1 space-y-1 p-3">
-        {navLinks.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            title={label}
-            onClick={() => {
-              if (mobile) setMobileOpen(false);
-            }}
-            className={cn(
-              "flex min-h-12 items-center gap-3 rounded-lg px-3 py-2 text-sm font-semibold transition",
-              mobile ? "justify-start" : "justify-center md:justify-start",
-              pathname === href
-                ? "bg-brand-50 text-brand-700 dark:bg-brand-900/30 dark:text-brand-300"
-                : "text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+        {navLinks.map(({ href, label, icon: Icon, section }, index) => (
+          <div key={href}>
+            {section && section !== "Main" && section !== navLinks[index - 1]?.section && (
+              <p className={cn("px-3 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wide text-slate-400", mobile ? "block" : "hidden md:block")}>
+                {section}
+              </p>
             )}
-          >
-            <Icon className="h-5 w-5 shrink-0" />
-            <span className={cn(mobile ? "inline" : "hidden md:inline")}>{label}</span>
-          </Link>
+            <Link
+              href={href}
+              title={label}
+              onClick={() => {
+                if (mobile) setMobileOpen(false);
+              }}
+              className={cn(
+                "flex min-h-12 items-center gap-3 rounded-lg px-3 py-2 text-sm font-semibold transition",
+                mobile ? "justify-start" : "justify-center md:justify-start",
+                pathname === href
+                  ? "bg-brand-50 text-brand-700 dark:bg-brand-900/30 dark:text-brand-300"
+                  : "text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+              )}
+            >
+              <Icon className="h-5 w-5 shrink-0" />
+              <span className={cn(mobile ? "inline" : "hidden md:inline")}>{label}</span>
+            </Link>
+          </div>
         ))}
       </nav>
       <div className="space-y-1 border-t border-slate-200 p-3 dark:border-slate-700">
