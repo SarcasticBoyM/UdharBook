@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!canImport(session.role)) {
+    if (!canImport(session.role, session.roles ?? [])) {
       return NextResponse.json({ error: "You do not have permission to import customers" }, { status: 403 });
     }
 

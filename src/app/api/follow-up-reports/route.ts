@@ -325,7 +325,7 @@ body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;bo
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canViewReports(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canViewReports(session.role, session.roles ?? [])) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);

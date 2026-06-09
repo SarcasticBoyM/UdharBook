@@ -8,7 +8,7 @@ import { generateTemporaryPassword } from "@/lib/password";
 import { logActivity } from "@/lib/activity";
 import { logger } from "@/lib/logger";
 import { fallbackOperationalRoles, primaryUserRoleFromOperationalRoles } from "@/lib/operational-roles";
-import type { OperationalRole, UserRole } from "@prisma/client";
+import type { OperationalRole, Prisma, UserRole } from "@prisma/client";
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -86,45 +86,32 @@ async function findUserWithRoleFallback(userId: string, actorId: string, actorRo
   }
 }
 
-async function syncRoleAssignmentsSafe(input: {
+async function syncRoleAssignments(tx: Prisma.TransactionClient, input: {
   actorId: string;
   actorRole: string;
   userId: string;
   shopId: string;
   roles: OperationalRole[];
 }) {
-  try {
-    await prisma.$transaction([
-      prisma.userRoleAssignment.deleteMany({ where: { userId: input.userId } }),
-      ...input.roles.map((role) =>
-        prisma.userRoleAssignment.create({
-          data: {
-            shopId: input.shopId,
-            userId: input.userId,
-            role,
-            assignedById: input.actorId,
-          },
-        }),
-      ),
-    ]);
-    logger.info("staff_user_role_assignments_synced", {
-      actorId: input.actorId,
-      actorRole: input.actorRole,
-      userId: input.userId,
-      shopId: input.shopId,
-      roles: input.roles,
-    });
-  } catch (error) {
-    logger.error("staff_user_role_assignments_sync_failed_non_blocking", {
-      actorId: input.actorId,
-      actorRole: input.actorRole,
-      userId: input.userId,
-      shopId: input.shopId,
-      roles: input.roles,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+  await tx.userRoleAssignment.deleteMany({ where: { userId: input.userId } });
+  if (input.roles.length > 0) {
+    await tx.userRoleAssignment.createMany({
+      data: input.roles.map((role) => ({
+        shopId: input.shopId,
+        userId: input.userId,
+        role,
+        assignedById: input.actorId,
+      })),
+      skipDuplicates: true,
     });
   }
+  logger.info("staff_user_role_assignments_synced", {
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    userId: input.userId,
+    shopId: input.shopId,
+    roles: input.roles,
+  });
 }
 
 export async function GET(request: Request) {
@@ -158,21 +145,28 @@ export async function POST(request: Request) {
     const primaryRole = primaryUserRoleFromOperationalRoles(requestedRoles);
     const temporaryPassword = body.password ?? generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
-    const user = await prisma.user.create({
-      data: {
-        name: body.name,
-        email: body.email.toLowerCase(),
-        mobile: body.mobile,
-        role: primaryRole,
-        jobTitle: body.jobTitle,
-        shopId,
-        passwordHash,
-        passwordResetRequired: !body.password,
-        tempPasswordExpiresAt: body.password ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
-      include: { shop: { select: { shopName: true } } },
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          name: body.name,
+          email: body.email.toLowerCase(),
+          mobile: body.mobile,
+          role: primaryRole,
+          jobTitle: body.jobTitle,
+          shopId,
+          passwordHash,
+          passwordResetRequired: !body.password,
+          tempPasswordExpiresAt: body.password ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        include: { shop: { select: { shopName: true } } },
+      });
+      await syncRoleAssignments(tx, { actorId: session.id, actorRole: session.role, userId: created.id, shopId, roles: requestedRoles });
+      const roleAssignments = await tx.userRoleAssignment.findMany({
+        where: { userId: created.id },
+        select: { role: true, createdAt: true },
+      });
+      return { ...created, roleAssignments };
     });
-    await syncRoleAssignmentsSafe({ actorId: session.id, actorRole: session.role, userId: user.id, shopId, roles: requestedRoles });
     await prisma.activityLog.create({
       data: {
         action: "user_roles_assigned",
@@ -191,7 +185,7 @@ export async function POST(request: Request) {
       shopId,
       details: user.email,
     });
-    return NextResponse.json({ user: { ...user, roleAssignments: requestedRoles.map((role) => ({ role, createdAt: new Date() })) }, temporaryPassword }, { status: 201 });
+    return NextResponse.json({ user, temporaryPassword }, { status: 201 });
   } catch (error) {
     logger.error("user_create_failed", {
       actorId: session.id,
@@ -225,19 +219,26 @@ export async function PATCH(request: Request) {
         : fallbackOperationalRoles(existing.role);
     const primaryRole = primaryUserRoleFromOperationalRoles(requestedRoles, existing.role);
 
-    const updated = await prisma.user.update({
-      where: { id: existing.id },
-      data: {
-        ...(body.name ? { name: body.name } : {}),
-        ...(body.email ? { email: body.email.toLowerCase() } : {}),
-        ...(body.mobile !== undefined ? { mobile: body.mobile } : {}),
-        ...(body.jobTitle !== undefined ? { jobTitle: body.jobTitle } : {}),
-        role: primaryRole,
-        ...(body.disabled !== undefined ? { disabledAt: body.disabled ? new Date() : null } : {}),
-      },
-      include: { shop: { select: { shopName: true } } },
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.user.update({
+        where: { id: existing.id },
+        data: {
+          ...(body.name ? { name: body.name } : {}),
+          ...(body.email ? { email: body.email.toLowerCase() } : {}),
+          ...(body.mobile !== undefined ? { mobile: body.mobile } : {}),
+          ...(body.jobTitle !== undefined ? { jobTitle: body.jobTitle } : {}),
+          role: primaryRole,
+          ...(body.disabled !== undefined ? { disabledAt: body.disabled ? new Date() : null } : {}),
+        },
+        include: { shop: { select: { shopName: true } } },
+      });
+      await syncRoleAssignments(tx, { actorId: session.id, actorRole: session.role, userId: existing.id, shopId: existing.shopId, roles: requestedRoles });
+      const roleAssignments = await tx.userRoleAssignment.findMany({
+        where: { userId: existing.id },
+        select: { role: true, createdAt: true },
+      });
+      return { ...saved, roleAssignments };
     });
-    await syncRoleAssignmentsSafe({ actorId: session.id, actorRole: session.role, userId: existing.id, shopId: existing.shopId, roles: requestedRoles });
     await prisma.activityLog.create({
       data: {
         action: "user_roles_updated",
@@ -250,7 +251,7 @@ export async function PATCH(request: Request) {
       userId: existing.id,
       error: error instanceof Error ? error.message : String(error),
     }));
-    return NextResponse.json({ user: { ...updated, roleAssignments: requestedRoles.map((role) => ({ role, createdAt: new Date() })) } });
+    return NextResponse.json({ user: updated });
   } catch (error) {
     logger.error("user_update_failed", {
       actorId: session.id,

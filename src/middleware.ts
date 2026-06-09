@@ -72,7 +72,9 @@ const STAFF_BLOCKED_PAGES = ["/field-staff", "/daily-visits", "/orders", "/live-
 const STAFF_BLOCKED_APIS = ["/api/field-staff", "/api/orders"];
 const FIELD_OPERATION_ROLES = ["FIELD_SALES_PERSON"];
 const ORDER_OPERATION_ROLES = ["ORDER_MANAGER", "ACCOUNTING_STAFF", "FIELD_SALES_PERSON"];
-const ACCOUNTING_OPERATION_ROLES = ["ACCOUNTING_STAFF", "FOLLOWUP_MANAGER"];
+const FOLLOWUP_OPERATION_ROLES = ["FOLLOWUP_MANAGER", "ACCOUNTING_STAFF"];
+const REPORT_OPERATION_ROLES = ["FOLLOWUP_MANAGER", "ACCOUNTING_STAFF"];
+const IMPORT_OPERATION_ROLES = ["ACCOUNTING_STAFF"];
 
 function hasAnyRole(roles: unknown, allowed: string[]) {
   return Array.isArray(roles) && roles.some((role) => typeof role === "string" && allowed.includes(role));
@@ -189,9 +191,12 @@ export async function middleware(request: NextRequest) {
       return secure(NextResponse.redirect(new URL(FIELD_SALES_HOME, request.url)));
     }
     const fieldSalesAllowedByMultiRole =
-      (pathname.startsWith("/today-follow-ups") || pathname.startsWith("/follow-ups") || pathname.startsWith("/reports") || pathname.startsWith("/upload")) && hasAnyRole(roles, ACCOUNTING_OPERATION_ROLES);
+      ((pathname.startsWith("/today-follow-ups") || pathname.startsWith("/follow-ups")) && hasAnyRole(roles, FOLLOWUP_OPERATION_ROLES))
+      || pathname.startsWith("/reports") && hasAnyRole(roles, REPORT_OPERATION_ROLES)
+      || pathname.startsWith("/upload") && hasAnyRole(roles, IMPORT_OPERATION_ROLES);
     const fieldSalesApiAllowedByMultiRole =
-      (pathname.startsWith("/api/follow-ups") || pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/reports") || pathname.startsWith("/api/today-follow-ups") || pathname.startsWith("/api/dashboard/stats")) && hasAnyRole(roles, ACCOUNTING_OPERATION_ROLES);
+      ((pathname.startsWith("/api/follow-ups") || pathname.startsWith("/api/follow-up-reports") || pathname.startsWith("/api/today-follow-ups")) && hasAnyRole(roles, FOLLOWUP_OPERATION_ROLES))
+      || (pathname.startsWith("/api/reports") || pathname.startsWith("/api/dashboard/stats")) && hasAnyRole(roles, REPORT_OPERATION_ROLES);
 
     if (role === "FIELD_SALES" && FIELD_SALES_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix)) && !fieldSalesAllowedByMultiRole) {
       logMiddleware("warn", "middleware_redirect_field_sales_page_forbidden", { traceId, path: pathname, userId, role, shopId });

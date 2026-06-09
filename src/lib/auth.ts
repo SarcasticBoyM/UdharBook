@@ -173,6 +173,7 @@ export async function getSession(): Promise<SessionUser | null> {
         shopId: true,
         disabledAt: true,
         shop: { select: { shopName: true } },
+        roleAssignments: { select: { role: true } },
       },
     }), { operation: "session_user_lookup", userId });
     if (!user) {
@@ -204,7 +205,7 @@ export async function getSession(): Promise<SessionUser | null> {
       name: user.name,
       email: user.email,
       role: user.role,
-      roles: Array.isArray(payload.roles) ? payload.roles as SessionUser["roles"] : fallbackOperationalRoles(user.role),
+      roles: normalizeOperationalRoles(user.role, user.roleAssignments),
       shopId: user.shopId,
       shopName: user.shop?.shopName ?? null,
     };
