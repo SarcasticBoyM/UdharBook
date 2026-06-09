@@ -2,13 +2,27 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { Prisma } from "@prisma/client";
 import { prisma, withPrismaRetry } from "./db";
 import type { SessionUser } from "@/types";
 import { logger } from "@/lib/logger";
 import { passwordHashDiagnostics, safeAuthRuntimeDiagnostics } from "@/lib/auth-diagnostics";
+import { normalizeFixedRole } from "@/lib/operational-roles";
 
 export const COOKIE_NAME = "udharbook_session";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
+
+type AuthUserRow = {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash?: string;
+  role: string | null;
+  shopId: string;
+  disabledAt: Date | null;
+  tempPasswordExpiresAt?: Date | null;
+  shopName: string | null;
+};
 
 function getSecret() {
   const secret = process.env.SESSION_SECRET;
@@ -25,6 +39,36 @@ function sessionLogMeta(user: SessionUser) {
     role: user.role,
     shopId: user.shopId,
   };
+}
+
+function sessionRole(role: string | null | undefined) {
+  const normalized = normalizeFixedRole(role || "ACCOUNT_STAFF");
+  return (["SUPER_ADMIN", "SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalized))
+    ? normalized
+    : "ACCOUNT_STAFF") as SessionUser["role"];
+}
+
+async function findAuthUserById(userId: string) {
+  const [user] = await withPrismaRetry(() => prisma.$queryRaw<AuthUserRow[]>(Prisma.sql`
+    SELECT u."id", u."name", u."email", u."role"::text AS "role", u."shopId", u."disabledAt", s."name" AS "shopName"
+    FROM "User" u
+    LEFT JOIN "Shop" s ON s."id" = u."shopId"
+    WHERE u."id" = ${userId}
+    LIMIT 1
+  `), { operation: "session_user_lookup", userId });
+  return user ? { ...user, role: sessionRole(user.role) } : null;
+}
+
+async function findAuthUserByEmail(email: string, traceId?: string) {
+  const [user] = await withPrismaRetry(() => prisma.$queryRaw<AuthUserRow[]>(Prisma.sql`
+    SELECT u."id", u."name", u."email", u."passwordHash", u."role"::text AS "role", u."shopId",
+      u."disabledAt", u."tempPasswordExpiresAt", s."name" AS "shopName"
+    FROM "User" u
+    LEFT JOIN "Shop" s ON s."id" = u."shopId"
+    WHERE u."email" = ${email}
+    LIMIT 1
+  `), { operation: "login_user_lookup", email, traceId });
+  return user ? { ...user, role: sessionRole(user.role) } : null;
 }
 
 export async function createSession(user: SessionUser, traceId?: string) {
@@ -122,18 +166,7 @@ export async function getSession(): Promise<SessionUser | null> {
     }
 
     logger.info("auth_trace_session_user_lookup_start", { userId });
-    const user = await withPrismaRetry(() => prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        shopId: true,
-        disabledAt: true,
-        shop: { select: { shopName: true } },
-      },
-    }), { operation: "session_user_lookup", userId });
+    const user = await findAuthUserById(userId);
     if (!user) {
       logger.warn("session_user_missing", { userId });
       await clearSessionIfWritable();
@@ -144,12 +177,12 @@ export async function getSession(): Promise<SessionUser | null> {
       await clearSessionIfWritable();
       return null;
     }
-    if (!user.shop && user.role !== "SUPER_ADMIN") {
+    if (!user.shopName && user.role !== "SUPER_ADMIN") {
       logger.error("session_shop_missing", { userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
       await clearSessionIfWritable();
       return null;
     }
-    if (!user.shop && user.role === "SUPER_ADMIN") {
+    if (!user.shopName && user.role === "SUPER_ADMIN") {
       logger.warn("session_super_admin_platform_shop_missing_non_blocking", {
         userId: user.id,
         email: user.email,
@@ -164,11 +197,11 @@ export async function getSession(): Promise<SessionUser | null> {
       email: user.email,
       role: user.role,
       shopId: user.shopId,
-      shopName: user.shop?.shopName ?? null,
+      shopName: user.shopName ?? null,
     };
     logger.info("session_validated", {
       ...sessionLogMeta(session),
-      shopAttached: Boolean(user.shop),
+      shopAttached: Boolean(user.shopName),
       disabled: Boolean(user.disabledAt),
     });
     return session;
@@ -189,33 +222,10 @@ export async function login(email: string, password: string, traceId?: string): 
     email: normalizedEmail,
     diagnostics: safeAuthRuntimeDiagnostics(),
   });
-  let user: {
-    id: string;
-    name: string;
-    email: string;
-    passwordHash: string;
-    role: SessionUser["role"];
-    shopId: string;
-    disabledAt: Date | null;
-    tempPasswordExpiresAt: Date | null;
-    shop: { id: string; shopName: string } | null;
-  } | null;
+  let user: (AuthUserRow & { passwordHash: string; role: SessionUser["role"] }) | null;
   try {
     logger.info("auth_trace_login_user_lookup_start", { traceId, email: normalizedEmail });
-    user = await withPrismaRetry(() => prisma.user.findUnique({
-      where: { email: normalizedEmail },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        passwordHash: true,
-        role: true,
-        shopId: true,
-        disabledAt: true,
-        tempPasswordExpiresAt: true,
-        shop: { select: { id: true, shopName: true } },
-      },
-    }), { operation: "login_user_lookup", email: normalizedEmail });
+    user = await findAuthUserByEmail(normalizedEmail, traceId) as (AuthUserRow & { passwordHash: string; role: SessionUser["role"] }) | null;
   } catch (error) {
     logger.error("login_user_lookup_failed", {
       traceId,
@@ -235,7 +245,7 @@ export async function login(email: string, password: string, traceId?: string): 
     email: user.email,
     role: user.role,
     shopId: user.shopId,
-    shopAttached: Boolean(user.shop),
+    shopAttached: Boolean(user.shopName),
     disabled: Boolean(user.disabledAt),
     tempPasswordExpiresAt: user.tempPasswordExpiresAt?.toISOString() ?? null,
     passwordHash: passwordHashDiagnostics(user.passwordHash),
@@ -244,11 +254,11 @@ export async function login(email: string, password: string, traceId?: string): 
     logger.warn("login_failed_disabled_user", { traceId, userId: user.id, email: user.email, role: user.role });
     return null;
   }
-  if (!user.shop && user.role !== "SUPER_ADMIN") {
+  if (!user.shopName && user.role !== "SUPER_ADMIN") {
     logger.error("login_failed_missing_shop", { traceId, userId: user.id, email: user.email, role: user.role, shopId: user.shopId });
     return null;
   }
-  if (!user.shop && user.role === "SUPER_ADMIN") {
+  if (!user.shopName && user.role === "SUPER_ADMIN") {
     logger.warn("login_super_admin_platform_shop_missing_non_blocking", {
       traceId,
       userId: user.id,
@@ -257,7 +267,7 @@ export async function login(email: string, password: string, traceId?: string): 
       shopId: user.shopId,
     });
   } else {
-    logger.info("login_shop_validated", { traceId, userId: user.id, shopId: user.shopId, shopName: user.shop?.shopName });
+    logger.info("login_shop_validated", { traceId, userId: user.id, shopId: user.shopId, shopName: user.shopName });
   }
   if (user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
     logger.warn("login_temp_password_expired_non_blocking", {
@@ -299,14 +309,13 @@ export async function login(email: string, password: string, traceId?: string): 
     return null;
   }
   logger.info("login_password_validated", { traceId, userId: user.id, email: user.email, role: user.role });
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      lastLoginAt: new Date(),
-      passwordResetRequired: false,
-      tempPasswordExpiresAt: null,
-    },
-  }).catch((error) => {
+  await prisma.$executeRaw(Prisma.sql`
+    UPDATE "User"
+    SET "lastLoginAt" = ${new Date()},
+      "passwordResetRequired" = false,
+      "tempPasswordExpiresAt" = NULL
+    WHERE "id" = ${user.id}
+  `).catch((error) => {
     logger.error("login_last_login_update_failed_non_blocking", {
       traceId,
       userId: user.id,
@@ -340,7 +349,7 @@ export async function login(email: string, password: string, traceId?: string): 
     email: user.email,
     role: user.role,
     shopId: user.shopId,
-    shopName: user.shop?.shopName ?? null,
+    shopName: user.shopName ?? null,
   };
 }
 

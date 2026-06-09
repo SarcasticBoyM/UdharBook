@@ -87,6 +87,9 @@ export default function StaffManagementPage() {
       setError(usersData.error ?? "Could not load staff");
       return;
     }
+    if (usersData.warning) {
+      setMessage(usersData.warning);
+    }
     setUsers(usersData.users ?? []);
   }, [activeShopId, selectedShopId]);
 
