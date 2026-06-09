@@ -22,6 +22,7 @@ import {
   Store,
   ShieldCheck,
   UserRoundCheck,
+  Upload,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -43,6 +44,7 @@ type SidebarLink = {
 const links: SidebarLink[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, section: "Main" },
   { href: "/customers", label: "Customers", icon: Users, section: "Operations" },
+  { href: "/upload", label: "Upload Excel", icon: Upload, section: "Operations" },
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2, section: "Operations" },
   { href: "/orders", label: "Order Desk", icon: ClipboardList, section: "Operations" },
   { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
