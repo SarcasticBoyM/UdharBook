@@ -274,6 +274,72 @@ function nextReminderDate(minutes?: number, tomorrowHour?: number) {
   return date.toISOString().slice(0, 16);
 }
 
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function reminderDatePart(value: string) {
+  return value ? value.slice(0, 10) : "";
+}
+
+function reminderTimePart(value: string) {
+  return value ? value.slice(11, 16) : "";
+}
+
+function combineReminderDateTime(date: string, time: string) {
+  if (!date) return "";
+  return `${date}T${time || "10:00"}`;
+}
+
+function monthStart(value: string) {
+  const base = value ? new Date(`${reminderDatePart(value)}T00:00:00`) : new Date();
+  return new Date(base.getFullYear(), base.getMonth(), 1);
+}
+
+function monthLabel(date: Date) {
+  return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric" }).format(date);
+}
+
+function dateButtonLabel(value: string) {
+  if (!value) return "Select date";
+  return new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "2-digit", month: "short" }).format(new Date(`${reminderDatePart(value)}T00:00:00`));
+}
+
+function timeButtonLabel(value: string) {
+  const time = reminderTimePart(value);
+  if (!time) return "Select time";
+  return new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(new Date(`2000-01-01T${time}:00`));
+}
+
+function calendarCells(month: Date) {
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const offset = first.getDay();
+  const cells: { value: string; label: number; muted: boolean }[] = [];
+  for (let index = 0; index < 42; index += 1) {
+    const date = new Date(first);
+    date.setDate(index - offset + 1);
+    cells.push({
+      value: `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
+      label: date.getDate(),
+      muted: date.getMonth() !== month.getMonth(),
+    });
+  }
+  return cells;
+}
+
+const REMINDER_TIME_OPTIONS = [
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "18:00",
+  "19:00",
+];
+
 function latestFollowUp(customer: QueueCustomer) {
   return customer.followUps[0] ?? null;
 }
@@ -1334,6 +1400,9 @@ function ActionPanel({
   const [paidAmount, setPaidAmount] = useState("");
   const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [visibleReminderMonth, setVisibleReminderMonth] = useState(() => monthStart(""));
 
   useEffect(() => {
     if (!customer) return;
@@ -1344,7 +1413,11 @@ function ActionPanel({
     setPaidAmount("");
     setSetReminder(false);
     setPriority(derivedPriority(customer));
-    setNextDate(customer.nextFollowupDate ? new Date(customer.nextFollowupDate).toISOString().slice(0, 16) : "");
+    const existingDate = customer.nextFollowupDate ? new Date(customer.nextFollowupDate).toISOString().slice(0, 16) : "";
+    setNextDate(existingDate);
+    setVisibleReminderMonth(monthStart(existingDate));
+    setDatePickerOpen(false);
+    setTimePickerOpen(false);
   }, [customer]);
 
   if (!customer) {
@@ -1358,6 +1431,24 @@ function ActionPanel({
   const latest = latestFollowUp(customer);
   const selectedTone = STATUS_OPTIONS.find((option) => option.value === status)?.tone ?? "border-slate-200 bg-slate-50 text-slate-800";
   const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || primaryAction === "NO_RESPONSE" || status === "PAYMENT_PROMISED";
+  const selectedReminderDate = reminderDatePart(nextDate);
+  const selectedReminderTime = reminderTimePart(nextDate);
+  const today = new Date();
+  const todayValue = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+  const visibleCalendarCells = calendarCells(visibleReminderMonth);
+
+  const updateReminderDate = (date: string) => {
+    setNextDate(combineReminderDateTime(date, selectedReminderTime || "10:00"));
+    setVisibleReminderMonth(monthStart(`${date}T${selectedReminderTime || "10:00"}`));
+    setSetReminder(true);
+    setDatePickerOpen(false);
+  };
+
+  const updateReminderTime = (time: string) => {
+    setNextDate(combineReminderDateTime(selectedReminderDate || todayValue, time));
+    setSetReminder(true);
+    setTimePickerOpen(false);
+  };
 
   const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
     setPrimaryAction(action);
@@ -1599,17 +1690,101 @@ function ActionPanel({
                   <p className="text-sm font-bold">Next Follow-up Date</p>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="text-sm font-semibold">Date and exact time</label>
-                    <input
-                      type="datetime-local"
-                      value={nextDate}
-                      onChange={(event) => {
-                        setNextDate(event.target.value);
-                        if (primaryAction === "FOLLOW_UP_LATER") setSetReminder(true);
+                  <div className="relative">
+                    <label className="text-sm font-semibold">Reminder Date</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDatePickerOpen((open) => !open);
+                        setTimePickerOpen(false);
                       }}
-                      className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                    />
+                      className="mt-2 flex min-h-12 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-3 text-left text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                    >
+                      <span>{dateButtonLabel(nextDate)}</span>
+                      <CalendarClock className="h-4 w-4 text-brand-600" />
+                    </button>
+                    {datePickerOpen && (
+                      <div className="absolute left-0 right-0 top-full z-30 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-950">
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold dark:border-slate-700"
+                            aria-label="Previous month"
+                          >
+                            ‹
+                          </button>
+                          <p className="text-sm font-bold">{monthLabel(visibleReminderMonth)}</p>
+                          <button
+                            type="button"
+                            onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold dark:border-slate-700"
+                            aria-label="Next month"
+                          >
+                            ›
+                          </button>
+                        </div>
+                        <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[11px] font-bold uppercase text-slate-400">
+                          {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
+                        </div>
+                        <div className="mt-2 grid grid-cols-7 gap-1">
+                          {visibleCalendarCells.map((day) => (
+                            <button
+                              key={day.value}
+                              type="button"
+                              onClick={() => updateReminderDate(day.value)}
+                              className={cn(
+                                "aspect-square rounded-lg text-sm font-semibold transition",
+                                day.value === selectedReminderDate
+                                  ? "bg-brand-600 text-white"
+                                  : day.value === todayValue
+                                    ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-200"
+                                    : "hover:bg-slate-100 dark:hover:bg-slate-800",
+                                day.muted && day.value !== selectedReminderDate ? "text-slate-300 dark:text-slate-600" : ""
+                              )}
+                            >
+                              {day.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <label className="text-sm font-semibold">Reminder Time</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTimePickerOpen((open) => !open);
+                        setDatePickerOpen(false);
+                      }}
+                      className="mt-2 flex min-h-12 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-3 text-left text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+                    >
+                      <span>{timeButtonLabel(nextDate)}</span>
+                      <Clock3 className="h-4 w-4 text-brand-600" />
+                    </button>
+                    {timePickerOpen && (
+                      <div className="absolute left-0 right-0 top-full z-30 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-950">
+                        <p className="text-xs font-bold uppercase text-slate-500">Pick a callback time</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          {REMINDER_TIME_OPTIONS.map((time) => (
+                            <button
+                              key={time}
+                              type="button"
+                              onClick={() => updateReminderTime(time)}
+                              className={cn(
+                                "min-h-11 rounded-lg border px-3 text-sm font-semibold",
+                                time === selectedReminderTime
+                                  ? "border-brand-500 bg-brand-600 text-white"
+                                  : "border-slate-200 bg-white text-slate-700 hover:border-brand-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                              )}
+                            >
+                              {timeButtonLabel(`2000-01-01T${time}`)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="text-sm font-semibold">Priority</label>
@@ -1632,7 +1807,9 @@ function ActionPanel({
                       key={reminder.label}
                       type="button"
                       onClick={() => {
-                        setNextDate(nextReminderDate(reminder.minutes, reminder.tomorrowHour));
+                        const reminderDate = nextReminderDate(reminder.minutes, reminder.tomorrowHour);
+                        setNextDate(reminderDate);
+                        setVisibleReminderMonth(monthStart(reminderDate));
                         setSetReminder(true);
                       }}
                       className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm dark:bg-slate-900 dark:text-slate-200"
