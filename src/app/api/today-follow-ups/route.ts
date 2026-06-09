@@ -5,6 +5,8 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
+const LIGHTWEIGHT_THRESHOLD = Number(process.env.TODAY_FOLLOWUPS_LIGHTWEIGHT_THRESHOLD ?? 200);
+const LIGHTWEIGHT_PAGE_LIMIT = Number(process.env.TODAY_FOLLOWUPS_LIGHTWEIGHT_PAGE_LIMIT ?? 40);
 const RECENT_CONTACT_HOURS = 6;
 const AUTO_QUEUE_NOTE = "Auto-created for daily recovery queue.";
 const ACTIVE_SCHEDULED_STATUSES: FollowUpStatus[] = ["PENDING", "CALLBACK", "FOLLOW_UP_REQUIRED", "PAYMENT_PROMISED", "PARTIAL_PAID", "NOT_REACHABLE", "RESCHEDULED"];
@@ -279,7 +281,7 @@ function databaseOrder(sort: SortKey): Prisma.CustomerOrderByWithRelationInput[]
   }
 }
 
-async function seedMissingFollowUps(shopId: string, userId: string) {
+async function seedMissingFollowUps(shopId: string, userId: string, limit = 100) {
   const today = new Date();
   const missing = await prisma.customer.findMany({
     where: {
@@ -288,6 +290,7 @@ async function seedMissingFollowUps(shopId: string, userId: string) {
       NOT: { status: "CLEARED" },
       followUps: { none: {} },
     },
+    take: limit,
     include: {
       followUps: { orderBy: { followupDate: "desc" }, take: 1 },
       payments: { orderBy: { paidAt: "desc" }, take: 1 },
@@ -335,25 +338,31 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const skip = Number(searchParams.get("skip") ?? 0);
-  const take = Math.min(Number(searchParams.get("take") ?? 30), 100);
+  const requestedTake = Number(searchParams.get("take") ?? 30);
   const sort = (searchParams.get("sort") ?? "priority_desc") as SortKey;
   const filter = searchParams.get("filter") ?? "all";
   const search = (searchParams.get("search") ?? "").trim().toLowerCase();
+  const requestedMode = searchParams.get("mode");
   const shopId = requireShopId(request, session);
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
 
-  const autoCreated = await seedMissingFollowUps(shopId, session.id);
+  const activeBaseWhere: Prisma.CustomerWhereInput = { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } };
+  const totalActiveCustomers = await prisma.customer.count({ where: activeBaseWhere });
+  const lightweightMode = requestedMode === "compact" || (requestedMode !== "full" && totalActiveCustomers > LIGHTWEIGHT_THRESHOLD);
+  const take = Math.min(requestedTake, lightweightMode ? LIGHTWEIGHT_PAGE_LIMIT : 100);
+  const includeSideQueues = skip === 0;
+  const autoCreated = includeSideQueues ? await seedMissingFollowUps(shopId, session.id, lightweightMode ? 25 : 100) : 0;
 
   const include = {
     followUps: {
       orderBy: { followupDate: "desc" as const },
-      take: 12,
+      take: lightweightMode ? 3 : 12,
       include: { createdBy: { select: { name: true } } },
     },
     payments: {
       orderBy: { paidAt: "desc" as const },
-      take: 3,
+      take: lightweightMode ? 1 : 3,
       include: { createdBy: { select: { name: true } } },
     },
   };
@@ -369,18 +378,19 @@ export async function GET(request: Request) {
 
   const pendingWhere: Prisma.CustomerWhereInput = {
     AND: [
-      { shopId, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      activeBaseWhere,
       databaseFilter(filter, todayStart, todayEnd),
       databaseSearch(search),
     ],
   };
-  const pageWindow = skip + Math.min(take * 3, 300);
+  const pageWindow = lightweightMode ? take : skip + Math.min(take * 3, 300);
 
   const [customers, pendingTotal, pendingAmount, doneCustomers, todayRecovery, staffActivity] = await prisma.$transaction([
     prisma.customer.findMany({
       where: pendingWhere,
       include,
       orderBy: databaseOrder(sort),
+      skip: lightweightMode ? skip : 0,
       take: pageWindow,
     }),
     prisma.customer.count({ where: pendingWhere }),
@@ -395,7 +405,7 @@ export async function GET(request: Request) {
       },
       include,
       orderBy: { lastFollowupDate: "desc" },
-      take: 200,
+      take: includeSideQueues ? (lightweightMode ? 50 : 200) : 0,
     }),
     prisma.paymentEntry.aggregate({
       where: { shopId, paidAt: { gte: todayStart, lte: todayEnd } },
@@ -409,7 +419,7 @@ export async function GET(request: Request) {
     }),
   ]);
 
-  const scheduledRows = await prisma.followUp.findMany({
+  const scheduledRows = includeSideQueues ? await prisma.followUp.findMany({
     where: {
       shopId,
       status: { notIn: CLOSED_STATUSES },
@@ -427,8 +437,8 @@ export async function GET(request: Request) {
       customer: { include },
     },
     orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
-    take: 300,
-  });
+    take: lightweightMode ? 100 : 300,
+  }) : [];
 
   const scheduledByCustomer = new Map<string, ScheduledFollowUp>();
   for (const row of scheduledRows) {
@@ -500,8 +510,9 @@ export async function GET(request: Request) {
   const filteredPool =
     filter === "done" ? [] : pendingPool.filter((customer) => matchesFilter(filter, customer, todayStart, todayEnd));
   const sorted = filteredPool.sort((a, b) => compareBy(sort, a, b) || b.queueScore - a.queueScore);
-  const pending = sorted.slice(skip, skip + take);
+  const pending = lightweightMode ? sorted.slice(0, take) : sorted.slice(skip, skip + take);
   const activeQueueAmount = [...scheduled, ...pendingPool].reduce((sum, customer) => sum + customer.outstandingBalance, 0);
+  const pendingQueueCount = lightweightMode ? pendingTotal : pendingPool.length;
   const activeOverdueCount =
     scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length +
     pendingPool.filter((customer) => isPastDue(customer.nextFollowupDate)).length;
@@ -545,11 +556,11 @@ export async function GET(request: Request) {
     pending,
     done,
     summary: {
-      totalCustomers: enriched.length,
-      totalPendingCustomers: scheduled.length + pendingPool.length,
-      totalPendingAmount: activeQueueAmount || pendingAmount._sum.outstandingBalance || 0,
-      totalToday: scheduled.length + pendingPool.length + done.length,
-      pending: scheduled.length + pendingPool.length,
+      totalCustomers: totalActiveCustomers,
+      totalPendingCustomers: scheduled.length + pendingQueueCount,
+      totalPendingAmount: lightweightMode ? pendingAmount._sum.outstandingBalance || 0 : activeQueueAmount || pendingAmount._sum.outstandingBalance || 0,
+      totalToday: scheduled.length + pendingQueueCount + done.length,
+      pending: scheduled.length + pendingQueueCount,
       completed: done.length,
       actionedToday: done.length,
       callsCompleted,
@@ -575,6 +586,11 @@ export async function GET(request: Request) {
       take,
       total: pendingTotal,
       hasMore: skip + pending.length < pendingTotal,
+    },
+    performance: {
+      lightweightMode,
+      threshold: LIGHTWEIGHT_THRESHOLD,
+      totalActiveCustomers,
     },
   });
 }

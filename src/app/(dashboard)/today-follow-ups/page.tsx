@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Bell,
@@ -124,6 +124,7 @@ type TodayResponse = {
   };
   sections: { urgent: number; today: number; recent: number; done: number };
   pagination: { skip: number; take: number; hasMore: boolean };
+  performance?: { lightweightMode: boolean; threshold: number; totalActiveCustomers: number };
 };
 
 type SortKey =
@@ -495,6 +496,8 @@ export default function TodayFollowUpsPage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [scheduledFilter, setScheduledFilter] = useState<ScheduledFilterKey>("all");
   const [scheduledCollapsed, setScheduledCollapsed] = useState(false);
+  const [lightweightMode, setLightweightMode] = useState(false);
+  const [totalActiveCustomers, setTotalActiveCustomers] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -503,16 +506,22 @@ export default function TodayFollowUpsPage() {
   const notifiedIds = useRef<Set<string>>(new Set());
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
-    setScheduled(data.scheduled);
+    if (reset || data.scheduled.length > 0) setScheduled(data.scheduled);
     setPending((current) => {
       const map = new Map((reset ? [] : current).map((customer) => [customer.id, customer]));
       for (const customer of data.pending) map.set(customer.id, { ...map.get(customer.id), ...customer });
       return Array.from(map.values());
     });
-    setDone(data.done);
-    setSummary(data.summary);
-    setSections(data.sections);
+    if (reset || data.done.length > 0) setDone(data.done);
+    if (reset || data.pagination.skip === 0) {
+      setSummary(data.summary);
+      setSections(data.sections);
+    }
     setHasMore(data.pagination.hasMore);
+    if (data.performance) {
+      setLightweightMode(Boolean(data.performance.lightweightMode));
+      setTotalActiveCustomers(data.performance.totalActiveCustomers);
+    }
   }, []);
 
   const loadPage = useCallback(
@@ -741,6 +750,11 @@ export default function TodayFollowUpsPage() {
         <Metric label="Calls done" value={summary.callsCompleted} icon={Phone} />
         <Metric label="Auto queued" value={summary.autoCreated} icon={Bell} tone="yellow" />
       </section>
+      {lightweightMode && (
+        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
+          Lightweight mode active for {totalActiveCustomers} active customers. Showing compact cards for faster loading and smoother scrolling.
+        </div>
+      )}
 
       <div className="sticky top-0 z-20 -mx-4 mt-4 space-y-3 border-y border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
         <label className="flex min-h-12 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
@@ -816,6 +830,22 @@ export default function TodayFollowUpsPage() {
             <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500 dark:border-slate-700 dark:bg-slate-900">
               No pending customers match this view.
             </div>
+          ) : lightweightMode ? (
+            <>
+              <CompactQueueSection
+                customers={pending}
+                total={summary.pending}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onQuickSave={quickSave}
+              />
+              <div ref={sentinelRef} className="h-4" />
+              {loadingMore && (
+                <div className="flex justify-center py-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
+                </div>
+              )}
+            </>
           ) : (
             <>
               <QueueSection
@@ -1216,6 +1246,109 @@ function badgeToneClass(tone: "blue" | "red" | "violet" | "amber" | "green" | "s
   }[tone];
   return classes;
 }
+
+function CompactQueueSection({
+  customers,
+  total,
+  selectedId,
+  onSelect,
+  onQuickSave,
+}: {
+  customers: QueueCustomer[];
+  total: number;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 dark:border-slate-800">
+        <div>
+          <h2 className="text-base font-bold">Operational Follow-up Queue</h2>
+          <p className="text-xs text-slate-500">Compact fast-loading view</p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+          {customers.length} / {total}
+        </span>
+      </div>
+      <div className="divide-y divide-slate-100 dark:divide-slate-800">
+        {customers.map((customer) => (
+          <CompactCustomerCard
+            key={customer.id}
+            customer={customer}
+            active={selectedId === customer.id}
+            onOpen={() => onSelect(customer.id)}
+            onQuickSave={onQuickSave}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const CompactCustomerCard = memo(function CompactCustomerCard({
+  customer,
+  active,
+  onOpen,
+  onQuickSave,
+}: {
+  customer: QueueCustomer;
+  active: boolean;
+  onOpen: () => void;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+}) {
+  const latest = latestFollowUp(customer);
+  const priority = customer.smartPriority ?? derivedPriority(customer);
+  const nextAt = customer.nextFollowupDate ?? latest?.nextFollowupDate ?? null;
+  const status = statusLabel(customer.optimisticStatus ?? latest?.status ?? customer.status);
+  return (
+    <article
+      onClick={onOpen}
+      className={cn(
+        "grid min-h-20 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-3 transition [contain-intrinsic-size:96px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_150px_150px_160px]",
+        active && "bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-950/30"
+      )}
+    >
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", priority === "URGENT" ? "bg-red-500" : priority === "HIGH" ? "bg-orange-500" : "bg-amber-400")} />
+          <h3 className="truncate text-sm font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+        </div>
+        <p className="mt-1 truncate text-xs font-semibold text-slate-500">{displayPhone(customer.contactNumber)}</p>
+      </div>
+      <div className="text-right sm:text-left">
+        <p className="text-sm font-extrabold">{formatCurrency(customer.outstandingBalance)}</p>
+        <p className="mt-1 text-[11px] font-semibold text-slate-500">{status}</p>
+      </div>
+      <div className="col-span-2 min-w-0 sm:col-span-1">
+        <p className="truncate text-xs font-bold text-slate-700 dark:text-slate-200">{followUpTimingLabel(nextAt, latest?.status === "PAYMENT_PROMISED")}</p>
+        <p className="mt-1 truncate text-[11px] text-slate-500">{formatDateTime(nextAt ?? latest?.followupDate)}</p>
+      </div>
+      <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen();
+          }}
+          className="min-h-10 rounded-lg bg-brand-600 px-3 text-xs font-bold text-white"
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onQuickSave(customer, "COMPLETED", "Marked completed from compact queue.");
+          }}
+          className="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700"
+        >
+          Done
+        </button>
+      </div>
+    </article>
+  );
+});
 
 function QueueSection({
   title,
