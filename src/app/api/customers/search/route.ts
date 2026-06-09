@@ -9,6 +9,7 @@ type CustomerSearchRow = {
   partyName: string;
   contactNumber: string;
   outstandingBalance: number;
+  geoAddress: string | null;
   lastFollowupDate: Date | null;
   nextFollowupDate: Date | null;
   staffVisits: { checkInAt: Date }[];
@@ -42,6 +43,7 @@ function serializeCustomer(customer: CustomerSearchRow, query: string) {
     partyName: customer.partyName,
     contactNumber: customer.contactNumber,
     outstandingBalance: customer.outstandingBalance,
+    geoAddress: customer.geoAddress,
     lastFollowupDate: customer.lastFollowupDate,
     nextFollowupDate: customer.nextFollowupDate,
     lastVisitDate: customer.staffVisits[0]?.checkInAt ?? null,
@@ -104,6 +106,7 @@ export async function GET(request: Request) {
         partyName: true,
         contactNumber: true,
         outstandingBalance: true,
+        geoAddress: true,
         lastFollowupDate: true,
         nextFollowupDate: true,
         staffVisits: {

@@ -23,6 +23,7 @@ type CustomerSuggestion = {
   partyName: string;
   contactNumber: string;
   outstandingBalance: number;
+  geoAddress?: string | null;
   lastFollowupDate: string | null;
   nextFollowupDate: string | null;
   lastVisitDate: string | null;
@@ -545,6 +546,15 @@ export default function FieldStaffPage() {
     reader.readAsDataURL(file);
   }
 
+  const selectCustomerForVisit = useCallback((customer: CustomerSuggestion) => {
+    setSelectedCustomer(customer);
+    setSearch(customer.partyName);
+    setCustomers([]);
+    setSearching(false);
+    setShowNewVisit(false);
+    setChequeVisit(null);
+  }, []);
+
   function toggleVisitOutcome(outcome: string) {
     setVisitOutcomes((current) => (current.includes(outcome) ? current.filter((item) => item !== outcome) : [...current, outcome]));
     setResult(outcome);
@@ -722,26 +732,42 @@ export default function FieldStaffPage() {
       setSearching(false);
       return;
     }
+    const query = search.trim();
+    if (selectedCustomer && query === selectedCustomer.partyName) {
+      setCustomers([]);
+      setSearching(false);
+      return;
+    }
+    let controller: AbortController | null = null;
     const timer = window.setTimeout(async () => {
-      const query = search.trim();
       const shouldLoadSource = activeCustomerSource !== "new_visit";
       if (query.length < 1 && !shouldLoadSource) {
         setCustomers([]);
+        setSearching(false);
         return;
       }
+      controller = new AbortController();
       setSearching(true);
       const params = new URLSearchParams({
         q: query,
         source: activeCustomerSource,
         limit: "10",
       });
-      const res = await fetch(`/api/customers/search?${params.toString()}`);
-      const data = await res.json();
-      setCustomers(data.customers ?? []);
-      setSearching(false);
-    }, 220);
-    return () => window.clearTimeout(timer);
-  }, [activeCustomerSource, isFieldWorker, search]);
+      try {
+        const res = await fetch(`/api/customers/search?${params.toString()}`, { signal: controller.signal });
+        const data = await res.json();
+        setCustomers(data.customers ?? []);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") setCustomers([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [activeCustomerSource, isFieldWorker, search, selectedCustomer]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 pb-28">
@@ -853,6 +879,16 @@ export default function FieldStaffPage() {
                 setChequeVisit(null);
                 if (activeCustomerSource === "new_visit") setActiveCustomerSource("recent");
               }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && customers[0]) {
+                  event.preventDefault();
+                  selectCustomerForVisit(customers[0]);
+                }
+                if (event.key === "Escape") {
+                  setCustomers([]);
+                  setSearching(false);
+                }
+              }}
               placeholder="Search customer, business, or mobile"
               className="min-h-12 w-full rounded-lg border py-3 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900"
             />
@@ -860,13 +896,16 @@ export default function FieldStaffPage() {
               <div className="absolute z-20 mt-2 max-h-96 w-full overflow-auto rounded-lg border bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
                 {searching && <p className="p-4 text-sm text-slate-500">Searching...</p>}
                 {customers.map((customer) => (
-                  <button key={customer.id} type="button" onClick={() => { setSelectedCustomer(customer); setSearch(customer.partyName); setCustomers([]); setShowNewVisit(false); }} className="w-full border-b px-4 py-3 text-left last:border-b-0 dark:border-slate-700">
+                  <button key={customer.id} type="button" onClick={() => selectCustomerForVisit(customer)} className="w-full border-b px-4 py-3 text-left last:border-b-0 dark:border-slate-700">
                     <div className="flex items-start justify-between gap-3">
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-semibold">{customer.partyName}</p>
-                        <p className="text-xs text-slate-500">{customer.contactNumber}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {customer.contactNumber}
+                          {customer.geoAddress ? ` | ${customer.geoAddress}` : ""}
+                        </p>
                       </div>
-                      <p className="text-sm font-bold">{money(customer.outstandingBalance)}</p>
+                      <p className="shrink-0 text-sm font-bold">{money(customer.outstandingBalance)}</p>
                     </div>
                     <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3">
                       <span>Last follow-up: {formatDateTime(customer.lastFollowupDate)}</span>
@@ -925,7 +964,7 @@ export default function FieldStaffPage() {
             <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-4 text-center">
               <p className="font-semibold">Customer not found</p>
               <button type="button" onClick={() => startNewVisit(search)} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white">
-                <UserPlus className="h-4 w-4" /> Start New Visit
+                <UserPlus className="h-4 w-4" /> Create New Customer
               </button>
             </div>
           )}
