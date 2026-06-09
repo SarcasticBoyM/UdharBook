@@ -22,6 +22,8 @@ type OrderRow = {
   activities?: { action: string; createdAt: string; user: { name: string; role: string } }[];
 };
 
+type CustomerMode = "existing" | "new";
+
 type CustomerSuggestion = {
   id: string;
   partyName: string;
@@ -134,6 +136,9 @@ export default function OrderDeskPage() {
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSuggestion[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
+  const [customerMode, setCustomerMode] = useState<CustomerMode>("existing");
+  const [newCustomer, setNewCustomer] = useState({ partyName: "", contactNumber: "", address: "", area: "", gstNumber: "", notes: "" });
+  const [duplicateCustomer, setDuplicateCustomer] = useState<CustomerSuggestion | null>(null);
   const [orderDetails, setOrderDetails] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [priority, setPriority] = useState("Normal");
@@ -193,8 +198,11 @@ export default function OrderDeskPage() {
   function openCreate() {
     setMessage("");
     setSelectedCustomer(null);
+    setCustomerMode("existing");
     setCustomerQuery("");
     setCustomerResults([]);
+    setNewCustomer({ partyName: "", contactNumber: "", address: "", area: "", gstNumber: "", notes: "" });
+    setDuplicateCustomer(null);
     setOrderDetails("");
     setDeliveryDate("");
     setPriority("Normal");
@@ -214,12 +222,21 @@ export default function OrderDeskPage() {
     setMessage("");
     const payload =
       editor.mode === "create"
-        ? {
-            customerId: selectedCustomer?.id,
-            orderDetails,
-            preferredDeliveryDate: datePayload(deliveryDate),
-            priority,
-          }
+        ? customerMode === "existing"
+          ? {
+              customerId: selectedCustomer?.id,
+              customerMode: "EXISTING_CUSTOMER",
+              orderDetails,
+              preferredDeliveryDate: datePayload(deliveryDate),
+              priority,
+            }
+          : {
+              customerMode: "NEW_CUSTOMER",
+              newCustomer,
+              orderDetails,
+              preferredDeliveryDate: datePayload(deliveryDate),
+              priority,
+            }
         : {
             orderId: editor.order?.id,
             action: "EDIT",
@@ -235,6 +252,9 @@ export default function OrderDeskPage() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (res.status === 409 && data.existingCustomer) {
+        setDuplicateCustomer(data.existingCustomer);
+      }
       setMessage(data.error ?? "Could not save order.");
       return;
     }
@@ -317,7 +337,12 @@ export default function OrderDeskPage() {
           <article key={order.id} className={`rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status)) ? "opacity-70" : ""}`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="font-bold">{order.customer.partyName}</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-bold">{order.customer.partyName}</h2>
+                  <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${order.sourceModule === "NEW_CUSTOMER_ORDER" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-700"}`}>
+                    {order.sourceModule === "NEW_CUSTOMER_ORDER" ? "New" : "Existing"}
+                  </span>
+                </div>
                 <p className="text-sm text-slate-500">{order.customer.contactNumber}</p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -377,26 +402,80 @@ export default function OrderDeskPage() {
             <div className="mt-4 space-y-3">
               {editor.mode === "create" && (
                 <div>
-                  <label className="text-sm font-semibold">Customer</label>
-                  <input value={customerQuery} onChange={(e) => { setCustomerQuery(e.target.value); setSelectedCustomer(null); }} placeholder="Search customer or mobile" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                  {selectedCustomer && <p className="mt-2 text-xs font-semibold text-emerald-700">Selected: {selectedCustomer.partyName} - {selectedCustomer.contactNumber}</p>}
-                  {!selectedCustomer && customerResults.length > 0 && (
-                    <div className="mt-2 max-h-48 overflow-auto rounded-lg border dark:border-slate-700">
-                      {customerResults.map((customer) => (
-                        <button
-                          key={customer.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedCustomer(customer);
-                            setCustomerQuery(`${customer.partyName} - ${customer.contactNumber}`);
-                            setCustomerResults([]);
-                          }}
-                          className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 dark:border-slate-700"
-                        >
-                          <span className="font-semibold">{customer.partyName}</span>
-                          <span className="block text-xs text-slate-500">{customer.contactNumber}</span>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-900">
+                    <button type="button" onClick={() => { setCustomerMode("existing"); setDuplicateCustomer(null); }} className={`min-h-10 rounded-md text-sm font-semibold ${customerMode === "existing" ? "bg-white text-brand-700 shadow-sm dark:bg-slate-800" : "text-slate-600 dark:text-slate-300"}`}>
+                      Existing Customer
+                    </button>
+                    <button type="button" onClick={() => { setCustomerMode("new"); setSelectedCustomer(null); setCustomerResults([]); }} className={`min-h-10 rounded-md text-sm font-semibold ${customerMode === "new" ? "bg-white text-brand-700 shadow-sm dark:bg-slate-800" : "text-slate-600 dark:text-slate-300"}`}>
+                      New Customer Order
+                    </button>
+                  </div>
+
+                  {customerMode === "existing" ? (
+                    <div className="mt-3">
+                      <label className="text-sm font-semibold">Customer</label>
+                      <input value={customerQuery} onChange={(e) => { setCustomerQuery(e.target.value); setSelectedCustomer(null); }} placeholder="Search customer or mobile" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                      {selectedCustomer && <p className="mt-2 text-xs font-semibold text-emerald-700">Selected: {selectedCustomer.partyName} - {selectedCustomer.contactNumber}</p>}
+                      {!selectedCustomer && customerResults.length > 0 && (
+                        <div className="mt-2 max-h-48 overflow-auto rounded-lg border dark:border-slate-700">
+                          {customerResults.map((customer) => (
+                            <button
+                              key={customer.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedCustomer(customer);
+                                setCustomerQuery(`${customer.partyName} - ${customer.contactNumber}`);
+                                setCustomerResults([]);
+                              }}
+                              className="block w-full border-b px-3 py-2 text-left text-sm last:border-b-0 dark:border-slate-700"
+                            >
+                              <span className="font-semibold">{customer.partyName}</span>
+                              <span className="block text-xs text-slate-500">{customer.contactNumber}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {!selectedCustomer && customerQuery.trim() && customerResults.length === 0 && (
+                        <button type="button" onClick={() => { setCustomerMode("new"); setNewCustomer((current) => ({ ...current, partyName: customerQuery.trim() })); }} className="mt-2 w-full rounded-lg border border-dashed border-brand-300 px-3 py-3 text-left text-sm font-semibold text-brand-700">
+                          Create new customer with &quot;{customerQuery.trim()}&quot;
                         </button>
-                      ))}
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="text-sm font-semibold">Customer Name *</label>
+                          <input value={newCustomer.partyName} onChange={(e) => setNewCustomer((current) => ({ ...current, partyName: e.target.value }))} placeholder="Fresh customer name" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                        </div>
+                        <div>
+                          <label className="text-sm font-semibold">Contact Number *</label>
+                          <input value={newCustomer.contactNumber} onChange={(e) => setNewCustomer((current) => ({ ...current, contactNumber: e.target.value }))} placeholder="Mobile number" inputMode="tel" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                        </div>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <input value={newCustomer.area} onChange={(e) => setNewCustomer((current) => ({ ...current, area: e.target.value }))} placeholder="Area / Location" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                        <input value={newCustomer.gstNumber} onChange={(e) => setNewCustomer((current) => ({ ...current, gstNumber: e.target.value }))} placeholder="GST optional" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                      </div>
+                      <input value={newCustomer.address} onChange={(e) => setNewCustomer((current) => ({ ...current, address: e.target.value }))} placeholder="Address optional" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                      <textarea value={newCustomer.notes} onChange={(e) => setNewCustomer((current) => ({ ...current, notes: e.target.value }))} placeholder="Customer notes optional" rows={2} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+                      {duplicateCustomer && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                          Existing customer found: <strong>{duplicateCustomer.partyName}</strong> - {duplicateCustomer.contactNumber}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCustomer(duplicateCustomer);
+                              setCustomerQuery(`${duplicateCustomer.partyName} - ${duplicateCustomer.contactNumber}`);
+                              setCustomerMode("existing");
+                              setDuplicateCustomer(null);
+                            }}
+                            className="mt-2 block rounded-md bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
+                          >
+                            Use Existing Customer
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -425,7 +504,7 @@ export default function OrderDeskPage() {
               <button type="button" onClick={() => setEditor(null)} className="rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold dark:border-slate-700">
                 Cancel
               </button>
-              <button type="button" onClick={submitEditor} disabled={!orderDetails.trim() || (editor.mode === "create" && !selectedCustomer)} className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              <button type="button" onClick={submitEditor} disabled={!orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
                 Save Order
               </button>
             </div>

@@ -5,13 +5,23 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
+import { normalizePhone } from "@/lib/phone";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
 const legacyReceivedStatus = "PENDING" as OrderStatus;
 
 const createSchema = z.object({
-  customerId: z.string().min(1),
+  customerId: z.string().min(1).optional(),
+  customerMode: z.enum(["EXISTING_CUSTOMER", "NEW_CUSTOMER"]).optional(),
+  newCustomer: z.object({
+    partyName: z.string().trim().min(1),
+    contactNumber: z.string().trim().min(1),
+    address: z.string().trim().optional(),
+    area: z.string().trim().optional(),
+    gstNumber: z.string().trim().optional(),
+    notes: z.string().trim().optional(),
+  }).optional(),
   orderDetails: z.string().trim().min(1),
   preferredDeliveryDate: z.string().optional().nullable(),
   priority: prioritySchema.default("Normal"),
@@ -129,12 +139,24 @@ function clientOrderError(error: unknown) {
   if (error instanceof z.ZodError) return `Invalid order data: ${error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`;
   if (!(error instanceof Error)) return String(error);
   if (error.message === "CUSTOMER_NOT_FOUND") return "Customer was not found for this shop.";
+  if (error.message === "CUSTOMER_REQUIRED") return "Select an existing customer or enter a new customer name and contact number.";
+  if (error.message === "DUPLICATE_CUSTOMER") return "A customer with this contact number already exists. Use the existing customer or change the contact number.";
   if (error.message === "INVALID_DATE") return "Preferred delivery date is invalid.";
   if (error.message.includes("invalid input value for enum") || error.message.includes("Invalid enum value")) {
     return "Order status setup is not fully migrated. Saved using backward-compatible order status.";
   }
   if (error.message.includes("OrderActivity")) return "Order activity tracking is not fully migrated yet. Order data was preserved.";
   return error.message || "Could not save order.";
+}
+
+function freshCustomerNotes(input: NonNullable<z.infer<typeof createSchema>["newCustomer"]>) {
+  return [
+    input.notes,
+    input.area ? `Area: ${input.area}` : "",
+    input.address ? `Address: ${input.address}` : "",
+    input.gstNumber ? `GST: ${input.gstNumber}` : "",
+    "Source: New customer order",
+  ].filter(Boolean).join("\n");
 }
 
 async function recordOrderActivitySafe(input: {
@@ -326,11 +348,43 @@ export async function POST(request: Request) {
       priority: payload?.priority ?? null,
     });
     const body = createSchema.parse(payload);
+    if (!body.customerId && !body.newCustomer) throw new Error("CUSTOMER_REQUIRED");
     const preferredDeliveryDate = parseOptionalDate(body.preferredDeliveryDate);
     const order = await prisma.$transaction(async (tx) => {
-      logger.info("order_create_transaction_start", { requestId, shopId, userId: session.id, role: session.role, customerId: body.customerId });
-      const customer = await tx.customer.findFirst({ where: { id: body.customerId, shopId }, select: { id: true } });
-      if (!customer) throw new Error("CUSTOMER_NOT_FOUND");
+      logger.info("order_create_transaction_start", { requestId, shopId, userId: session.id, role: session.role, customerId: body.customerId ?? null, hasNewCustomer: Boolean(body.newCustomer) });
+      let customer: { id: string };
+      let orderSource = "EXISTING_CUSTOMER";
+      if (body.customerId) {
+        const existingCustomer = await tx.customer.findFirst({ where: { id: body.customerId, shopId }, select: { id: true } });
+        if (!existingCustomer) throw new Error("CUSTOMER_NOT_FOUND");
+        customer = existingCustomer;
+      } else if (body.newCustomer) {
+        const contactNumber = normalizePhone(body.newCustomer.contactNumber);
+        const sameContact = await tx.customer.findFirst({
+          where: { shopId, contactNumber },
+          select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true },
+        });
+        if (sameContact) {
+          const error = new Error("DUPLICATE_CUSTOMER");
+          Object.assign(error, { existingCustomer: sameContact });
+          throw error;
+        }
+        customer = await tx.customer.create({
+          data: {
+            shopId,
+            partyName: body.newCustomer.partyName.trim().replace(/\s+/g, " "),
+            contactNumber,
+            outstandingBalance: 0,
+            status: "CLEARED",
+            geoAddress: [body.newCustomer.area, body.newCustomer.address].filter(Boolean).join(", ") || undefined,
+            notes: freshCustomerNotes(body.newCustomer),
+          },
+          select: { id: true },
+        });
+        orderSource = "NEW_CUSTOMER";
+      } else {
+        throw new Error("CUSTOMER_REQUIRED");
+      }
 
       const created = await tx.order.create({
         data: {
@@ -341,8 +395,8 @@ export async function POST(request: Request) {
           preferredDeliveryDate,
           priority: body.priority,
           status: legacyReceivedStatus,
-          sourceModule: "ORDER_DESK",
-          visitSource: "Order Desk",
+          sourceModule: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "NEW_CUSTOMER_ORDER" : "ORDER_DESK",
+          visitSource: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "New Customer Order" : "Order Desk",
         },
       });
       await tx.activityLog.create({
@@ -351,7 +405,7 @@ export async function POST(request: Request) {
           userId: session.id,
           customerId: customer.id,
           action: "order_created",
-          details: "Order created from Order Desk",
+          details: orderSource === "NEW_CUSTOMER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
         },
       });
       logger.info("order_create_transaction_success", { requestId, shopId, userId: session.id, orderId: created.id, status: created.status });
@@ -364,7 +418,7 @@ export async function POST(request: Request) {
       userId: session.id,
       action: "CREATED",
       newStatus: order.status,
-      notes: "Order created from Order Desk",
+      notes: order.sourceModule === "NEW_CUSTOMER_ORDER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
     });
     return NextResponse.json({ order }, { status: 201 });
   } catch (error) {
@@ -376,7 +430,10 @@ export async function POST(request: Request) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return NextResponse.json({ error: clientOrderError(error) }, { status: 400 });
+    const existingCustomer = error instanceof Error && "existingCustomer" in error
+      ? (error as Error & { existingCustomer?: unknown }).existingCustomer
+      : undefined;
+    return NextResponse.json({ error: clientOrderError(error), existingCustomer }, { status: error instanceof Error && error.message === "DUPLICATE_CUSTOMER" ? 409 : 400 });
   }
 }
 
