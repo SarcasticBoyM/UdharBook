@@ -22,6 +22,7 @@ const createSchema = z.object({
   collectionDateTime: z.string().datetime(),
   collectionNotes: z.string().optional(),
   staffVisitId: z.string().optional(),
+  depositedAccountId: z.string().optional(),
   collectionLatitude: z.number().min(-90).max(90).optional(),
   collectionLongitude: z.number().min(-180).max(180).optional(),
   collectionAccuracy: z.number().optional(),
@@ -504,8 +505,20 @@ export async function POST(request: Request) {
     if (body.staffVisitId && !linkedVisit) {
       return NextResponse.json({ error: "Linked visit not found for this customer" }, { status: 404 });
     }
-    if (linkedVisit && (!["STAFF", "FIELD_SALES"].includes(session.role) || linkedVisit.staffId !== session.id || linkedVisit.status !== "CHECKED_IN")) {
+    if (linkedVisit && !["CHECKED_IN", "COMPLETED"].includes(linkedVisit.status)) {
+      return NextResponse.json({ error: "Linked visit cannot accept cheque collection" }, { status: 403 });
+    }
+    if (linkedVisit && ["STAFF", "FIELD_SALES"].includes(session.role) && linkedVisit.staffId !== session.id) {
       return NextResponse.json({ error: "Linked visit cannot be modified by this user" }, { status: 403 });
+    }
+    const depositAccount = body.depositedAccountId
+      ? await prisma.chequeDepositAccount.findFirst({
+          where: { id: body.depositedAccountId, shopId, isActive: true },
+          select: { id: true, bankName: true, accountName: true, lastFourDigits: true },
+        })
+      : null;
+    if (body.depositedAccountId && !depositAccount) {
+      return NextResponse.json({ error: "Deposit bank not found" }, { status: 404 });
     }
 
     const cheque = await prisma.$transaction(async (tx) => {
@@ -521,6 +534,8 @@ export async function POST(request: Request) {
           accountHolderName: body.accountHolderName,
           collectedById: session.id,
           staffVisitId: body.staffVisitId,
+          depositedAccountId: depositAccount?.id,
+          depositBankAccount: depositAccount ? `${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined,
           collectionLatitude: body.collectionLatitude,
           collectionLongitude: body.collectionLongitude,
           collectionAccuracy: body.collectionAccuracy,
@@ -576,8 +591,7 @@ export async function POST(request: Request) {
         await tx.staffVisit.update({
           where: { id: linkedVisit.id },
           data: {
-            visitType: "Cheque Pickup",
-            result: "Cheque collected",
+            paymentMode: "Cheque Collected",
             notes: [
               linkedVisit.notes,
               `Cheque collected: ${body.chequeNumber} | ${body.bankName} | ${body.amount}`,

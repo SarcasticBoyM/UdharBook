@@ -89,6 +89,14 @@ type StaffStatus = {
   } | null;
 };
 
+type DepositAccount = {
+  id: string;
+  accountName: string;
+  bankName: string;
+  lastFourDigits: string;
+  isActive: boolean;
+};
+
 type GpsState = "idle" | "checking" | "active" | "denied" | "timeout" | "unsupported" | "error";
 type CustomerSource = "recent" | "pending_recovery" | "today_followup" | "high_amount" | "new_visit";
 
@@ -114,7 +122,6 @@ const visitOutcomeOptions = [
   "Payment Collected",
   "Payment Promised",
   "Order Received",
-  "Cheque Collected",
   "Follow-up Later",
   "Customer Unavailable",
   "Not Reachable",
@@ -187,10 +194,6 @@ function isOrderReceived(visitType: string, result: string) {
   return ["Sales Visit", "New Lead Visit", "Prospect Visit", "Payment Collection", "Recovery Follow-up"].includes(visitType) && result === "Order Received";
 }
 
-function isPaymentCollection(visitType: string) {
-  return visitType === "Payment Collection";
-}
-
 function needsNextFollowup(result: string) {
   return followUpRequiredOutcomes.has(result);
 }
@@ -208,7 +211,8 @@ function isOrderOutcome(visitType: string, result: string, outcomes: string[]) {
 }
 
 function isPaymentOutcome(visitType: string, outcomes: string[]) {
-  return isPaymentCollection(visitType) || outcomes.some((outcome) => ["Payment Collected", "Partial Payment", "Paid Fully", "Cheque Collected"].includes(outcome));
+  void visitType;
+  return outcomes.some((outcome) => ["Payment Collected", "Partial Payment", "Paid Fully"].includes(outcome));
 }
 
 function needsNextFollowupOutcome(result: string, outcomes: string[]) {
@@ -571,7 +575,7 @@ export default function FieldStaffPage() {
         orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
         orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
         orderPriority: hasOrder ? orderPriority || undefined : undefined,
-        paymentMode: hasPayment || visitOutcomes.includes("Cheque Collected") ? (visitOutcomes.includes("Cheque Collected") ? "Cheque Collected" : paymentMode) : undefined,
+        paymentMode: hasPayment ? paymentMode : undefined,
         paymentReference: hasPayment && paymentMode === "NEFT / RTGS" ? paymentReference || undefined : undefined,
         paymentBankName: hasPayment && paymentMode === "NEFT / RTGS" ? paymentBankName || undefined : undefined,
         paymentScreenshotUrl: hasPayment && paymentMode === "NEFT / RTGS" ? paymentScreenshotUrl || undefined : undefined,
@@ -581,7 +585,7 @@ export default function FieldStaffPage() {
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
         notes,
-        recoveryAmount: hasPayment && paymentMode !== "Cheque Collected" || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+        recoveryAmount: (hasPayment && paymentMode !== "Cheque Collected") || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
         nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
         }),
       });
@@ -590,7 +594,7 @@ export default function FieldStaffPage() {
         setMessage(data.error ?? "Could not save visit.");
         return;
       }
-      const needsCheque = visitOutcomes.includes("Cheque Collected") || paymentMode === "Cheque Collected";
+      const needsCheque = hasPayment && paymentMode === "Cheque Collected";
       setChequeVisit(needsCheque ? data.visit : null);
       setShowChequeFlow(needsCheque);
       setSelectedCustomer(null);
@@ -1253,6 +1257,8 @@ function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
 
 function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () => void }) {
   const [imageDataUrl, setImageDataUrl] = useState("");
+  const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1264,6 +1270,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
     branch: "",
     chequeDate: "",
     accountHolderName: visit.customer.partyName,
+    depositedAccountId: "",
     notes: "",
     micrCode: "",
     ifscCode: "",
@@ -1276,7 +1283,34 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
     Number(form.amount) > 0 &&
     form.bankName.trim() &&
     form.chequeDate &&
-    form.accountHolderName.trim();
+    form.accountHolderName.trim() &&
+    form.depositedAccountId;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDepositAccounts() {
+      setAccountsLoading(true);
+      const res = await fetch("/api/cheque-deposit-accounts");
+      const data = await res.json().catch(() => ({}));
+      const accounts = (data.accounts ?? []) as DepositAccount[];
+      if (cancelled) return;
+      setDepositAccounts(accounts);
+      setForm((current) => ({
+        ...current,
+        depositedAccountId: current.depositedAccountId || accounts[0]?.id || "",
+      }));
+      setAccountsLoading(false);
+    }
+    loadDepositAccounts().catch(() => {
+      if (!cancelled) {
+        setDepositAccounts([]);
+        setAccountsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function setField(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1351,6 +1385,8 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
         accountHolderName: form.accountHolderName.trim(),
         collectionDateTime: new Date().toISOString(),
         collectionNotes: form.notes || `Collected during field visit ${visit.id}`,
+        staffVisitId: visit.id,
+        depositedAccountId: form.depositedAccountId,
         frontImageUrl: imageDataUrl || undefined,
         micrCode: form.micrCode || undefined,
         ifscCode: form.ifscCode || undefined,
@@ -1374,6 +1410,7 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
       branch: "",
       chequeDate: "",
       accountHolderName: visit.customer.partyName,
+      depositedAccountId: depositAccounts[0]?.id || "",
       notes: "",
       micrCode: "",
       ifscCode: "",
@@ -1413,15 +1450,37 @@ function VisitChequeCollection({ visit, onSaved }: { visit: Visit; onSaved: () =
       {error && <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">{error}</p>}
 
       <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <Input label="Cheque number" value={form.chequeNumber} onChange={(value) => setField("chequeNumber", value)} required />
-        <Input label="Amount" value={form.amount} onChange={(value) => setField("amount", value)} inputMode="decimal" required />
-        <Input label="Bank" value={form.bankName} onChange={(value) => setField("bankName", value)} required />
-        <Input label="Branch" value={form.branch} onChange={(value) => setField("branch", value)} />
+        <Input label="Bank Name" value={form.bankName} onChange={(value) => setField("bankName", value)} required />
+        <Input label="Cheque Number" value={form.chequeNumber} onChange={(value) => setField("chequeNumber", value)} required />
         <Input label="Cheque date" type="date" value={form.chequeDate} onChange={(value) => setField("chequeDate", value)} required />
+        <Input label="Amount" value={form.amount} onChange={(value) => setField("amount", value)} inputMode="decimal" required />
+        <label className="text-sm">
+          <span className="mb-1 block font-medium">Deposit Bank *</span>
+          <select
+            value={form.depositedAccountId}
+            onChange={(event) => setField("depositedAccountId", event.target.value)}
+            className="min-h-12 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900"
+            disabled={accountsLoading || depositAccounts.length === 0}
+          >
+            {accountsLoading ? <option>Loading deposit banks...</option> : null}
+            {!accountsLoading && depositAccounts.length === 0 ? <option>No active deposit banks</option> : null}
+            {depositAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.bankName} - {account.accountName} - {account.lastFourDigits}
+              </option>
+            ))}
+          </select>
+        </label>
         <Input label="Account holder" value={form.accountHolderName} onChange={(value) => setField("accountHolderName", value)} required />
+        <Input label="Branch" value={form.branch} onChange={(value) => setField("branch", value)} />
         <Input label="MICR" value={form.micrCode} onChange={(value) => setField("micrCode", value)} />
         <Input label="IFSC" value={form.ifscCode} onChange={(value) => setField("ifscCode", value)} />
       </div>
+      {!accountsLoading && depositAccounts.length === 0 && (
+        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">
+          Add an active deposit bank in Cheque Collections before saving this cheque.
+        </p>
+      )}
       <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} placeholder="Cheque notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
       <button type="button" onClick={saveCheque} disabled={saving || !canSave} className="mt-3 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
         {saving ? "Saving cheque..." : "Save Cheque to Recovery Desk"}
