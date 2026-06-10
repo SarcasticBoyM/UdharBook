@@ -12,6 +12,7 @@ import { canViewReports } from "@/lib/permissions";
 import { isSalesRole } from "@/lib/operational-roles";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
+const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
 
 const createSchema = z.object({
   customerId: z.string(),
@@ -37,25 +38,33 @@ const createSchema = z.object({
   ocrEditedFields: z.record(z.boolean()).optional(),
 });
 
+function businessDayRange(date = new Date(), offsetMinutes = INDIA_TIMEZONE_OFFSET_MINUTES) {
+  const shifted = new Date(date.getTime() + offsetMinutes * 60_000);
+  const startUtc = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+  const start = new Date(startUtc - offsetMinutes * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { start, end };
+}
+
 function startOfToday() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return businessDayRange().start;
 }
 
 function endOfToday() {
-  const date = new Date();
-  date.setHours(23, 59, 59, 999);
-  return date;
+  return businessDayRange().end;
 }
 
 function asDate(value: string | null, end = false) {
   if (!value) return undefined;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  if (end) date.setHours(23, 59, 59, 999);
-  else date.setHours(0, 0, 0, 0);
-  return date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    const localMidnightUtc = Date.UTC(year, month - 1, day) - INDIA_TIMEZONE_OFFSET_MINUTES * 60_000;
+    const start = new Date(localMidnightUtc);
+    return end ? new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1) : start;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return end ? businessDayRange(parsed).end : businessDayRange(parsed).start;
 }
 
 function asNumber(value: string | null) {
@@ -417,6 +426,28 @@ export async function GET(request: Request) {
     ]);
 
   const rows = items.map(chequeRow);
+  if (quick === "due_today") {
+    const chequeDateMatches = await prisma.cheque.findMany({
+      where: { shopId, chequeDate: { gte: todayStart, lte: todayEnd } },
+      select: { id: true, chequeDate: true, status: true },
+      take: 5,
+    });
+    console.info("cheque_due_today_filter", {
+      todayStart: todayStart.toISOString(),
+      todayEnd: todayEnd.toISOString(),
+      resultCount: total,
+      sampleChequeDateMatches: chequeDateMatches.map((item) => ({
+        id: item.id,
+        chequeDate: item.chequeDate.toISOString(),
+        status: item.status,
+      })),
+      sampleChequeDates: items.slice(0, 5).map((item) => ({
+        id: item.id,
+        chequeDate: item.chequeDate.toISOString(),
+        status: item.status,
+      })),
+    });
+  }
   if (format === "xlsx") {
     const buffer = await chequesToExcel(rows);
     return new NextResponse(buffer, {

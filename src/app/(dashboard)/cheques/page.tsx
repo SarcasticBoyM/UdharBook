@@ -197,15 +197,12 @@ const tabs: { label: string; value: ChequeStatus | "ALL" }[] = [
 ];
 
 const quickFilters = [
+  { label: "All Cheques", value: "all" },
   { label: "Deposit Due Today", value: "due_today" },
   { label: "Pending Deposit", value: "pending" },
   { label: "Deposited", value: "deposited" },
   { label: "Bounced", value: "bounced" },
   { label: "Returned", value: "returned" },
-  { label: "Cleared", value: "cleared" },
-  { label: "Overdue Deposit", value: "overdue" },
-  { label: "Collected Today", value: "today" },
-  { label: "High Amount", value: "high" },
 ];
 
 const statusTone: Record<ChequeStatus, string> = {
@@ -390,7 +387,7 @@ function StatCard({
 
 export default function ChequeCollectionsPage() {
   const [activeStatus, setActiveStatus] = useState<ChequeStatus | "ALL">("ALL");
-  const [quick, setQuick] = useState("");
+  const [quick, setQuick] = useState("all");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [batchTag, setBatchTag] = useState("");
@@ -442,7 +439,7 @@ export default function ChequeCollectionsPage() {
   const params = useMemo(() => {
     const search = new URLSearchParams();
     if (activeStatus !== "ALL") search.set("status", activeStatus);
-    if (quick) search.set("quick", quick);
+    if (quick && quick !== "all") search.set("quick", quick);
     if (debouncedQuery) search.set("q", debouncedQuery);
     if (batchTag.trim()) search.set("batchTag", batchTag.trim());
     if (staffId) search.set("staffId", staffId);
@@ -722,7 +719,7 @@ export default function ChequeCollectionsPage() {
       setCustomers([]);
       setFormOpen(false);
       setActiveStatus("ALL");
-      setQuick("");
+      setQuick("all");
       loadCheques();
     } else {
       const error = await res.json().catch(() => ({}));
@@ -744,7 +741,7 @@ export default function ChequeCollectionsPage() {
 
   const resetFilters = () => {
     setActiveStatus("ALL");
-    setQuick("");
+    setQuick("all");
     setQuery("");
     setDebouncedQuery("");
     setBatchTag("");
@@ -1117,7 +1114,10 @@ export default function ChequeCollectionsPage() {
                 <button
                   key={filter.value}
                   type="button"
-                  onClick={() => setQuick((current) => (current === filter.value ? "" : filter.value))}
+                  onClick={() => {
+                    setQuick(filter.value);
+                    setActiveStatus("ALL");
+                  }}
                   className={cn(
                     "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
                     quick === filter.value
@@ -1139,7 +1139,7 @@ export default function ChequeCollectionsPage() {
                 <SlidersHorizontal className="h-4 w-4" />
                 Advanced Filters
               </button>
-              {(quick || activeStatus !== "ALL" || query || batchTag || staffId || accountFilter || from || to) && (
+              {((quick && quick !== "all") || activeStatus !== "ALL" || query || batchTag || staffId || accountFilter || from || to) && (
                 <button type="button" onClick={resetFilters} className="min-h-10 rounded-lg border px-3 text-sm">
                   Reset
                 </button>
