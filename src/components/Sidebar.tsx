@@ -53,9 +53,9 @@ const links: SidebarLink[] = [
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
   { href: "/reports", label: "All Reports", icon: FileBarChart, adminOnly: true, section: "Reports" },
-  { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator, adminOnly: true, section: "Owner Tools" },
   { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true, section: "Business Profile" },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true, section: "Admin" },
+  { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator, adminOnly: true, section: "Owner Tools" },
   { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true, section: "Platform" },
 ];
 
@@ -107,7 +107,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
 
   const sidebarContent = (mobile = false) => (
     <>
-      <div className="border-b border-slate-200 p-4 dark:border-slate-700 md:p-5">
+      <div className={cn("shrink-0 border-b border-slate-200 p-4 dark:border-slate-700 md:p-5", mobile && "pt-[max(1rem,env(safe-area-inset-top))]")}>
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-600 text-white">
             <WalletCards className="h-5 w-5" />
@@ -131,7 +131,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
           )}
         </div>
       </div>
-      <nav className="flex-1 space-y-1 p-3">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 pb-4">
         {navLinks.map(({ href, label, icon: Icon, section }, index) => (
           <div key={href}>
             {section && section !== "Main" && section !== navLinks[index - 1]?.section && (
@@ -159,7 +159,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
           </div>
         ))}
       </nav>
-      <div className="space-y-1 border-t border-slate-200 p-3 dark:border-slate-700">
+      <div className="shrink-0 space-y-1 border-t border-slate-200 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-slate-700">
         <button
           type="button"
           onClick={toggle}
@@ -213,7 +213,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
             onClick={() => setMobileOpen(false)}
           />
           <aside
-            className="fixed inset-y-0 left-0 z-50 flex w-[min(86vw,20rem)] shrink-0 flex-col border-r border-slate-200 bg-white shadow-2xl transition-transform duration-200 ease-out dark:border-slate-700 dark:bg-slate-900 md:hidden"
+            className="fixed left-0 top-0 z-50 flex h-[100dvh] max-h-[100dvh] w-[min(86vw,20rem)] min-h-0 shrink-0 flex-col border-r border-slate-200 bg-white shadow-2xl transition-transform duration-200 ease-out dark:border-slate-700 dark:bg-slate-900 md:hidden"
             onClick={(event) => event.stopPropagation()}
           >
             {sidebarContent(true)}
