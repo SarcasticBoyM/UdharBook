@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
     const shopId = requireShopId(request, session);
-    const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
+    const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
     const result = await prisma.$transaction(async (tx) => {
@@ -121,6 +121,7 @@ export async function GET(request: Request) {
 
   let where: Record<string, unknown> = {
     shopId,
+    isArchived: false,
     outstandingBalance: { gt: 0 },
     NOT: { status: "CLEARED" },
   };
@@ -143,6 +144,7 @@ export async function GET(request: Request) {
       where: {
         shopId,
         scheduledAt: { gte: from, lte: to },
+        customer: { isArchived: false },
       },
       include: { customer: true, createdBy: { select: { name: true } } },
       orderBy: { scheduledAt: "asc" },

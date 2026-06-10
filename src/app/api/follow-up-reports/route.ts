@@ -342,6 +342,7 @@ export async function GET(request: Request) {
   const staffId = searchParams.get("staffId") || undefined;
   const customer = searchParams.get("customer")?.trim();
   const batchTag = searchParams.get("batchTag")?.trim();
+  const includeArchived = searchParams.get("includeArchived") === "true";
   const status = searchParams.get("status") || undefined;
   const outcome = searchParams.get("outcome")?.trim();
   const minAmount = Number(searchParams.get("minAmount") || "");
@@ -359,6 +360,7 @@ export async function GET(request: Request) {
 
   const customerWhere: Prisma.CustomerWhereInput = {
     shopId,
+    ...(includeArchived ? {} : { isArchived: false }),
     ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     ...(customer
       ? {
@@ -475,7 +477,13 @@ export async function GET(request: Request) {
         _sum: { amount: true },
       }),
       prisma.customer.aggregate({
-        where: { shopId, ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}), outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+        where: {
+          shopId,
+          ...(includeArchived ? {} : { isArchived: false }),
+          ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+          outstandingBalance: { gt: 0 },
+          NOT: { status: "CLEARED" },
+        },
         _sum: { outstandingBalance: true },
         _count: { id: true },
       }),

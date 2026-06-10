@@ -73,7 +73,7 @@ export async function GET(request: Request) {
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 
   const customers = await prisma.customer.findMany({
-    where: { shopId },
+    where: { shopId, isArchived: false },
     include: { followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } } },
   });
   const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0 && !CLOSED_FOLLOW_UP_STATUSES.has(c.followUps[0]?.status ?? ""));

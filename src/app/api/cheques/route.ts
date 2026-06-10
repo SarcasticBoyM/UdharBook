@@ -379,6 +379,7 @@ export async function GET(request: Request) {
   const quick = searchParams.get("quick") || "all";
   const format = searchParams.get("format");
   const report = searchParams.get("report");
+  const includeArchived = searchParams.get("includeArchived") === "true";
   const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
   const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const isTrackerReport = report === "tracker";
@@ -425,6 +426,9 @@ export async function GET(request: Request) {
   }
 
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
+  if ((report || format) && !includeArchived) {
+    conditions.push({ customer: { is: { isArchived: false } } });
+  }
   if (!canViewReports(session.role) && format) {
     return NextResponse.json({ error: "This role cannot export cheque reports" }, { status: 403 });
   }
@@ -579,6 +583,7 @@ export async function GET(request: Request) {
           to: searchParams.get("to") || null,
           minAmount: searchParams.get("minAmount") || null,
           maxAmount: searchParams.get("maxAmount") || null,
+          includeArchived,
         },
         rawWhere,
         generatedWhereClause: filteredWhere,
@@ -610,6 +615,7 @@ export async function GET(request: Request) {
         to: searchParams.get("to") || null,
         minAmount: searchParams.get("minAmount") || null,
         maxAmount: searchParams.get("maxAmount") || null,
+        includeArchived,
       },
       where,
       quick,
@@ -625,6 +631,7 @@ export async function GET(request: Request) {
         to: to?.toISOString() ?? null,
         minAmount: minAmount ?? null,
         maxAmount: maxAmount ?? null,
+        includeArchived,
       },
       timezone: {
         offsetMinutes: INDIA_TIMEZONE_OFFSET_MINUTES,
@@ -654,6 +661,7 @@ export async function GET(request: Request) {
           hasTo: Boolean(to),
           hasMinAmount: minAmount !== undefined,
           hasMaxAmount: maxAmount !== undefined,
+          includeArchived,
         },
       });
     }
@@ -823,7 +831,7 @@ export async function POST(request: Request) {
   try {
     const shopId = requireShopId(request, session);
     const body = createSchema.parse(await request.json());
-    const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId } });
+    const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
     const linkedVisit = body.staffVisitId
       ? await prisma.staffVisit.findFirst({

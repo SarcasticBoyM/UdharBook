@@ -71,6 +71,7 @@ export async function GET(
   const from = safeDate(searchParams.get("from"));
   const to = safeDate(searchParams.get("to"), true);
   const batchTag = searchParams.get("batchTag")?.trim();
+  const includeArchived = searchParams.get("includeArchived") === "true";
   const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
   const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } });
@@ -80,23 +81,26 @@ export async function GET(
     type,
     shopId,
     role: session.role,
-    incomingFilters: {
-      format,
-      from: searchParams.get("from") || null,
-      to: searchParams.get("to") || null,
-      batchTag: batchTag || null,
-    },
-    normalizedFilters: {
-      from: from?.toISOString() ?? null,
-      to: to?.toISOString() ?? null,
-      batchTag: batchTag || null,
-    },
+      incomingFilters: {
+        format,
+        from: searchParams.get("from") || null,
+        to: searchParams.get("to") || null,
+        batchTag: batchTag || null,
+        includeArchived,
+      },
+      normalizedFilters: {
+        from: from?.toISOString() ?? null,
+        to: to?.toISOString() ?? null,
+        batchTag: batchTag || null,
+        includeArchived,
+      },
   });
 
   if (type === "outstanding") {
-    const rawWhere: Prisma.CustomerWhereInput = { shopId };
+    const rawWhere: Prisma.CustomerWhereInput = { shopId, ...(includeArchived ? {} : { isArchived: false }) };
     const where: Prisma.CustomerWhereInput = {
       shopId,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...(isolateMode ? {} : {
         ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
         outstandingBalance: { gt: 0 },
@@ -110,10 +114,11 @@ export async function GET(
           enabled: true,
           isolateMode,
           session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
-          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null, includeArchived },
           rawWhere,
           generatedWhereClause: {
             shopId,
+            ...(includeArchived ? {} : { isArchived: false }),
             ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
             outstandingBalance: { gt: 0 },
             NOT: { status: "CLEARED" },
@@ -173,7 +178,7 @@ export async function GET(
     const where: Prisma.FollowUpWhereInput = {
       shopId,
       ...(isolateMode ? {} : {
-        ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
+        customer: { is: { ...(includeArchived ? {} : { isArchived: false }), ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}) } },
         ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
       }),
     };
@@ -189,7 +194,7 @@ export async function GET(
     const rawCount = debugMode ? await prisma.followUp.count({ where: rawWhere }) : undefined;
     const generatedWhere: Prisma.FollowUpWhereInput = {
       shopId,
-      ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
+      customer: { is: { ...(includeArchived ? {} : { isArchived: false }), ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}) } },
       ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
     };
     const runtimeDebug = debugMode
@@ -197,7 +202,7 @@ export async function GET(
           enabled: true,
           isolateMode,
           session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
-          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null, includeArchived },
           rawWhere,
           generatedWhereClause: generatedWhere,
           effectiveWhereClause: where,
@@ -247,9 +252,10 @@ export async function GET(
   }
 
   if (type === "aging") {
-    const rawWhere: Prisma.CustomerWhereInput = { shopId };
+    const rawWhere: Prisma.CustomerWhereInput = { shopId, ...(includeArchived ? {} : { isArchived: false }) };
     const where: Prisma.CustomerWhereInput = {
       shopId,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...(isolateMode ? {} : {
         ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
         outstandingBalance: { gt: 0 },
@@ -263,10 +269,11 @@ export async function GET(
           enabled: true,
           isolateMode,
           session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
-          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null, includeArchived },
           rawWhere,
           generatedWhereClause: {
             shopId,
+            ...(includeArchived ? {} : { isArchived: false }),
             ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
             outstandingBalance: { gt: 0 },
             NOT: { status: "CLEARED" },

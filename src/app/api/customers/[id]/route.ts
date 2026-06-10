@@ -8,6 +8,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 
 const updateSchema = z.object({
+  action: z.enum(["archive", "restore"]).optional(),
   partyName: z.string().min(1).optional(),
   contactNumber: z.string().min(1).optional(),
   outstandingBalance: z.number().min(0).optional(),
@@ -53,11 +54,11 @@ export async function GET(
       cheques: {
         orderBy: { createdAt: "desc" },
         include: {
-          collectedBy: { select: { name: true, role: true } },
-          depositedBy: { select: { name: true, role: true } },
+          collectedBy: { select: { name: true } },
+          depositedBy: { select: { name: true } },
           activities: {
             orderBy: { createdAt: "desc" },
-            include: { user: { select: { name: true, role: true } } },
+            include: { user: { select: { name: true } } },
             take: 10,
           },
         },
@@ -66,7 +67,7 @@ export async function GET(
         orderBy: { checkInAt: "desc" },
         take: 20,
         include: {
-          staff: { select: { name: true, role: true } },
+          staff: { select: { name: true } },
           photos: { orderBy: { createdAt: "desc" }, take: 4 },
         },
       },
@@ -88,25 +89,45 @@ export async function PATCH(
   try {
     const body = updateSchema.parse(await request.json());
     const shopId = requireShopId(request, session);
+    if (body.action === "archive" || body.action === "restore") {
+      if (!canManageCustomers(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      const customer = await prisma.customer.updateMany({
+        where: { id, shopId },
+        data: body.action === "archive"
+          ? { isArchived: true, archivedAt: new Date(), archivedById: session.id, nextFollowupDate: null }
+          : { isArchived: false, archivedAt: null, archivedById: null },
+      });
+      if (!customer.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      await logActivity({
+        action: body.action === "archive" ? "customer_archived" : "customer_restored",
+        userId: session.id,
+        shopId,
+        customerId: id,
+      });
+      const updated = await prisma.customer.findFirst({ where: { id, shopId } });
+      return NextResponse.json(updated);
+    }
+    const customerUpdate = { ...body };
+    delete customerUpdate.action;
     const balanceStatus =
-      body.outstandingBalance === undefined
+      customerUpdate.outstandingBalance === undefined
         ? undefined
-        : body.outstandingBalance <= 0
+        : customerUpdate.outstandingBalance <= 0
           ? "CLEARED"
-          : body.status === "CLEARED"
+          : customerUpdate.status === "CLEARED"
             ? "PENDING"
-            : body.status;
+            : customerUpdate.status;
     const data = {
-      ...body,
-      contactNumber: body.contactNumber ? normalizePhone(body.contactNumber) : undefined,
-      status: balanceStatus ?? body.status,
+      ...customerUpdate,
+      contactNumber: customerUpdate.contactNumber ? normalizePhone(customerUpdate.contactNumber) : undefined,
+      status: balanceStatus ?? customerUpdate.status,
       nextFollowupDate:
-        body.outstandingBalance !== undefined && body.outstandingBalance <= 0
+        customerUpdate.outstandingBalance !== undefined && customerUpdate.outstandingBalance <= 0
           ? null
-          : body.nextFollowupDate === null
+          : customerUpdate.nextFollowupDate === null
           ? null
-          : body.nextFollowupDate
-            ? new Date(body.nextFollowupDate)
+          : customerUpdate.nextFollowupDate
+            ? new Date(customerUpdate.nextFollowupDate)
             : undefined,
     };
 
@@ -137,6 +158,11 @@ export async function DELETE(
 
   const { id } = await params;
   const shopId = requireShopId(request, session);
-  await prisma.customer.deleteMany({ where: { id, shopId } });
-  return NextResponse.json({ ok: true });
+  const customer = await prisma.customer.updateMany({
+    where: { id, shopId },
+    data: { isArchived: true, archivedAt: new Date(), archivedById: session.id, nextFollowupDate: null },
+  });
+  if (!customer.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await logActivity({ action: "customer_archived", userId: session.id, shopId, customerId: id });
+  return NextResponse.json({ ok: true, action: "archived" });
 }

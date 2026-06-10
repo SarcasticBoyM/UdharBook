@@ -309,6 +309,9 @@ model Customer {
   notes              String?
   totalCallsMade     Int            @default(0)
   balanceAsOfDate    DateTime       @default(now())
+  isArchived         Boolean        @default(false)
+  archivedAt         DateTime?
+  archivedById       String?
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   followUps          FollowUp[]
@@ -339,6 +342,7 @@ model Customer {
   @@index([shopId, lastFollowupDate])
   @@index([shopId, updatedAt])
   @@index([shopId, status])
+  @@index([shopId, isArchived])
 }
 
 model StaffLocation {

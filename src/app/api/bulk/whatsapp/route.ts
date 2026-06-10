@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
     const shopId = requireShopId(request, session);
     const customers = await prisma.customer.findMany({
-      where: { shopId, id: { in: body.customerIds } },
+      where: { shopId, isArchived: false, id: { in: body.customerIds } },
     });
 
     const links = customers.map((c) => ({

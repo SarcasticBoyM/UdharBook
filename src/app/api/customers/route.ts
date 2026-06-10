@@ -55,6 +55,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status");
   const batchTag = searchParams.get("batchTag")?.trim();
   const view = searchParams.get("view") ?? "active";
+  const includeArchived = searchParams.get("includeArchived") === "true";
   const sort = searchParams.get("sort") ?? "balance";
   const order = searchParams.get("order") === "asc" ? "asc" : "desc";
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
@@ -80,6 +81,7 @@ export async function GET(request: Request) {
 
   const where: Prisma.CustomerWhereInput = {
     shopId,
+    ...(view === "archived" ? { isArchived: true } : includeArchived ? {} : { isArchived: false }),
     ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     ...(status ? { status: status as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
     ...(searchOr.length ? { OR: searchOr } : {}),
@@ -155,6 +157,11 @@ export async function DELETE(request: Request) {
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
   const shopId = requireShopId(request, session);
-  await prisma.customer.deleteMany({ where: { id, shopId } });
-  return NextResponse.json({ ok: true });
+  const customer = await prisma.customer.updateMany({
+    where: { id, shopId },
+    data: { isArchived: true, archivedAt: new Date(), archivedById: session.id, nextFollowupDate: null },
+  });
+  if (!customer.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await logActivity({ action: "customer_archived", userId: session.id, shopId, customerId: id });
+  return NextResponse.json({ ok: true, action: "archived" });
 }

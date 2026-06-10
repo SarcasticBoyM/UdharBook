@@ -350,6 +350,7 @@ export async function GET(request: Request) {
 
   const activeBaseWhere: Prisma.CustomerWhereInput = {
     shopId,
+    isArchived: false,
     ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     outstandingBalance: { gt: 0 },
     NOT: { status: "CLEARED" },
@@ -404,6 +405,7 @@ export async function GET(request: Request) {
     prisma.customer.findMany({
       where: {
         shopId,
+        isArchived: false,
         ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
         ...databaseSearch(search),
         followUps: {
@@ -430,7 +432,7 @@ export async function GET(request: Request) {
     where: {
       shopId,
       status: { notIn: CLOSED_STATUSES },
-      customer: { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      customer: { isArchived: false, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
       OR: [
         { manualReminder: true },
         { reminderEnabled: true },

@@ -193,7 +193,7 @@ export async function POST(request: Request) {
     const visit = await prisma.$transaction(async (tx) => {
       let customer = body.customerId
         ? await tx.customer.findFirst({
-            where: { id: body.customerId, shopId },
+            where: { id: body.customerId, shopId, isArchived: false },
             select: { id: true, latitude: true, longitude: true },
           })
         : null;
@@ -205,7 +205,7 @@ export async function POST(request: Request) {
         }
         const phone = normalizePhone(body.mobileNumber) || temporaryLeadPhone();
         const existingLead = await tx.customer.findFirst({
-          where: { shopId, contactNumber: phone, batchTag: null },
+          where: { shopId, contactNumber: phone, batchTag: null, isArchived: false },
           select: { id: true },
         });
         const createdCustomer = existingLead

@@ -15,6 +15,9 @@ type CustomerDetail = {
   partyName: string;
   contactNumber: string;
   batchTag: string | null;
+  isArchived: boolean;
+  archivedAt: string | null;
+  archivedById: string | null;
   outstandingBalance: number;
   status: string;
   notes: string | null;
@@ -69,15 +72,15 @@ type CustomerDetail = {
     collectionDateTime: string;
     depositDateTime: string | null;
     bounceReason: string | null;
-    collectedBy: { name: string; role: string };
-    depositedBy: { name: string; role: string } | null;
+    collectedBy: { name: string; role?: string };
+    depositedBy: { name: string; role?: string } | null;
     activities: {
       id: string;
       type: string;
       toStatus: string | null;
       notes: string | null;
       createdAt: string;
-      user: { name: string; role: string };
+      user: { name: string; role?: string };
     }[];
   }[];
   staffVisits: {
@@ -98,7 +101,7 @@ type CustomerDetail = {
     orderExpectedDelivery: string | null;
     recoveryAmount: number;
     travelKm: number;
-    staff: { name: string; role: string };
+    staff: { name: string; role?: string };
     photos: { id: string; url: string; fileType: string | null; createdAt: string }[];
   }[];
 };
@@ -164,6 +167,21 @@ export default function CustomerDetailPage() {
     }
   };
 
+  const setArchiveState = async (action: "archive" | "restore") => {
+    const confirmed =
+      action === "archive"
+        ? window.confirm("Archive this customer? They will be hidden from active follow-ups, orders, cheques, and recovery workflows.")
+        : window.confirm("Restore this customer to active operations?");
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/customers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    if (res.ok) load();
+  };
+
   if (!customer) {
     return <p className="text-slate-500">Loading…</p>;
   }
@@ -192,6 +210,11 @@ export default function CustomerDetailPage() {
               {customer.batchTag}
             </span>
           )}
+          {customer.isArchived && (
+            <span className="mt-2 mr-2 inline-block rounded-full bg-slate-200 px-3 py-1 text-sm font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+              Archived
+            </span>
+          )}
           <span
             className={cn(
               "mt-2 inline-block rounded-full px-3 py-1 text-sm",
@@ -202,13 +225,29 @@ export default function CustomerDetailPage() {
           </span>
         </div>
         {!isReadOnlySales && (
-          <button
-            type="button"
-            onClick={() => setShowModal(true)}
-            className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            Quick Follow-up
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {!customer.isArchived && (
+              <button
+                type="button"
+                onClick={() => setShowModal(true)}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Quick Follow-up
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setArchiveState(customer.isArchived ? "restore" : "archive")}
+              className={cn(
+                "rounded-lg border px-4 py-2 text-sm font-semibold",
+                customer.isArchived
+                  ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  : "border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              )}
+            >
+              {customer.isArchived ? "Restore Customer" : "Archive Customer"}
+            </button>
+          </div>
         )}
       </div>
 
@@ -236,15 +275,26 @@ export default function CustomerDetailPage() {
               <dt className="text-slate-500">Created</dt>
               <dd>{formatDate(customer.createdAt)}</dd>
             </div>
+            {customer.isArchived && (
+              <div className="flex justify-between">
+                <dt className="text-slate-500">Archived</dt>
+                <dd>{formatDate(customer.archivedAt)}</dd>
+              </div>
+            )}
           </dl>
-          <div className="mt-4">
+          {!customer.isArchived && <div className="mt-4">
             <CallActions
               partyName={customer.partyName}
               contactNumber={customer.contactNumber}
               balance={customer.outstandingBalance}
               dueDate={customer.nextFollowupDate}
             />
-          </div>
+          </div>}
+          {customer.isArchived && (
+            <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              This customer is archived. History is preserved, but new follow-ups, orders, and cheque entries are disabled from active workflows.
+            </p>
+          )}
           {customer.notes && (
             <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">
               <strong>Notes:</strong> {customer.notes}
@@ -533,7 +583,7 @@ export default function CustomerDetailPage() {
         </ul>
       </div>
 
-      {showModal && !isReadOnlySales && (
+      {showModal && !isReadOnlySales && !customer.isArchived && (
         <FollowUpModal
           customerId={customer.id}
           customerName={customer.partyName}

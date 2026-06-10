@@ -73,7 +73,7 @@ const REMINDER_ALLOWED_STATUSES: FollowUpStatus[] = [
 ];
 
 export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUpInput) {
-  const customer = await tx.customer.findFirst({ where: { id: input.customerId, shopId: input.shopId } });
+  const customer = await tx.customer.findFirst({ where: { id: input.customerId, shopId: input.shopId, isArchived: false } });
   if (!customer) throw new Error("CUSTOMER_NOT_FOUND");
 
   const isClosedFollowUp = CLOSED_FOLLOW_UP_STATUSES.includes(input.status);

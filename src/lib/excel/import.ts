@@ -153,13 +153,13 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string, o
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       const batchStartedAt = Date.now();
       const batch = batches[batchIndex];
-      const updates: Array<(typeof batch)[number] & { customerId: string; assignBatchTag: boolean }> = [];
+      const updates: Array<(typeof batch)[number] & { customerId: string; assignBatchTag: boolean; reactivateArchived: boolean }> = [];
       const creates: Array<(typeof batch)[number] & { contactNumber: string; duplicateName: boolean }> = [];
 
       for (const row of batch) {
         const match = findExistingLedgerMatch(existingLookup, row.nameKey, row.contactNumber, batchTag);
         if (match) {
-          updates.push({ ...row, customerId: match.id, assignBatchTag: Boolean(batchTag && !match.batchTag) });
+          updates.push({ ...row, customerId: match.id, assignBatchTag: Boolean(batchTag && !match.batchTag), reactivateArchived: Boolean(match.isArchived) });
           continue;
         }
         if (row.outstandingBalance <= 0) {
@@ -191,6 +191,9 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string, o
                 outstandingBalance: row.outstandingBalance,
                 status: row.outstandingBalance <= 0 ? "CLEARED" : "PENDING",
                 nextFollowupDate: row.outstandingBalance <= 0 ? null : undefined,
+                isArchived: false,
+                archivedAt: null,
+                archivedById: null,
                 ...(row.assignBatchTag ? { batchTag } : {}),
               },
             })
@@ -337,18 +340,18 @@ function importErrorMessage(error: unknown) {
 async function loadExistingCustomerLookup(shopId: string) {
   const customers = await prisma.customer.findMany({
     where: { shopId },
-    select: { id: true, partyName: true, contactNumber: true, batchTag: true },
+    select: { id: true, partyName: true, contactNumber: true, batchTag: true, isArchived: true },
   });
-  const byName = new Map<string, Array<{ id: string; batchTag: string | null; contactNumber: string }>>();
-  const byContact = new Map<string, Array<{ id: string; batchTag: string | null; nameKey: string }>>();
+  const byName = new Map<string, Array<{ id: string; batchTag: string | null; contactNumber: string; isArchived: boolean }>>();
+  const byContact = new Map<string, Array<{ id: string; batchTag: string | null; nameKey: string; isArchived: boolean }>>();
   const contactNumbers = new Set<string>();
   customers.forEach((customer) => {
     const key = normalizeNameKey(customer.partyName);
     const matches = byName.get(key) ?? [];
-    matches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber });
+    matches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber, isArchived: customer.isArchived });
     byName.set(key, matches);
     const contactMatches = byContact.get(customer.contactNumber) ?? [];
-    contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key });
+    contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key, isArchived: customer.isArchived });
     byContact.set(customer.contactNumber, contactMatches);
     contactNumbers.add(customer.contactNumber);
   });
@@ -366,7 +369,7 @@ function findExistingLedgerMatch(
   const contactMatches = contactNumber ? lookup.byContact.get(contactNumber) ?? [] : [];
   const globalCandidates = [
     ...nameMatches,
-    ...contactMatches.map((match) => ({ id: match.id, batchTag: match.batchTag, contactNumber: contactNumber ?? "" })),
+    ...contactMatches.map((match) => ({ id: match.id, batchTag: match.batchTag, contactNumber: contactNumber ?? "", isArchived: match.isArchived })),
   ].filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
 
   const sameTag = globalCandidates.find((candidate) => batchTagKey(candidate.batchTag) === targetTagKey);
@@ -442,15 +445,15 @@ async function createImportedCustomer(input: {
 
 function addCustomerToLookup(
   lookup: Awaited<ReturnType<typeof loadExistingCustomerLookup>>,
-  customer: { id: string; partyName: string; contactNumber: string; batchTag: string | null },
+  customer: { id: string; partyName: string; contactNumber: string; batchTag: string | null; isArchived?: boolean },
 ) {
   const key = normalizeNameKey(customer.partyName);
   const nameMatches = lookup.byName.get(key) ?? [];
-  nameMatches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber });
+  nameMatches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber, isArchived: Boolean(customer.isArchived) });
   lookup.byName.set(key, nameMatches);
 
   const contactMatches = lookup.byContact.get(customer.contactNumber) ?? [];
-  contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key });
+  contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key, isArchived: Boolean(customer.isArchived) });
   lookup.byContact.set(customer.contactNumber, contactMatches);
   lookup.contactNumbers.add(customer.contactNumber);
 }

@@ -10,8 +10,8 @@ import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
-type CustomerView = "active" | "inactive" | "all" | "pending";
-type CustomerWithBatch = Customer & { batchTag?: string | null };
+type CustomerView = "active" | "inactive" | "all" | "pending" | "archived";
+type CustomerWithBatch = Customer & { batchTag?: string | null; isArchived?: boolean; archivedAt?: string | Date | null; archivedById?: string | null };
 
 export default function CustomersPage() {
   const [items, setItems] = useState<CustomerWithBatch[]>([]);
@@ -88,6 +88,28 @@ export default function CustomersPage() {
     window.location.href = "/api/reports/outstanding?format=xlsx";
   };
 
+  const setArchiveState = async (customerId: string, action: "archive" | "restore") => {
+    const confirmed =
+      action === "archive"
+        ? window.confirm("Archive this customer? They will be hidden from active follow-ups, orders, cheques, and recovery workflows.")
+        : window.confirm("Restore this customer to active operations?");
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/customers/${customerId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    if (res.ok) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(customerId);
+        return next;
+      });
+      load();
+    }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -95,7 +117,15 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold">Customers</h1>
           <p className="text-slate-500">
             {loading ? "Loading…" : `${total} customer${total === 1 ? "" : "s"} shown`}
-            {view === "active" ? " (active dues)" : view === "inactive" ? " (inactive / zero balance)" : view === "pending" ? " (with outstanding balance)" : ""}
+            {view === "active"
+              ? " (active dues)"
+              : view === "inactive"
+                ? " (inactive / zero balance)"
+                : view === "pending"
+                  ? " (with outstanding balance)"
+                  : view === "archived"
+                    ? " (archived customers)"
+                    : ""}
           </p>
         </div>
         {!isReadOnlySales && (
@@ -130,6 +160,7 @@ export default function CustomersPage() {
           <option value="inactive">Inactive / Zero Balance Customers</option>
           <option value="all">Show All</option>
           <option value="pending">Pending payments only</option>
+          <option value="archived">Archived Customers</option>
         </select>
         <input
           placeholder="Search name, phone, or location..."
@@ -222,19 +253,22 @@ export default function CustomersPage() {
             ) : (
               items.map((c) => {
                 const inactive = c.outstandingBalance <= 0 || c.status === "CLEARED";
+                const archived = Boolean(c.isArchived);
                 return (
                 <tr
                   key={c.id}
                   className={cn(
                     "border-t border-slate-100 dark:border-slate-800",
                     followupRowClass(c.status, c.nextFollowupDate),
-                    inactive && "bg-slate-50 text-slate-500 opacity-75 dark:bg-slate-900/50"
+                    inactive && "bg-slate-50 text-slate-500 opacity-75 dark:bg-slate-900/50",
+                    archived && "bg-slate-100 text-slate-500 opacity-75 dark:bg-slate-900"
                   )}
                 >
                   <td className="p-3">
                     <input
                       type="checkbox"
                       checked={selected.has(c.id)}
+                      disabled={archived}
                       onChange={() => toggleSelect(c.id)}
                     />
                   </td>
@@ -246,6 +280,11 @@ export default function CustomersPage() {
                       {c.batchTag && (
                         <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">
                           {c.batchTag}
+                        </span>
+                      )}
+                      {archived && (
+                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                          Archived
                         </span>
                       )}
                     </div>
@@ -269,20 +308,34 @@ export default function CustomersPage() {
                   </td>
                   <td className="p-3">
                     <div className="flex flex-col gap-2">
-                      <CallActions
-                        partyName={c.partyName}
-                        contactNumber={c.contactNumber}
-                        balance={c.outstandingBalance}
-                        dueDate={c.nextFollowupDate}
-                        compact
-                      />
-                      {!isReadOnlySales && (
+                      {!archived && (
+                        <CallActions
+                          partyName={c.partyName}
+                          contactNumber={c.contactNumber}
+                          balance={c.outstandingBalance}
+                          dueDate={c.nextFollowupDate}
+                          compact
+                        />
+                      )}
+                      {!isReadOnlySales && !archived && (
                         <button
                           type="button"
                           onClick={() => setFollowUpId(c.id)}
                           className="text-left text-xs text-brand-600 hover:underline"
                         >
                           Quick Follow-up
+                        </button>
+                      )}
+                      {!isReadOnlySales && (
+                        <button
+                          type="button"
+                          onClick={() => setArchiveState(c.id, archived ? "restore" : "archive")}
+                          className={cn(
+                            "text-left text-xs hover:underline",
+                            archived ? "text-emerald-700" : "text-slate-500"
+                          )}
+                        >
+                          {archived ? "Restore Customer" : "Archive Customer"}
                         </button>
                       )}
                     </div>

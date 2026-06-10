@@ -352,13 +352,13 @@ export async function POST(request: Request) {
       let customer: { id: string };
       let orderSource = "EXISTING_CUSTOMER";
       if (body.customerId) {
-        const existingCustomer = await tx.customer.findFirst({ where: { id: body.customerId, shopId }, select: { id: true } });
+        const existingCustomer = await tx.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false }, select: { id: true } });
         if (!existingCustomer) throw new Error("CUSTOMER_NOT_FOUND");
         customer = existingCustomer;
       } else if (body.newCustomer) {
         const contactNumber = normalizePhone(body.newCustomer.contactNumber);
         const sameContact = await tx.customer.findFirst({
-          where: { shopId, contactNumber },
+          where: { shopId, contactNumber, isArchived: false },
           select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true },
         });
         if (sameContact) {

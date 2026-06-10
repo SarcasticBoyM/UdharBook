@@ -74,6 +74,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const query = (searchParams.get("q") ?? searchParams.get("search") ?? "").trim();
     const source = (searchParams.get("source") ?? "").trim();
+    const includeArchived = searchParams.get("includeArchived") === "true";
     const limit = Math.min(10, Math.max(1, Number(searchParams.get("limit") ?? 10)));
     const shopId = requireShopId(request, session);
     const phoneQuery = query.replace(/\D/g, "");
@@ -93,6 +94,7 @@ export async function GET(request: Request) {
 
     const where: Prisma.CustomerWhereInput = {
       shopId,
+      ...(includeArchived ? {} : { isArchived: false }),
       ...sourceWhere,
       ...(query
         ? {
