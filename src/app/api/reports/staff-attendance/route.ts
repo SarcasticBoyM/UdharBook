@@ -29,6 +29,15 @@ type StaffRow = {
   currentStatus: "ACTIVE" | "IDLE" | "OFFLINE" | "LOGGED_OUT";
 };
 
+type SimpleAttendanceRow = {
+  id: string;
+  staffId: string;
+  workDate: Date;
+  startedAt: Date;
+  endedAt: Date | null;
+  status: string;
+};
+
 function startOfDay(date: Date) {
   const value = new Date(date);
   value.setHours(0, 0, 0, 0);
@@ -229,14 +238,14 @@ export async function GET(request: Request) {
     });
     return 0;
   });
+  const simpleRawRows: SimpleAttendanceRow[] = await prisma.attendance.findMany({
+    where: rawAttendanceWhere,
+    select: { id: true, staffId: true, workDate: true, startedAt: true, endedAt: true, status: true },
+    orderBy: { startedAt: "desc" },
+    take: 500,
+  });
 
   if (isolateMode) {
-    const rawRows = await prisma.attendance.findMany({
-      where: rawAttendanceWhere,
-      select: { id: true, staffId: true, workDate: true, startedAt: true, endedAt: true, status: true },
-      orderBy: { startedAt: "desc" },
-      take: 100,
-    });
     const debug = {
       enabled: true,
       isolateMode,
@@ -259,10 +268,28 @@ export async function GET(request: Request) {
       generatedWhereClause: filteredAttendanceWhere,
       effectiveWhereClause: rawAttendanceWhere,
       rawAttendanceCount,
-      returnedRawRows: rawRows.length,
+      returnedRawRows: simpleRawRows.length,
     };
     console.info("staff_attendance_runtime_isolation_debug", debug);
-    return NextResponse.json({ success: true, range: { from, to, label }, debug, rawRows });
+    return NextResponse.json({ success: true, range: { from, to, label }, debug, rawRows: simpleRawRows });
+  }
+
+  if (!format) {
+    const summary = {
+      staffPresentToday: simpleRawRows.length,
+      activeInField: simpleRawRows.filter((row) => row.status === "ACTIVE").length,
+      totalVisits: 0,
+      ordersTakenToday: 0,
+      paymentsCollectedToday: 0,
+      pendingStaffCheckouts: 0,
+    };
+    console.info("staff_attendance_simple_response", {
+      shopId,
+      rawAttendanceCount,
+      returnedRawRows: simpleRawRows.length,
+      reason: "Temporary simple attendance response while aggregation/rendering mismatch is isolated",
+    });
+    return NextResponse.json({ success: true, range: { from, to, label }, rows: [], rawRows: simpleRawRows, summary });
   }
 
   console.info("staff_attendance_report_query", {

@@ -69,9 +69,18 @@ type StaffAttendanceRow = {
   gpsActiveStatus: string;
   currentStatus: "ACTIVE" | "IDLE" | "OFFLINE" | "LOGGED_OUT";
 };
+type SimpleAttendanceRow = {
+  id: string;
+  staffId: string;
+  workDate: string;
+  startedAt: string;
+  endedAt: string | null;
+  status: string;
+};
 type StaffAttendanceResponse = {
   success: boolean;
   rows: StaffAttendanceRow[];
+  rawRows?: SimpleAttendanceRow[];
   summary: {
     staffPresentToday: number;
     activeInField: number;
@@ -253,7 +262,7 @@ export default function ReportsPage() {
         if (!response.ok) {
           throw new Error(typeof payload === "string" ? payload : payload?.error ?? "Attendance report request failed");
         }
-        if (!payload || !Array.isArray(payload.rows)) {
+        if (!payload || (!Array.isArray(payload.rows) && !Array.isArray(payload.rawRows))) {
           throw new Error("Attendance report returned an invalid response shape");
         }
         return payload as StaffAttendanceResponse;
@@ -263,9 +272,10 @@ export default function ReportsPage() {
         setAttendanceData(payload);
         console.info("reports_attendance_query_result", {
           renderedCount: payload.rows.length,
+          rawRows: payload.rawRows?.length ?? 0,
           summary: payload.summary,
         });
-        if (payload.rows.length === 0) {
+        if (payload.rows.length === 0 && !payload.rawRows?.length) {
           console.info("reports_attendance_empty_state", {
             reason: "No staff matched current filters",
             params: Object.fromEntries(attendanceParams.entries()),
@@ -323,6 +333,8 @@ export default function ReportsPage() {
     params.set("format", format);
     window.open(`/api/reports/staff-attendance?${params.toString()}`, "_blank");
   };
+  const attendanceRawRows = attendanceData?.rawRows ?? [];
+  const showRawAttendanceFallback = !attendanceLoading && !attendanceError && !attendanceData?.rows.length && attendanceRawRows.length > 0;
 
   return (
     <div className="mx-auto max-w-7xl pb-16">
@@ -555,6 +567,30 @@ export default function ReportsPage() {
                 <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
               ) : attendanceError ? (
                 <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{attendanceError}</td></tr>
+              ) : showRawAttendanceFallback ? (
+                <>
+                  <tr className="bg-amber-50 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                    <td colSpan={14} className="px-3 py-2">Showing simplified attendance rows while detailed metrics are unavailable.</td>
+                  </tr>
+                  {attendanceRawRows.map((row) => (
+                    <tr key={row.id} className="border-t border-slate-200 dark:border-slate-800">
+                      <td className="px-3 py-2 font-semibold">{row.staffId}</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">{formatDate(row.startedAt)}</td>
+                      <td className="px-3 py-2">{formatDate(row.endedAt)}</td>
+                      <td className="px-3 py-2">{formatDate(row.workDate)}</td>
+                      <td className="px-3 py-2">{formatDate(row.endedAt ?? row.startedAt)}</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">-</td>
+                      <td className="px-3 py-2">{statusLabel(row.status)}</td>
+                    </tr>
+                  ))}
+                </>
               ) : attendanceData?.rows.length ? (
                 attendanceData.rows.map((row) => (
                   <tr key={row.staffId} className="border-t border-slate-200 dark:border-slate-800">
@@ -584,6 +620,24 @@ export default function ReportsPage() {
               <p className="py-6 text-center text-sm text-slate-500">Loading attendance report...</p>
             ) : attendanceError ? (
               <p className="py-6 text-center text-sm text-red-600">{attendanceError}</p>
+            ) : showRawAttendanceFallback ? (
+              attendanceRawRows.map((row) => (
+                <article key={row.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold">{row.staffId}</h3>
+                      <p className="text-sm text-slate-500">{formatDate(row.workDate)}</p>
+                    </div>
+                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{statusLabel(row.status)}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <Info label="Start Time" value={formatDate(row.startedAt)} />
+                    <Info label="End Time" value={formatDate(row.endedAt)} />
+                    <Info label="Staff ID" value={row.staffId} />
+                    <Info label="Status" value={statusLabel(row.status)} />
+                  </div>
+                </article>
+              ))
             ) : attendanceData?.rows.length ? (
               attendanceData.rows.map((row) => (
                 <article key={row.staffId} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
