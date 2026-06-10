@@ -518,6 +518,8 @@ export async function GET(request: Request) {
   if (!format) {
     console.info("cheque_filter_query", {
       report: report || null,
+      shopId,
+      role: session.role,
       incomingFilters: {
         status: rawStatus || null,
         q: q || null,
@@ -626,6 +628,7 @@ export async function GET(request: Request) {
       bankName ? `Bank: ${bankName}` : "",
       staffId ? "Collected by selected staff" : "",
       depositedAccountId ? "Deposit account selected" : "",
+      batchTag ? `Batch/Firm: ${batchTag}` : "",
       from ? `From: ${from.toISOString().slice(0, 10)}` : "",
       to ? `To: ${to.toISOString().slice(0, 10)}` : "",
       minAmount !== undefined ? `Min amount: ${minAmount}` : "",
@@ -633,17 +636,17 @@ export async function GET(request: Request) {
     ].filter(Boolean);
     try {
       const html = printableHtml(rows, {
-          shopName: shop?.shopName ?? "UdharBook",
-          title: reportTitle,
-          filters,
-          summary: {
+        shopName: shop?.shopName ?? "UdharBook",
+        title: reportTitle,
+        filters,
+        summary: {
           "Total Cheques": total,
           "Total Amount": filteredTotalAmount,
           "Pending Clearance": filteredPendingAmount,
           "Cleared Amount": clearedAmount,
           "Bounced Amount": bouncedAmount,
-          },
-        });
+        },
+      });
       console.info("cheque_pdf_report_generated", {
         report: report || null,
         rowCount: rows.length,
