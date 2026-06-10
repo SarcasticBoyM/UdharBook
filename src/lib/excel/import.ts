@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { ImportSummary } from "@/types";
+import { batchTagKey, normalizeBatchTag } from "@/lib/batch-tags";
 
 const PLACEHOLDER_PREFIX = "NO-PH-";
 const IMPORT_BATCH_SIZE = 50;
@@ -17,15 +18,6 @@ function normalizeName(name: string): string {
 
 function normalizeNameKey(name: string): string {
   return normalizeName(name).toLowerCase();
-}
-
-function normalizeBatchTag(tag?: string | null) {
-  const normalized = tag?.trim().replace(/\s+/g, " ").slice(0, 40);
-  return normalized || null;
-}
-
-function tagKey(tag?: string | null) {
-  return normalizeBatchTag(tag)?.toLowerCase() ?? "__untagged__";
 }
 
 /** Stable placeholder when Excel has no usable contact number. */
@@ -150,6 +142,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string, o
       shopId,
       lookupNames: existingLookup.byName.size,
       existingCustomers: existingLookup.contactNumbers.size,
+      batchTag,
       durationMs: Date.now() - startedAt,
       memoryMb: memorySnapshotMb(),
     });
@@ -224,6 +217,22 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string, o
         const batchDuplicateNameCreated = creates
           .filter((row, index) => row.duplicateName && createResults[index].status === "fulfilled")
           .length;
+
+        updateResults.forEach((result, index) => {
+          if (result.status === "fulfilled" && updates[index].assignBatchTag) {
+            updateCustomerLookupTag(existingLookup, updates[index].customerId, batchTag);
+          }
+        });
+        createResults.forEach((result) => {
+          if (result.status === "fulfilled") {
+            addCustomerToLookup(existingLookup, {
+              id: result.value.id,
+              partyName: result.value.partyName,
+              contactNumber: result.value.contactNumber,
+              batchTag: result.value.batchTag,
+            });
+          }
+        });
 
         updateResults.forEach((result, index) => {
           if (result.status === "rejected") {
@@ -362,7 +371,7 @@ function findExistingLedgerMatch(
   contactNumber: string | null,
   batchTag: string | null,
 ) {
-  const targetTagKey = tagKey(batchTag);
+  const targetTagKey = batchTagKey(batchTag);
   const nameMatches = lookup.byName.get(nameKey) ?? [];
   const contactMatches = contactNumber ? lookup.byContact.get(contactNumber) ?? [] : [];
   const candidates = [
@@ -370,16 +379,52 @@ function findExistingLedgerMatch(
     ...contactMatches.map((match) => ({ id: match.id, batchTag: match.batchTag, contactNumber: contactNumber ?? "" })),
   ].filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
 
-  const sameTag = candidates.find((candidate) => tagKey(candidate.batchTag) === targetTagKey);
+  const sameTag = candidates.find((candidate) => batchTagKey(candidate.batchTag) === targetTagKey);
   if (sameTag) return sameTag;
 
   if (batchTag) {
     const untagged = candidates.filter((candidate) => !candidate.batchTag);
     if (untagged.length === 1) return untagged[0];
+    logger.info("customer_import_separate_ledger_required", {
+      nameKey,
+      contactNumber,
+      uploadedBatchTag: batchTag,
+      candidateTags: candidates.map((candidate) => candidate.batchTag ?? null),
+    });
     return null;
   }
 
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+function addCustomerToLookup(
+  lookup: Awaited<ReturnType<typeof loadExistingCustomerLookup>>,
+  customer: { id: string; partyName: string; contactNumber: string; batchTag: string | null },
+) {
+  const key = normalizeNameKey(customer.partyName);
+  const nameMatches = lookup.byName.get(key) ?? [];
+  nameMatches.push({ id: customer.id, batchTag: customer.batchTag, contactNumber: customer.contactNumber });
+  lookup.byName.set(key, nameMatches);
+
+  const contactMatches = lookup.byContact.get(customer.contactNumber) ?? [];
+  contactMatches.push({ id: customer.id, batchTag: customer.batchTag, nameKey: key });
+  lookup.byContact.set(customer.contactNumber, contactMatches);
+  lookup.contactNumbers.add(customer.contactNumber);
+}
+
+function updateCustomerLookupTag(
+  lookup: Awaited<ReturnType<typeof loadExistingCustomerLookup>>,
+  customerId: string,
+  batchTag: string | null,
+) {
+  for (const matches of lookup.byName.values()) {
+    const match = matches.find((item) => item.id === customerId);
+    if (match) match.batchTag = batchTag;
+  }
+  for (const matches of lookup.byContact.values()) {
+    const match = matches.find((item) => item.id === customerId);
+    if (match) match.batchTag = batchTag;
+  }
 }
 
 function reserveContactNumber(partyName: string, rowNumber: number, contactNumber: string | null, reservedContacts: Set<string>) {

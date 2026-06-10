@@ -6,15 +6,10 @@ import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { normalizeBatchTag } from "@/lib/batch-tags";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
-
-function normalizeBatchTag(value: FormDataEntryValue | null) {
-  if (typeof value !== "string") return null;
-  const tag = value.trim().replace(/\s+/g, " ").slice(0, 40);
-  return tag || null;
-}
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -33,7 +28,8 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const file = formData.get("file");
-    const batchTag = normalizeBatchTag(formData.get("batchTag"));
+    const rawBatchTag = formData.get("batchTag");
+    const batchTag = normalizeBatchTag(typeof rawBatchTag === "string" ? rawBatchTag : null);
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }

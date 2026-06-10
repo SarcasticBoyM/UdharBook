@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ImportSummary } from "@/types";
+
+function normalizeBatchTag(tag: string) {
+  return tag.trim().replace(/\s+/g, " ").toUpperCase().slice(0, 40);
+}
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -9,17 +13,42 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [batchTag, setBatchTag] = useState("");
+  const [existingTags, setExistingTags] = useState<string[]>([]);
+  const [tagQuery, setTagQuery] = useState("");
+  const [showTagOptions, setShowTagOptions] = useState(false);
+  const normalizedTag = normalizeBatchTag(batchTag);
+  const normalizedQuery = normalizeBatchTag(tagQuery || batchTag);
+  const visibleTags = useMemo(() => {
+    const query = normalizedQuery.toLowerCase();
+    return existingTags.filter((tag) => !query || tag.toLowerCase().includes(query)).slice(0, 8);
+  }, [existingTags, normalizedQuery]);
+  const canCreateTag = Boolean(normalizedQuery && !existingTags.includes(normalizedQuery));
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/customers/batch-tags", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { tags?: string[] } | null) => {
+        if (alive) setExistingTags(payload?.tags ?? []);
+      })
+      .catch(() => {
+        if (alive) setExistingTags([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const upload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || !batchTag.trim()) return;
+    if (!file || !normalizedTag) return;
     setLoading(true);
     setError("");
     setSummary(null);
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("batchTag", batchTag.trim());
+    formData.append("batchTag", normalizedTag);
 
     try {
       const res = await fetch("/api/customers/import", {
@@ -43,7 +72,11 @@ export default function UploadPage() {
         return;
       }
 
-      setSummary(await res.json());
+      const result = await res.json();
+      setSummary(result);
+      if (result.batchTag && !existingTags.includes(result.batchTag)) {
+        setExistingTags((current) => [...current, result.batchTag].sort((a, b) => a.localeCompare(b)));
+      }
     } catch (err) {
       const hint =
         file.size > 1024 * 1024
@@ -85,14 +118,76 @@ export default function UploadPage() {
       <form onSubmit={upload} className="card mt-6">
         <label className="mb-4 block">
           <span className="text-sm font-semibold">Batch / Firm Name</span>
-          <input
-            value={batchTag}
-            onChange={(event) => setBatchTag(event.target.value)}
-            placeholder="Example: YE, BT, Balaji, Cement"
-            className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
-            maxLength={40}
-            required
-          />
+          <div className="relative mt-2">
+            <input
+              value={tagQuery || batchTag}
+              onChange={(event) => {
+                setTagQuery(event.target.value);
+                setBatchTag(event.target.value);
+                setShowTagOptions(true);
+              }}
+              onFocus={() => setShowTagOptions(true)}
+              onBlur={() => {
+                window.setTimeout(() => setShowTagOptions(false), 150);
+                setBatchTag((current) => normalizeBatchTag(current));
+                setTagQuery("");
+              }}
+              placeholder="Search or create: YE, BT, CEMENT"
+              className="min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm uppercase dark:border-slate-700 dark:bg-slate-900"
+              maxLength={40}
+              required
+            />
+            {showTagOptions && (visibleTags.length > 0 || canCreateTag) && (
+              <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-950">
+                {visibleTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setBatchTag(tag);
+                      setTagQuery("");
+                      setShowTagOptions(false);
+                    }}
+                    className="flex min-h-10 w-full items-center rounded-md px-3 text-left font-semibold hover:bg-slate-100 dark:hover:bg-slate-900"
+                  >
+                    {tag}
+                  </button>
+                ))}
+                {canCreateTag && (
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setBatchTag(normalizedQuery);
+                      setTagQuery("");
+                      setShowTagOptions(false);
+                    }}
+                    className="flex min-h-10 w-full items-center rounded-md px-3 text-left font-semibold text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-slate-900"
+                  >
+                    Create &quot;{normalizedQuery}&quot;
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {existingTags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {existingTags.slice(0, 8).map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => {
+                    setBatchTag(tag);
+                    setTagQuery("");
+                  }}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold dark:border-slate-700"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          )}
         </label>
         <input
           type="file"
@@ -107,7 +202,7 @@ export default function UploadPage() {
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <button
           type="submit"
-          disabled={!file || !batchTag.trim() || loading}
+          disabled={!file || !normalizedTag || loading}
           className="mt-4 rounded-lg bg-brand-600 px-6 py-2 text-sm text-white disabled:opacity-50"
         >
           {loading ? "Importing customers..." : "Import"}
