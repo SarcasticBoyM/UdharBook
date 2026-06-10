@@ -117,6 +117,10 @@ function dateRangeCondition(
   return { [field]: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } };
 }
 
+function canUseRuntimeDebug(role: string) {
+  return role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+}
+
 async function safeChequeCount(label: string, where: Prisma.ChequeWhereInput) {
   try {
     return await prisma.cheque.count({ where });
@@ -373,6 +377,8 @@ export async function GET(request: Request) {
   const quick = searchParams.get("quick") || "all";
   const format = searchParams.get("format");
   const report = searchParams.get("report");
+  const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
+  const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const isTrackerReport = report === "tracker";
   const reportTitle = isTrackerReport ? "Cheque Tracker Report" : "Cheques Report";
   const exportFileName = isTrackerReport ? "cheque-tracker-report" : "cheque-collections";
@@ -436,7 +442,10 @@ export async function GET(request: Request) {
   if (minAmount !== undefined) conditions.push({ amount: { gte: minAmount } });
   if (maxAmount !== undefined) conditions.push({ amount: { lte: maxAmount } });
 
-  const where: Prisma.ChequeWhereInput = { AND: conditions };
+  const filteredWhere: Prisma.ChequeWhereInput = { AND: conditions };
+  const rawWhere: Prisma.ChequeWhereInput = { shopId };
+  const where = isolateMode ? rawWhere : filteredWhere;
+  const rawChequeCount = debugMode ? await safeChequeCount("runtimeRawChequeCount", rawWhere) : undefined;
 
   const include = chequeInclude();
   const [items, total, users, shop] =
@@ -463,6 +472,7 @@ export async function GET(request: Request) {
         report: report || null,
         format: format || null,
         quick,
+        isolateMode,
         status: status || null,
         hasSearch: Boolean(q),
         hasDateRange: Boolean(from || to),
@@ -515,6 +525,43 @@ export async function GET(request: Request) {
   ]);
 
   const rows = items.map(chequeRow);
+  const runtimeDebug = debugMode
+    ? {
+        enabled: true,
+        isolateMode,
+        session: {
+          userId: session.id,
+          role: session.role,
+          sessionShopId: session.shopId,
+          resolvedShopId: shopId,
+        },
+        filtersReceived: {
+          quick,
+          status: rawStatus || null,
+          q: q || null,
+          partyName: partyName || null,
+          chequeNumber: chequeNumber || null,
+          bankName: bankName || null,
+          batchTag: batchTag || null,
+          staffId: staffId || null,
+          depositedAccountId: depositedAccountId || null,
+          from: searchParams.get("from") || null,
+          to: searchParams.get("to") || null,
+          minAmount: searchParams.get("minAmount") || null,
+          maxAmount: searchParams.get("maxAmount") || null,
+        },
+        rawWhere,
+        generatedWhereClause: filteredWhere,
+        effectiveWhereClause: where,
+        rawChequeCount: rawChequeCount ?? null,
+        filteredRowCount: total,
+        returnedRowCount: rows.length,
+        rowsDisappearAfterFilters: typeof rawChequeCount === "number" ? rawChequeCount > 0 && total === 0 && !isolateMode : null,
+      }
+    : undefined;
+  if (runtimeDebug) {
+    console.info("cheque_runtime_isolation_debug", runtimeDebug);
+  }
   if (!format) {
     console.info("cheque_filter_query", {
       report: report || null,
@@ -680,6 +727,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     items,
     users,
+    ...(runtimeDebug ? { debug: runtimeDebug } : {}),
     alerts: {
       pendingDeposit,
       bounced,

@@ -35,6 +35,10 @@ function startOfDay(date: Date) {
   return value;
 }
 
+function canUseRuntimeDebug(role: string) {
+  return role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+}
+
 function endOfDay(date: Date) {
   const value = new Date(date);
   value.setHours(23, 59, 59, 999);
@@ -197,6 +201,8 @@ export async function GET(request: Request) {
   const rawActiveFilter = searchParams.get("active")?.trim() ?? "";
   const activeFilter = VALID_ACTIVE_FILTERS.has(rawActiveFilter) ? rawActiveFilter : "";
   const format = searchParams.get("format");
+  const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
+  const isolateMode = debugMode && searchParams.get("isolate") === "1";
   if (rawRole && !role) {
     console.warn("staff_attendance_invalid_role_filter", { rawRole, shopId });
   }
@@ -206,11 +212,58 @@ export async function GET(request: Request) {
 
   const userWhere: Prisma.UserWhereInput = {
     shopId,
-    ...(staffName ? { name: { contains: staffName, mode: "insensitive" } } : {}),
-    ...(role ? { role } : {}),
-    ...(activeFilter === "active" ? { disabledAt: null } : {}),
-    ...(activeFilter === "inactive" ? { disabledAt: { not: null } } : {}),
+    ...(isolateMode ? {} : {
+      ...(staffName ? { name: { contains: staffName, mode: "insensitive" } } : {}),
+      ...(role ? { role } : {}),
+      ...(activeFilter === "active" ? { disabledAt: null } : {}),
+      ...(activeFilter === "inactive" ? { disabledAt: { not: null } } : {}),
+    }),
   };
+  const rawAttendanceWhere: Prisma.AttendanceWhereInput = { shopId };
+  const filteredAttendanceWhere: Prisma.AttendanceWhereInput = { shopId, workDate: { gte: from, lte: to } };
+  const attendanceWhere = isolateMode ? rawAttendanceWhere : filteredAttendanceWhere;
+  const rawAttendanceCount = debugMode ? await prisma.attendance.count({ where: rawAttendanceWhere }).catch((error: unknown) => {
+    console.error("staff_attendance_raw_count_failed", {
+      message: error instanceof Error ? error.message : "Unknown raw attendance count failure",
+      shopId,
+    });
+    return 0;
+  }) : undefined;
+
+  if (isolateMode) {
+    const rawRows = await prisma.attendance.findMany({
+      where: rawAttendanceWhere,
+      select: { id: true, staffId: true, workDate: true, startedAt: true, endedAt: true, status: true },
+      orderBy: { startedAt: "desc" },
+      take: 100,
+    });
+    const debug = {
+      enabled: true,
+      isolateMode,
+      session: {
+        userId: session.id,
+        role: session.role,
+        sessionShopId: session.shopId,
+        resolvedShopId: shopId,
+      },
+      filtersReceived: {
+        preset: searchParams.get("preset") || "today",
+        from: searchParams.get("from") || null,
+        to: searchParams.get("to") || null,
+        staffName: staffName || null,
+        role: role || null,
+        active: activeFilter || null,
+        format: format || null,
+      },
+      rawWhere: rawAttendanceWhere,
+      generatedWhereClause: filteredAttendanceWhere,
+      effectiveWhereClause: rawAttendanceWhere,
+      rawAttendanceCount,
+      returnedRawRows: rawRows.length,
+    };
+    console.info("staff_attendance_runtime_isolation_debug", debug);
+    return NextResponse.json({ success: true, range: { from, to, label }, debug, rawRows });
+  }
 
   console.info("staff_attendance_report_query", {
     incomingFilters: {
@@ -224,6 +277,7 @@ export async function GET(request: Request) {
     },
     range: { from: from.toISOString(), to: to.toISOString(), label },
     userWhere,
+    attendanceWhere,
   });
 
   const users = await prisma.user.findMany({ where: userWhere, select: { id: true, name: true, role: true, disabledAt: true }, orderBy: { name: "asc" } }).catch((error: unknown) => {
@@ -237,7 +291,7 @@ export async function GET(request: Request) {
     throw error;
   });
   const aggregationResults = await Promise.allSettled([
-    prisma.attendance.findMany({ where: { shopId, workDate: { gte: from, lte: to } }, orderBy: { startedAt: "asc" } }),
+    prisma.attendance.findMany({ where: attendanceWhere, orderBy: { startedAt: "asc" } }),
     prisma.staffVisit.groupBy({
       by: ["staffId", "status"],
       where: { shopId, checkInAt: { gte: from, lte: to } },
@@ -333,6 +387,37 @@ export async function GET(request: Request) {
     paymentsCollectedToday: rows.reduce((sum, row) => sum + row.paymentsCollected, 0),
     pendingStaffCheckouts,
   };
+  const runtimeDebug = debugMode
+    ? {
+        enabled: true,
+        isolateMode,
+        session: {
+          userId: session.id,
+          role: session.role,
+          sessionShopId: session.shopId,
+          resolvedShopId: shopId,
+        },
+        filtersReceived: {
+          preset: searchParams.get("preset") || "today",
+          from: searchParams.get("from") || null,
+          to: searchParams.get("to") || null,
+          staffName: staffName || null,
+          role: role || null,
+          active: activeFilter || null,
+          format: format || null,
+        },
+        rawWhere: rawAttendanceWhere,
+        generatedWhereClause: filteredAttendanceWhere,
+        effectiveWhereClause: attendanceWhere,
+        rawAttendanceCount: rawAttendanceCount ?? null,
+        filteredAttendanceRows: attendances.length,
+        returnedReportRows: rows.length,
+        rowsDisappearAfterFilters: typeof rawAttendanceCount === "number" ? rawAttendanceCount > 0 && attendances.length === 0 : null,
+      }
+    : undefined;
+  if (runtimeDebug) {
+    console.info("staff_attendance_runtime_isolation_debug", runtimeDebug);
+  }
 
   console.info("staff_attendance_report_result", {
     userCount: users.length,
@@ -357,5 +442,5 @@ export async function GET(request: Request) {
     });
   }
 
-  return NextResponse.json({ success: true, range: { from, to, label }, rows, summary });
+  return NextResponse.json({ success: true, range: { from, to, label }, rows, summary, ...(runtimeDebug ? { debug: runtimeDebug } : {}) });
 }

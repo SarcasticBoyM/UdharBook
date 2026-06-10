@@ -12,6 +12,10 @@ function safeText(value: unknown, fallback = "-") {
   return text || fallback;
 }
 
+function canUseRuntimeDebug(role: string) {
+  return role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
+}
+
 function safeDate(value: string | null, end = false) {
   if (!value) return null;
   const date = new Date(value);
@@ -67,6 +71,8 @@ export async function GET(
   const from = safeDate(searchParams.get("from"));
   const to = safeDate(searchParams.get("to"), true);
   const batchTag = searchParams.get("batchTag")?.trim();
+  const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
+  const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } });
   const shopName = shop?.shopName ?? "UdharBook";
 
@@ -88,14 +94,38 @@ export async function GET(
   });
 
   if (type === "outstanding") {
+    const rawWhere: Prisma.CustomerWhereInput = { shopId };
     const where: Prisma.CustomerWhereInput = {
       shopId,
-      ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
-      outstandingBalance: { gt: 0 },
-      NOT: { status: "CLEARED" },
+      ...(isolateMode ? {} : {
+        ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+        outstandingBalance: { gt: 0 },
+        NOT: { status: "CLEARED" },
+      }),
     };
     const customers = await prisma.customer.findMany({ where, orderBy: { outstandingBalance: "desc" } });
-    console.info("generic_report_result", { type, shopId, where, rowCount: customers.length });
+    const rawCount = debugMode ? await prisma.customer.count({ where: rawWhere }) : undefined;
+    const runtimeDebug = debugMode
+      ? {
+          enabled: true,
+          isolateMode,
+          session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          rawWhere,
+          generatedWhereClause: {
+            shopId,
+            ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+            outstandingBalance: { gt: 0 },
+            NOT: { status: "CLEARED" },
+          },
+          effectiveWhereClause: where,
+          rawCount,
+          rowCount: customers.length,
+          rowsDisappearAfterFilters: typeof rawCount === "number" ? rawCount > 0 && customers.length === 0 && !isolateMode : null,
+        }
+      : undefined;
+    console.info("generic_report_result", { type, shopId, where, rowCount: customers.length, debug: runtimeDebug });
+    if (debugMode && format === "json") return NextResponse.json({ success: true, type, rows: customers.slice(0, 100), debug: runtimeDebug });
 
     if (format === "xlsx") {
       const buffer = await customersToExcel(customers, "Outstanding");
@@ -139,10 +169,13 @@ export async function GET(
   }
 
   if (type === "follow-up") {
+    const rawWhere: Prisma.FollowUpWhereInput = { shopId };
     const where: Prisma.FollowUpWhereInput = {
       shopId,
-      ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
-      ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+      ...(isolateMode ? {} : {
+        ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
+        ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+      }),
     };
 
     const followUps = await prisma.followUp.findMany({
@@ -153,7 +186,28 @@ export async function GET(
       },
       orderBy: { followupDate: "desc" },
     });
-    console.info("generic_report_result", { type, shopId, where, rowCount: followUps.length });
+    const rawCount = debugMode ? await prisma.followUp.count({ where: rawWhere }) : undefined;
+    const generatedWhere: Prisma.FollowUpWhereInput = {
+      shopId,
+      ...(batchTag ? { customer: { is: { batchTag: { equals: batchTag, mode: "insensitive" } } } } : {}),
+      ...(from || to ? { followupDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    };
+    const runtimeDebug = debugMode
+      ? {
+          enabled: true,
+          isolateMode,
+          session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          rawWhere,
+          generatedWhereClause: generatedWhere,
+          effectiveWhereClause: where,
+          rawCount,
+          rowCount: followUps.length,
+          rowsDisappearAfterFilters: typeof rawCount === "number" ? rawCount > 0 && followUps.length === 0 && !isolateMode : null,
+        }
+      : undefined;
+    console.info("generic_report_result", { type, shopId, where, rowCount: followUps.length, debug: runtimeDebug });
+    if (debugMode && format === "json") return NextResponse.json({ success: true, type, rows: followUps.slice(0, 100), debug: runtimeDebug });
 
     if (format === "xlsx") {
       const buffer = await followUpsToExcel(followUps);
@@ -193,14 +247,38 @@ export async function GET(
   }
 
   if (type === "aging") {
+    const rawWhere: Prisma.CustomerWhereInput = { shopId };
     const where: Prisma.CustomerWhereInput = {
       shopId,
-      ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
-      outstandingBalance: { gt: 0 },
-      NOT: { status: "CLEARED" },
+      ...(isolateMode ? {} : {
+        ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+        outstandingBalance: { gt: 0 },
+        NOT: { status: "CLEARED" },
+      }),
     };
     const customers = await prisma.customer.findMany({ where });
-    console.info("generic_report_result", { type, shopId, where, rowCount: customers.length });
+    const rawCount = debugMode ? await prisma.customer.count({ where: rawWhere }) : undefined;
+    const runtimeDebug = debugMode
+      ? {
+          enabled: true,
+          isolateMode,
+          session: { userId: session.id, role: session.role, sessionShopId: session.shopId, resolvedShopId: shopId },
+          filtersReceived: { format, from: searchParams.get("from") || null, to: searchParams.get("to") || null, batchTag: batchTag || null },
+          rawWhere,
+          generatedWhereClause: {
+            shopId,
+            ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+            outstandingBalance: { gt: 0 },
+            NOT: { status: "CLEARED" },
+          },
+          effectiveWhereClause: where,
+          rawCount,
+          rowCount: customers.length,
+          rowsDisappearAfterFilters: typeof rawCount === "number" ? rawCount > 0 && customers.length === 0 && !isolateMode : null,
+        }
+      : undefined;
+    console.info("generic_report_result", { type, shopId, where, rowCount: customers.length, debug: runtimeDebug });
+    if (debugMode && format === "json") return NextResponse.json({ success: true, type, rows: customers.slice(0, 100), debug: runtimeDebug });
 
     const buckets: Record<string, typeof customers> = {
       "0-30": [],
