@@ -248,28 +248,59 @@ export async function GET(request: Request) {
     });
     return 0;
   });
+  const normalizedRoleSql = Prisma.sql`
+    CASE
+      WHEN u."role"::text = 'SUPER_ADMIN' THEN 'SUPER_ADMIN'
+      WHEN u."role"::text = 'SHOP_ADMIN' THEN 'SHOP_ADMIN'
+      WHEN u."role"::text = 'SALES_PERSON_CUM_ACCOUNTS' OR (u."role"::text LIKE '%SALES%' AND (u."role"::text LIKE '%ACCOUNT%' OR u."role"::text LIKE '%ACCOUNTING%')) THEN 'SALES_PERSON_CUM_ACCOUNTS'
+      WHEN u."role"::text = 'SALES_PERSON' OR u."role"::text = 'SALES' OR u."role"::text LIKE '%FIELD%' THEN 'SALES_PERSON'
+      ELSE 'ACCOUNT_STAFF'
+    END
+  `;
+  const simpleConditions: Prisma.Sql[] = [
+    Prisma.sql`a."shopId" = ${shopId}`,
+    Prisma.sql`a."workDate" >= ${from}`,
+    Prisma.sql`a."workDate" <= ${to}`,
+  ];
+  if (staffName) simpleConditions.push(Prisma.sql`u."name" ILIKE ${`%${staffName}%`}`);
+  if (role) simpleConditions.push(Prisma.sql`${normalizedRoleSql} = ${role}`);
+  if (activeFilter === "active") simpleConditions.push(Prisma.sql`u."disabledAt" IS NULL`);
+  if (activeFilter === "inactive") simpleConditions.push(Prisma.sql`u."disabledAt" IS NOT NULL`);
+
   const simpleRawRows = await prisma.$queryRaw<SimpleAttendanceRow[]>(Prisma.sql`
+    WITH ranked_attendance AS (
+      SELECT
+        a."id",
+        a."staffId",
+        COALESCE(u."name", 'Staff') AS "staffName",
+        ${normalizedRoleSql} AS "role",
+        a."workDate",
+        a."startedAt",
+        a."endedAt",
+        a."activeMinutes",
+        CASE WHEN a."endedAt" IS NOT NULL THEN 'COMPLETED' ELSE 'ACTIVE' END AS "status",
+        ROW_NUMBER() OVER (
+          PARTITION BY a."staffId"
+          ORDER BY COALESCE(a."startedAt", a."workDate") DESC, a."id" DESC
+        ) AS "rowNumber"
+      FROM "Attendance" a
+      LEFT JOIN "User" u ON u."id" = a."staffId"
+      WHERE ${Prisma.join(simpleConditions, " AND ")}
+    )
     SELECT
-      a."id",
-      a."staffId",
-      COALESCE(u."name", 'Staff') AS "staffName",
-      CASE
-        WHEN u."role"::text = 'SUPER_ADMIN' THEN 'SUPER_ADMIN'
-        WHEN u."role"::text = 'SHOP_ADMIN' THEN 'SHOP_ADMIN'
-        WHEN u."role"::text = 'SALES_PERSON_CUM_ACCOUNTS' OR (u."role"::text LIKE '%SALES%' AND (u."role"::text LIKE '%ACCOUNT%' OR u."role"::text LIKE '%ACCOUNTING%')) THEN 'SALES_PERSON_CUM_ACCOUNTS'
-        WHEN u."role"::text = 'SALES_PERSON' OR u."role"::text = 'SALES' OR u."role"::text LIKE '%FIELD%' THEN 'SALES_PERSON'
-        ELSE 'ACCOUNT_STAFF'
-      END AS "role",
-      a."workDate",
-      a."startedAt",
-      a."endedAt",
-      a."activeMinutes",
-      a."status"::text AS "status"
-    FROM "Attendance" a
-    LEFT JOIN "User" u ON u."id" = a."staffId"
-    WHERE a."shopId" = ${shopId}
-    ORDER BY a."startedAt" DESC
-    LIMIT 500
+      "id",
+      "staffId",
+      "staffName",
+      "role",
+      "workDate",
+      "startedAt",
+      "endedAt",
+      "activeMinutes",
+      "status"
+    FROM ranked_attendance
+    WHERE "rowNumber" = 1
+    ORDER BY "startedAt" DESC
+    LIMIT 200
   `);
 
   if (isolateMode) {
@@ -308,7 +339,7 @@ export async function GET(request: Request) {
       totalVisits: 0,
       ordersTakenToday: 0,
       paymentsCollectedToday: 0,
-      pendingStaffCheckouts: 0,
+      pendingStaffCheckouts: simpleRawRows.filter((row) => row.status === "ACTIVE").length,
     };
     console.info("staff_attendance_simple_response", {
       shopId,

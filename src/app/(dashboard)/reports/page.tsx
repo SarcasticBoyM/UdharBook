@@ -335,8 +335,18 @@ export default function ReportsPage() {
     params.set("format", format);
     window.open(`/api/reports/staff-attendance?${params.toString()}`, "_blank");
   };
-  const attendanceRawRows = attendanceData?.rawRows ?? [];
+  const attendanceRawRows = useMemo(() => attendanceData?.rawRows ?? [], [attendanceData?.rawRows]);
   const showRawAttendanceFallback = !attendanceLoading && !attendanceError && !attendanceData?.rows.length && attendanceRawRows.length > 0;
+  const attendanceFallbackRows = useMemo(() => {
+    const latestByStaff = new Map<string, SimpleAttendanceRow>();
+    for (const row of attendanceRawRows) {
+      const current = latestByStaff.get(row.staffId);
+      if (!current || new Date(row.startedAt).getTime() > new Date(current.startedAt).getTime()) {
+        latestByStaff.set(row.staffId, row);
+      }
+    }
+    return Array.from(latestByStaff.values()).sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  }, [attendanceRawRows]);
 
   return (
     <div className="mx-auto max-w-7xl pb-16">
@@ -555,88 +565,93 @@ export default function ReportsPage() {
           )}
         </div>
 
-        <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
-          <table className="hidden min-w-[1240px] text-left text-sm lg:table">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
-              <tr>
-                {["Staff Name", "Role", "Login Time", "Logout Time", "First Activity", "Last Activity", "Total Active Hours", "Total Visits", "Completed Visits", "Orders Taken", "Payments Collected", "Cheques Collected", "GPS Active Status", "Current Status"].map((header) => (
-                  <th key={header} className="px-3 py-2">{header}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {attendanceLoading ? (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
-              ) : attendanceError ? (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{attendanceError}</td></tr>
-              ) : showRawAttendanceFallback ? (
-                <>
-                  <tr className="bg-amber-50 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-100">
-                    <td colSpan={14} className="px-3 py-2">Showing simplified attendance rows while detailed metrics are unavailable.</td>
-                  </tr>
-                  {attendanceRawRows.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-200 dark:border-slate-800">
-                      <td className="px-3 py-2 font-semibold">{row.staffName}</td>
-                      <td className="px-3 py-2">{statusLabel(row.role)}</td>
-                      <td className="px-3 py-2">{formatDate(row.startedAt)}</td>
-                      <td className="px-3 py-2">{formatDate(row.endedAt)}</td>
-                      <td className="px-3 py-2">{formatDate(row.workDate)}</td>
-                      <td className="px-3 py-2">{formatDate(row.endedAt ?? row.startedAt)}</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">-</td>
-                      <td className="px-3 py-2">{statusLabel(row.status)}</td>
-                    </tr>
+        <div className="mt-4 rounded-lg border border-slate-200 dark:border-slate-800">
+          {showRawAttendanceFallback ? (
+            <table className="hidden w-full text-left text-sm lg:table">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
+                <tr>
+                  {["Staff Name", "Role", "Login Time", "Logout Time", "Current Status", "Work Date"].map((header) => (
+                    <th key={header} className="px-3 py-2">{header}</th>
                   ))}
-                </>
-              ) : attendanceData?.rows.length ? (
-                attendanceData.rows.map((row) => (
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="bg-amber-50 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                  <td colSpan={6} className="px-3 py-2">Showing latest attendance entry per staff while detailed metrics are unavailable.</td>
+                </tr>
+                {attendanceFallbackRows.map((row) => (
                   <tr key={row.staffId} className="border-t border-slate-200 dark:border-slate-800">
                     <td className="px-3 py-2 font-semibold">{row.staffName}</td>
                     <td className="px-3 py-2">{statusLabel(row.role)}</td>
-                    <td className="px-3 py-2">{formatDate(row.loginTime)}</td>
-                    <td className="px-3 py-2">{formatDate(row.logoutTime)}</td>
-                    <td className="px-3 py-2">{formatDate(row.firstActivity)}</td>
-                    <td className="px-3 py-2">{formatDate(row.lastActivity)}</td>
-                    <td className="px-3 py-2">{minutesToHours(row.totalActiveMinutes)}</td>
-                    <td className="px-3 py-2">{row.totalVisits}</td>
-                    <td className="px-3 py-2">{row.completedVisits}</td>
-                    <td className="px-3 py-2">{row.ordersTaken}</td>
-                    <td className="px-3 py-2">{row.paymentsCollected}</td>
-                    <td className="px-3 py-2">{row.chequesCollected}</td>
-                    <td className="px-3 py-2">{row.gpsActiveStatus}</td>
-                    <td className="px-3 py-2"><AttendanceStatusBadge status={row.currentStatus} /></td>
+                    <td className="px-3 py-2">{formatDate(row.startedAt)}</td>
+                    <td className="px-3 py-2">{formatDate(row.endedAt)}</td>
+                    <td className="px-3 py-2"><SimpleAttendanceStatusBadge status={row.endedAt ? "COMPLETED" : "ACTIVE"} /></td>
+                    <td className="px-3 py-2">{formatDate(row.workDate)}</td>
                   </tr>
-                ))
-              ) : (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">No staff activity matches this report.</td></tr>
-              )}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="hidden min-w-[1240px] text-left text-sm lg:table">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
+                  <tr>
+                    {["Staff Name", "Role", "Login Time", "Logout Time", "First Activity", "Last Activity", "Total Active Hours", "Total Visits", "Completed Visits", "Orders Taken", "Payments Collected", "Cheques Collected", "GPS Active Status", "Current Status"].map((header) => (
+                      <th key={header} className="px-3 py-2">{header}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceLoading ? (
+                    <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
+                  ) : attendanceError ? (
+                    <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{attendanceError}</td></tr>
+                  ) : attendanceData?.rows.length ? (
+                    attendanceData.rows.map((row) => (
+                      <tr key={row.staffId} className="border-t border-slate-200 dark:border-slate-800">
+                        <td className="px-3 py-2 font-semibold">{row.staffName}</td>
+                        <td className="px-3 py-2">{statusLabel(row.role)}</td>
+                        <td className="px-3 py-2">{formatDate(row.loginTime)}</td>
+                        <td className="px-3 py-2">{formatDate(row.logoutTime)}</td>
+                        <td className="px-3 py-2">{formatDate(row.firstActivity)}</td>
+                        <td className="px-3 py-2">{formatDate(row.lastActivity)}</td>
+                        <td className="px-3 py-2">{minutesToHours(row.totalActiveMinutes)}</td>
+                        <td className="px-3 py-2">{row.totalVisits}</td>
+                        <td className="px-3 py-2">{row.completedVisits}</td>
+                        <td className="px-3 py-2">{row.ordersTaken}</td>
+                        <td className="px-3 py-2">{row.paymentsCollected}</td>
+                        <td className="px-3 py-2">{row.chequesCollected}</td>
+                        <td className="px-3 py-2">{row.gpsActiveStatus}</td>
+                        <td className="px-3 py-2"><AttendanceStatusBadge status={row.currentStatus} /></td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">No staff activity matches this report.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div className="space-y-3 p-3 lg:hidden">
             {attendanceLoading ? (
               <p className="py-6 text-center text-sm text-slate-500">Loading attendance report...</p>
             ) : attendanceError ? (
               <p className="py-6 text-center text-sm text-red-600">{attendanceError}</p>
             ) : showRawAttendanceFallback ? (
-              attendanceRawRows.map((row) => (
-                <article key={row.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              attendanceFallbackRows.map((row) => (
+                <article key={row.staffId} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <h3 className="font-bold">{row.staffName}</h3>
                       <p className="text-sm text-slate-500">{statusLabel(row.role)}</p>
                     </div>
-                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{statusLabel(row.status)}</span>
+                    <SimpleAttendanceStatusBadge status={row.endedAt ? "COMPLETED" : "ACTIVE"} />
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                    <Info label="Start Time" value={formatDate(row.startedAt)} />
-                    <Info label="End Time" value={formatDate(row.endedAt)} />
-                    <Info label="Staff ID" value={row.staffId} />
-                    <Info label="Status" value={statusLabel(row.status)} />
+                    <Info label="Login Time" value={formatDate(row.startedAt)} />
+                    <Info label="Logout Time" value={formatDate(row.endedAt)} />
+                    <Info label="Work Date" value={formatDate(row.workDate)} />
+                    <Info label="Status" value={row.endedAt ? "Completed" : "Active"} />
                   </div>
                 </article>
               ))
@@ -779,6 +794,14 @@ function AttendanceStatusBadge({ status }: { status: StaffAttendanceRow["current
     LOGGED_OUT: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100",
   }[status];
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-bold", classes)}>{statusLabel(status)}</span>;
+}
+
+function SimpleAttendanceStatusBadge({ status }: { status: "ACTIVE" | "COMPLETED" }) {
+  const classes =
+    status === "ACTIVE"
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100"
+      : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200";
+  return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-bold", classes)}>{status === "ACTIVE" ? "Active" : "Completed"}</span>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {
