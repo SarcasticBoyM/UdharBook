@@ -50,6 +50,16 @@ type RoutePoint = {
 
 type ViewMode = "timeline" | "map";
 
+const visitOutcomeFilters = [
+  "Invoice Hard Copy Delivered",
+  "Order Received",
+  "Product Discussion",
+  "Delivery Discussion",
+  "Site Visit",
+  "Payment Collected",
+  "Follow-up Later",
+];
+
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 }
@@ -120,6 +130,7 @@ export default function DailyVisitsPage() {
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [staffId, setStaffId] = useState("");
+  const [outcome, setOutcome] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
   const [role, setRole] = useState("");
   const [loading, setLoading] = useState(false);
@@ -163,11 +174,13 @@ export default function DailyVisitsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch(`/api/field-staff/visits?date=${date}`);
+    const params = new URLSearchParams({ date });
+    if (outcome) params.set("outcome", outcome);
+    const res = await fetch(`/api/field-staff/visits?${params.toString()}`);
     const data = await res.json();
     setLoading(false);
     if (data.success) setVisits(data.visits);
-  }, [date]);
+  }, [date, outcome]);
 
   const loadRoutePoints = useCallback(async () => {
     if (!canViewRouteMap) {
@@ -237,7 +250,7 @@ export default function DailyVisitsPage() {
       </div>
 
       <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
           <label className="text-sm">
             <span className="mb-1 block font-medium">Date</span>
             <input value={date} onChange={(e) => setDate(e.target.value)} type="date" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -247,6 +260,13 @@ export default function DailyVisitsPage() {
             <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
               <option value="">All staff</option>
               {staffOptions.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-medium">Outcome</span>
+            <select value={outcome} onChange={(e) => setOutcome(e.target.value)} className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+              <option value="">All outcomes</option>
+              {visitOutcomeFilters.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </label>
           <button type="button" onClick={() => { void load(); void loadRoutePoints(); }} className="flex min-h-11 items-center justify-center gap-2 self-end rounded-lg border border-slate-300 px-4 text-sm font-semibold">

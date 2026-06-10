@@ -148,6 +148,16 @@ const STATUSES = [
   "RESCHEDULED",
 ];
 
+const VISIT_OUTCOME_FILTERS = [
+  "Invoice Hard Copy Delivered",
+  "Order Received",
+  "Product Discussion",
+  "Delivery Discussion",
+  "Site Visit",
+  "Payment Collected",
+  "Follow-up Later",
+];
+
 const initialSummary: ReportResponse["summary"] = {
   dailyFollowUps: 0,
   recoveryToday: 0,
@@ -213,6 +223,7 @@ export default function FollowUpReportsPage() {
     customer: "",
     batchTag: "",
     status: "",
+    outcome: "",
     minAmount: "",
     maxAmount: "",
     overdueOnly: false,
@@ -389,6 +400,21 @@ export default function FollowUpReportsPage() {
           </label>
           <Input label="Customer-wise" value={filters.customer} onChange={(value) => updateFilter("customer", value)} placeholder="Name or mobile" />
           <Input label="Batch / Firm" value={filters.batchTag} onChange={(value) => updateFilter("batchTag", value)} placeholder="YE, BT, Balaji" />
+          <label className="text-sm">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Visit Outcome</span>
+            <select
+              value={filters.outcome}
+              onChange={(event) => updateFilter("outcome", event.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
+            >
+              <option value="">All outcomes</option>
+              {VISIT_OUTCOME_FILTERS.map((outcome) => (
+                <option key={outcome} value={outcome}>
+                  {outcome}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="text-sm">
             <span className="font-medium text-slate-600 dark:text-slate-300">Status-wise</span>
             <select

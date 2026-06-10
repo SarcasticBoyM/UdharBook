@@ -343,6 +343,7 @@ export async function GET(request: Request) {
   const customer = searchParams.get("customer")?.trim();
   const batchTag = searchParams.get("batchTag")?.trim();
   const status = searchParams.get("status") || undefined;
+  const outcome = searchParams.get("outcome")?.trim();
   const minAmount = Number(searchParams.get("minAmount") || "");
   const maxAmount = Number(searchParams.get("maxAmount") || "");
   const overdueOnly = searchParams.get("overdueOnly") === "true";
@@ -378,6 +379,7 @@ export async function GET(request: Request) {
     ...(activityFrom || activityTo
       ? { followupDate: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
       : {}),
+    ...(outcome ? { id: "__visit_outcome_filter__" } : {}),
     ...(staffId ? { createdById: staffId } : {}),
     ...(status ? { status: status as Prisma.EnumFollowUpStatusFilter["equals"] } : {}),
     ...(promiseOnly ? { status: "PAYMENT_PROMISED" } : {}),
@@ -394,6 +396,7 @@ export async function GET(request: Request) {
       ? { checkOutAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
       : {}),
     ...(staffId ? { staffId } : {}),
+    ...(outcome ? { outcome: { contains: outcome, mode: "insensitive" } } : {}),
     customer: customerWhere,
   };
 
@@ -402,12 +405,14 @@ export async function GET(request: Request) {
     ...(activityFrom || activityTo
       ? { paidAt: { ...(activityFrom ? { gte: activityFrom } : {}), ...(activityTo ? { lte: activityTo } : {}) } }
       : {}),
+    ...(outcome ? { id: "__visit_outcome_filter__" } : {}),
     ...(staffId ? { createdById: staffId } : {}),
     customer: customerWhere,
   };
 
   const chequeWhere: Prisma.ChequeWhereInput = {
     shopId,
+    ...(outcome ? { id: "__visit_outcome_filter__" } : {}),
     ...(activityFrom || activityTo
       ? {
           OR: [

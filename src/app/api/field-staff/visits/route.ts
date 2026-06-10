@@ -106,6 +106,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const staffId = visibleStaffId(session, searchParams.get("staffId"));
     const customerId = searchParams.get("customerId") || undefined;
+    const outcome = searchParams.get("outcome")?.trim();
     const date = searchParams.get("date") ? new Date(searchParams.get("date") as string) : new Date();
     const from = searchParams.get("from") ? new Date(searchParams.get("from") as string) : startOfDay(date);
     const to = searchParams.get("to") ? new Date(searchParams.get("to") as string) : endOfDay(date);
@@ -115,6 +116,7 @@ export async function GET(request: Request) {
         checkInAt: { gte: from, lte: to },
         ...(staffId ? { staffId } : {}),
         ...(customerId ? { customerId } : {}),
+        ...(outcome ? { outcome: { contains: outcome, mode: "insensitive" } } : {}),
       },
       include: {
         staff: { select: { id: true, name: true, role: true } },

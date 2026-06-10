@@ -132,6 +132,7 @@ const visitOutcomeOptions = [
   "Complaint",
   "Site Visit",
   "Delivery Discussion",
+  "Invoice Hard Copy Delivered",
   "Partial Payment",
   "Paid Fully",
   "Call Back Requested",
@@ -209,7 +210,7 @@ function combinedOutcomeText(outcomes: string[], fallback: string) {
 }
 
 function isOrderOutcome(visitType: string, result: string, outcomes: string[]) {
-  return isOrderReceived(visitType, result) || hasVisitOutcome(outcomes, "Order Received");
+  return hasVisitOutcome(outcomes, "Order Received") || (outcomes.length === 0 && isOrderReceived(visitType, result));
 }
 
 function isPaymentOutcome(visitType: string, outcomes: string[]) {
