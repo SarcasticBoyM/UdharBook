@@ -13,6 +13,7 @@ import { isSalesRole } from "@/lib/operational-roles";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
+const VALID_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
 const ACTIVE_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "RETURNED_TO_PARTY"];
 const PENDING_DEPOSIT_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT"];
 
@@ -136,6 +137,7 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
   return {
     id: cheque.id,
     customerName: cheque.customer.partyName,
+    batchTag: cheque.customer.batchTag ?? "",
     mobileNumber: cheque.customer.contactNumber,
     chequeNumber: cheque.chequeNumber,
     bankName: cheque.bankName,
@@ -178,11 +180,12 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
   };
 }
 
-async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
+async function chequesToExcel(rows: ReturnType<typeof chequeRow>[], sheetName = "Cheque Collections") {
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Cheque Collections");
+  const sheet = workbook.addWorksheet(sheetName);
   sheet.columns = [
     { header: "Party Name", key: "customerName", width: 28 },
+    { header: "Batch/Firm", key: "batchTag", width: 18 },
     { header: "Mobile Number", key: "mobileNumber", width: 16 },
     { header: "Amount", key: "amount", width: 16 },
     { header: "Cheque Number", key: "chequeNumber", width: 18 },
@@ -196,6 +199,7 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
     { header: "Collected By", key: "collectedBy", width: 18 },
     { header: "Deposit Account", key: "depositedAccount", width: 32 },
     { header: "Notes", key: "notes", width: 42 },
+    { header: "Created At", key: "createdAt", width: 24 },
     { header: "Cheque Image", key: "frontImageUrl", width: 28 },
     { header: "Deposit Receipt", key: "depositReceiptUrl", width: 28 },
     { header: "Activity Timeline", key: "activitySummary", width: 50 },
@@ -209,6 +213,7 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[]) {
       depositDateTime: row.depositDateTime?.toISOString() ?? "",
       clearedAt: row.clearedAt?.toISOString() ?? "",
       bouncedAt: row.bouncedAt?.toISOString() ?? "",
+      createdAt: row.createdAt.toISOString(),
     })
   );
   return workbook.xlsx.writeBuffer();
@@ -218,6 +223,7 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
   return reportToCsv(
     [
       "Party Name",
+      "Batch/Firm",
       "Mobile Number",
       "Amount",
       "Cheque Number",
@@ -231,12 +237,14 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       "Collected By",
       "Deposit Account",
       "Notes",
+      "Created At",
       "Cheque Image",
       "Deposit Receipt",
       "Activity Timeline",
     ],
     rows.map((row) => [
       row.customerName,
+      row.batchTag,
       row.mobileNumber,
       String(row.amount),
       row.chequeNumber,
@@ -250,6 +258,7 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       row.collectedBy,
       row.depositedAccount,
       row.notes,
+      row.createdAt.toISOString(),
       row.frontImageUrl,
       row.depositReceiptUrl,
       row.activitySummary,
@@ -257,12 +266,13 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
   );
 }
 
-function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: string; filters: string[]; summary: Record<string, string | number> }) {
+function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: string; filters: string[]; summary: Record<string, string | number>; title?: string }) {
   const escape = (value: string) =>
     value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const generatedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
+  const reportTitle = input.title ?? "Cheques Report";
   const statusClass = (status: string) => status === "CLEARED" ? "green" : status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Cheques Report</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(reportTitle)}</title><style>
     body{font-family:Arial,sans-serif;color:#0f172a;margin:0;padding:20px;background:#fff}
     header{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:14px}
     h1{margin:0;font-size:22px} .muted{color:#64748b;font-size:12px}
@@ -275,11 +285,12 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     tr{break-inside:avoid}
     @media print{@page{size:landscape;margin:10mm}body{padding:0}.no-print{display:none}}
     @media(max-width:760px){.summary{grid-template-columns:1fr 1fr}table{font-size:9px}}
-  </style></head><body><header><div><h1>Cheques Report</h1><div class="muted">${escape(input.shopName)} | Generated ${escape(generatedAt)}</div></div><button class="no-print" onclick="window.print()">Print / Save PDF</button></header>
+  </style></head><body><header><div><h1>${escape(reportTitle)}</h1><div class="muted">${escape(input.shopName)} | Generated ${escape(generatedAt)}</div></div><button class="no-print" onclick="window.print()">Print / Save PDF</button></header>
   <section class="summary">${Object.entries(input.summary).map(([key, value]) => `<div class="card"><span class="muted">${escape(key)}</span><b>${escape(String(value))}</b></div>`).join("")}</section>
   <div class="filters"><b>Filters:</b> ${input.filters.length ? input.filters.map(escape).join(" | ") : "All cheques"}</div>
   <table><thead><tr>${[
     "Party Name",
+    "Batch/Firm",
     "Mobile",
     "Amount",
     "Cheque No",
@@ -293,7 +304,8 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     "Collected By",
     "Deposit Account",
     "Notes",
-  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.mobileNumber)}</td><td>${r.amount}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${r.chequeDate.toISOString().slice(0,10)}</td><td>${r.collectionDateTime.toISOString().slice(0,10)}</td><td>${r.depositDateTime?.toISOString().slice(0,10) ?? ""}</td><td>${r.clearedAt?.toISOString().slice(0,10) ?? ""}</td><td>${r.bouncedAt?.toISOString().slice(0,10) ?? ""}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : r.status}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook Cheques Report.</footer><script>window.print()</script></body></html>`;
+    "Created At",
+  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.batchTag)}</td><td>${escape(r.mobileNumber)}</td><td>${r.amount}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${r.chequeDate.toISOString().slice(0,10)}</td><td>${r.collectionDateTime.toISOString().slice(0,10)}</td><td>${r.depositDateTime?.toISOString().slice(0,10) ?? ""}</td><td>${r.clearedAt?.toISOString().slice(0,10) ?? ""}</td><td>${r.bouncedAt?.toISOString().slice(0,10) ?? ""}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : r.status}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td><td>${r.createdAt.toISOString().slice(0,10)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook ${escape(reportTitle)}.</footer><script>window.print()</script></body></html>`;
 }
 
 export async function GET(request: Request) {
@@ -302,7 +314,8 @@ export async function GET(request: Request) {
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
-  const status = searchParams.get("status") as ChequeStatus | null;
+  const rawStatus = searchParams.get("status")?.trim();
+  const status = rawStatus && VALID_CHEQUE_STATUSES.includes(rawStatus as ChequeStatus) ? rawStatus as ChequeStatus : null;
   const q = searchParams.get("q")?.trim();
   const partyName = searchParams.get("partyName")?.trim();
   const chequeNumber = searchParams.get("chequeNumber")?.trim();
@@ -316,6 +329,10 @@ export async function GET(request: Request) {
   const to = asDate(searchParams.get("to"), true);
   const quick = searchParams.get("quick") || "all";
   const format = searchParams.get("format");
+  const report = searchParams.get("report");
+  const isTrackerReport = report === "tracker";
+  const reportTitle = isTrackerReport ? "Cheque Tracker Report" : "Cheques Report";
+  const exportFileName = isTrackerReport ? "cheque-tracker-report" : "cheque-collections";
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
   const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 30)));
   const skip = (page - 1) * limit;
@@ -331,6 +348,9 @@ export async function GET(request: Request) {
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
   if (!canViewReports(session.role) && format) {
     return NextResponse.json({ error: "This role cannot export cheque reports" }, { status: 403 });
+  }
+  if (rawStatus && !status) {
+    console.warn("cheque_report_invalid_status_filter", { rawStatus, shopId, report: report || null });
   }
 
   if (q) {
@@ -436,11 +456,24 @@ export async function GET(request: Request) {
       prisma.cheque.aggregate({ where: { AND: [where, { status: "CLEARED" }] }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { AND: [where, { status: "BOUNCED" }] }, _sum: { amount: true } }),
       prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }),
-    ]);
+    ]).catch((error: unknown) => {
+      console.error("cheque_report_prisma_query_failed", {
+        message: error instanceof Error ? error.message : "Unknown Prisma query failure",
+        shopId,
+        report: report || null,
+        format: format || null,
+        quick,
+        status: status || null,
+        hasSearch: Boolean(q),
+        hasDateRange: Boolean(from || to),
+      });
+      throw error;
+    });
 
   const rows = items.map(chequeRow);
   if (!format) {
     console.info("cheque_filter_query", {
+      report: report || null,
       quick,
       advanced: {
         status,
@@ -461,9 +494,31 @@ export async function GET(request: Request) {
         todayEnd: todayEnd.toISOString(),
       },
       resultCount: total,
+      renderedCount: items.length,
       page,
       limit,
     });
+    if (total === 0) {
+      console.info("cheque_report_empty_state", {
+        reason: "No cheques matched current query",
+        quick,
+        report: report || null,
+        activeFilters: {
+          status: status || null,
+          q: q || null,
+          partyName: partyName || null,
+          chequeNumber: chequeNumber || null,
+          bankName: bankName || null,
+          batchTag: batchTag || null,
+          staffId: staffId || null,
+          depositedAccountId: depositedAccountId || null,
+          hasFrom: Boolean(from),
+          hasTo: Boolean(to),
+          hasMinAmount: minAmount !== undefined,
+          hasMaxAmount: maxAmount !== undefined,
+        },
+      });
+    }
   }
   if (quick === "due_today") {
     const chequeDateMatches = await prisma.cheque.findMany({
@@ -489,17 +544,17 @@ export async function GET(request: Request) {
     });
   }
   if (format === "xlsx") {
-    const buffer = await chequesToExcel(rows);
+    const buffer = await chequesToExcel(rows, reportTitle);
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": 'attachment; filename="cheque-collections.xlsx"',
+        "Content-Disposition": `attachment; filename="${exportFileName}.xlsx"`,
       },
     });
   }
   if (format === "csv") {
     return new NextResponse(chequesToCsv(rows), {
-      headers: { "Content-Type": "text/csv", "Content-Disposition": 'attachment; filename="cheque-collections.csv"' },
+      headers: { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename="${exportFileName}.csv"` },
     });
   }
   if (format === "pdf") {
@@ -520,6 +575,7 @@ export async function GET(request: Request) {
     return new NextResponse(
       printableHtml(rows, {
         shopName: shop?.shopName ?? "UdharBook",
+        title: reportTitle,
         filters,
         summary: {
           "Total Cheques": total,
@@ -529,7 +585,7 @@ export async function GET(request: Request) {
           "Bounced Amount": bouncedAmount._sum.amount ?? 0,
         },
       }),
-      { headers: { "Content-Type": "text/html", "Content-Disposition": 'inline; filename="cheques-report-print.html"' } }
+      { headers: { "Content-Type": "text/html", "Content-Disposition": `inline; filename="${exportFileName}-print.html"` } }
     );
   }
 

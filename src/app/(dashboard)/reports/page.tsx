@@ -91,6 +91,7 @@ const baseReports = [
 const statuses: { value: ChequeStatus | ""; label: string }[] = [
   { value: "", label: "All statuses" },
   { value: "COLLECTED", label: "Collected" },
+  { value: "PENDING_DEPOSIT", label: "Pending Deposit" },
   { value: "DEPOSITED", label: "Deposited" },
   { value: "CLEARED", label: "Cleared" },
   { value: "BOUNCED", label: "Bounced" },
@@ -123,8 +124,10 @@ export default function ReportsPage() {
   const [staffId, setStaffId] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
+  const [chequePage, setChequePage] = useState(1);
   const [data, setData] = useState<ChequeResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [chequeError, setChequeError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [attendancePreset, setAttendancePreset] = useState("today");
   const [attendanceFrom, setAttendanceFrom] = useState("");
@@ -135,21 +138,35 @@ export default function ReportsPage() {
   const [attendanceData, setAttendanceData] = useState<StaffAttendanceResponse | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(true);
 
+  const chequeFilterKey = useMemo(
+    () => JSON.stringify({ from, to, status, partyName, batchTag, bankName, query, staffId, minAmount, maxAmount }),
+    [bankName, batchTag, from, maxAmount, minAmount, partyName, query, staffId, status, to]
+  );
+
   const chequeParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
+    const addText = (key: string, value: string) => {
+      const trimmed = value.trim();
+      if (trimmed) params.set(key, trimmed);
+    };
+    const addAmount = (key: string, value: string) => {
+      const trimmed = value.trim();
+      if (trimmed && Number.isFinite(Number(trimmed))) params.set(key, trimmed);
+    };
+    addText("from", from);
+    addText("to", to);
     if (status) params.set("status", status);
-    if (partyName) params.set("partyName", partyName);
-    if (batchTag) params.set("batchTag", batchTag);
-    if (bankName) params.set("bankName", bankName);
-    if (query) params.set("q", query);
+    addText("partyName", partyName);
+    addText("batchTag", batchTag);
+    addText("bankName", bankName);
+    addText("q", query);
     if (staffId) params.set("staffId", staffId);
-    if (minAmount) params.set("minAmount", minAmount);
-    if (maxAmount) params.set("maxAmount", maxAmount);
+    addAmount("minAmount", minAmount);
+    addAmount("maxAmount", maxAmount);
+    params.set("page", String(chequePage));
     params.set("limit", "50");
     return params;
-  }, [bankName, batchTag, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
+  }, [bankName, batchTag, chequePage, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
   const attendanceParams = useMemo(() => {
     const params = new URLSearchParams({ preset: attendancePreset });
     if (attendancePreset === "custom") {
@@ -163,12 +180,55 @@ export default function ReportsPage() {
   }, [attendanceActive, attendanceFrom, attendancePreset, attendanceRole, attendanceStaff, attendanceTo]);
 
   useEffect(() => {
+    setChequePage(1);
+    setExpandedId(null);
+  }, [chequeFilterKey]);
+
+  useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch(`/api/cheques?${chequeParams.toString()}`)
-      .then((response) => (response.ok ? response.json() : null))
+    setChequeError(null);
+    const url = `/api/cheques?${chequeParams.toString()}`;
+    console.info("reports_cheque_filter_payload", {
+      params: Object.fromEntries(chequeParams.entries()),
+      page: chequePage,
+    });
+    fetch(url, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = response.headers.get("content-type")?.includes("application/json") ? await response.json() : await response.text();
+        if (!response.ok) {
+          throw new Error(typeof payload === "string" ? payload : payload?.error ?? "Cheque report request failed");
+        }
+        if (!payload || !Array.isArray(payload.items)) {
+          throw new Error("Cheque report returned an invalid response shape");
+        }
+        return payload as ChequeResponse;
+      })
       .then((payload: ChequeResponse | null) => {
-        if (alive) setData(payload);
+        if (!alive || !payload) return;
+        setData(payload);
+        console.info("reports_cheque_query_result", {
+          filteredCount: payload.pagination.total,
+          renderedCount: payload.items.length,
+          page: payload.pagination.page,
+          pages: payload.pagination.pages,
+        });
+        if (payload.items.length === 0) {
+          console.info("reports_cheque_empty_state", {
+            reason: payload.pagination.total === 0 ? "No cheques matched current filters" : "Current page has no rows",
+            params: Object.fromEntries(chequeParams.entries()),
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        const message = error instanceof Error ? error.message : "Cheque report could not be loaded";
+        console.error("reports_cheque_query_failed", {
+          message,
+          params: Object.fromEntries(chequeParams.entries()),
+        });
+        setChequeError(message);
+        setData(null);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -176,7 +236,7 @@ export default function ReportsPage() {
     return () => {
       alive = false;
     };
-  }, [chequeParams]);
+  }, [chequeParams, chequePage]);
   useEffect(() => {
     let alive = true;
     setAttendanceLoading(true);
@@ -206,6 +266,26 @@ export default function ReportsPage() {
     params.set("format", format);
     window.open(`/api/cheques?${params.toString()}`, "_blank");
   };
+  const downloadChequeTracker = (format: "xlsx" | "csv" | "pdf") => {
+    const params = new URLSearchParams(chequeParams);
+    params.set("format", format);
+    params.set("report", "tracker");
+    window.open(`/api/cheques?${params.toString()}`, "_blank");
+  };
+  const resetChequeFilters = () => {
+    setFrom("");
+    setTo("");
+    setStatus("");
+    setPartyName("");
+    setBatchTag("");
+    setBankName("");
+    setQuery("");
+    setStaffId("");
+    setMinAmount("");
+    setMaxAmount("");
+    setChequePage(1);
+    setExpandedId(null);
+  };
   const downloadAttendance = (format: "xlsx" | "csv") => {
     const params = new URLSearchParams(attendanceParams);
     params.set("format", format);
@@ -232,9 +312,14 @@ export default function ReportsPage() {
             <h2 className="text-lg font-bold">Cheques Report</h2>
             <p className="text-sm text-slate-500">Complete cheque-wise collection, deposit, clearance, bounce, and account tracking.</p>
           </div>
-          <Link href="/cheques" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
-            Open Cheque Collections
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <ExportButton label="Tracker Excel" icon={FileSpreadsheet} onClick={() => downloadChequeTracker("xlsx")} />
+            <ExportButton label="Tracker CSV" icon={Download} onClick={() => downloadChequeTracker("csv")} />
+            <ExportButton label="Tracker PDF" icon={FileText} onClick={() => downloadChequeTracker("pdf")} />
+            <Link href="/cheques" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
+              Open Cheque Collections
+            </Link>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -273,6 +358,15 @@ export default function ReportsPage() {
           </div>
         </div>
 
+        <div className="mt-3 flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-slate-500">
+            Showing {data?.items.length ?? 0} of {data?.pagination.total ?? 0} cheques
+          </p>
+          <button type="button" onClick={resetChequeFilters} className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 font-semibold dark:border-slate-700">
+            Reset Filters
+          </button>
+        </div>
+
         <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
           <table className="hidden min-w-[1240px] text-left text-sm lg:table">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
@@ -285,6 +379,8 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
+              ) : chequeError ? (
+                <tr><td colSpan={15} className="px-3 py-8 text-center text-red-600">{chequeError}</td></tr>
               ) : data?.items.length ? (
                 data.items.map((cheque) => (
                   <tr key={cheque.id} className="border-t border-slate-200 dark:border-slate-800">
@@ -314,6 +410,8 @@ export default function ReportsPage() {
           <div className="space-y-3 p-3 lg:hidden">
             {loading ? (
               <p className="py-6 text-center text-sm text-slate-500">Loading cheque report...</p>
+              ) : chequeError ? (
+              <p className="py-6 text-center text-sm text-red-600">{chequeError}</p>
             ) : data?.items.length ? (
               data.items.map((cheque) => (
                 <article key={cheque.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
@@ -335,6 +433,30 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+
+        {data ? (
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-500">Page {data.pagination.page} of {data.pagination.pages}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={loading || chequePage <= 1}
+                onClick={() => setChequePage((current) => Math.max(1, current - 1))}
+                className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={loading || chequePage >= data.pagination.pages}
+                onClick={() => setChequePage((current) => current + 1)}
+                className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
