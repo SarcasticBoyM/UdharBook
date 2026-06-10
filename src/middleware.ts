@@ -50,10 +50,10 @@ const SALES_HOME = "/field-staff";
 
 function normalizeRole(role?: string) {
   if (!role) return role;
-  if (["FIELD_SALES", "FIELD_STAFF", "FIELD_SALES_PERSON", "SALES"].includes(role)) return "SALES_PERSON";
-  if (["STAFF", "ACCOUNTING", "ACCOUNTING_STAFF", "ACCOUNTS"].includes(role)) return "ACCOUNT_STAFF";
-  if (["FIELD_SALES_AND_ACCOUNTING", "SALES_AND_ACCOUNTS", "SALES_PERSON_AND_ACCOUNT_STAFF"].includes(role)) return "SALES_PERSON_CUM_ACCOUNTS";
-  if (["SHOP_OWNER_ADMIN", "ADMIN"].includes(role)) return "SHOP_ADMIN";
+  if (role === "SALES_PERSON_CUM_ACCOUNTS" || (role.includes("SALES") && (role.includes("ACCOUNT") || role.includes("ACCOUNTING")))) return "SALES_PERSON_CUM_ACCOUNTS";
+  if (role === "SALES_PERSON" || role === "SALES" || role.includes("FIELD")) return "SALES_PERSON";
+  if (role === "ACCOUNT_STAFF" || role === "STAFF" || role === "ACCOUNTING" || role === "ACCOUNTS" || role.includes("ACCOUNTING")) return "ACCOUNT_STAFF";
+  if (role === "SHOP_OWNER_ADMIN" || role === "ADMIN") return "SHOP_ADMIN";
   return role;
 }
 

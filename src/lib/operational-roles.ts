@@ -18,11 +18,12 @@ export const assignableFixedRoles: FixedShopRole[] = [
 ];
 
 export function normalizeFixedRole(role: AppRole): AppRole {
-  if (["FIELD_SALES", "FIELD_STAFF", "FIELD_SALES_PERSON", "SALES"].includes(String(role))) return "SALES_PERSON";
-  if (["STAFF", "ACCOUNTING", "ACCOUNTING_STAFF", "ACCOUNTS"].includes(String(role))) return "ACCOUNT_STAFF";
-  if (["FIELD_SALES_AND_ACCOUNTING", "SALES_AND_ACCOUNTS", "SALES_PERSON_AND_ACCOUNT_STAFF"].includes(String(role))) return "SALES_PERSON_CUM_ACCOUNTS";
-  if (["SHOP_OWNER_ADMIN", "ADMIN"].includes(String(role))) return "SHOP_ADMIN";
-  return role;
+  const value = String(role);
+  if (value === "SALES_PERSON_CUM_ACCOUNTS" || (value.includes("SALES") && (value.includes("ACCOUNT") || value.includes("ACCOUNTING")))) return "SALES_PERSON_CUM_ACCOUNTS";
+  if (value === "SALES_PERSON" || value === "SALES" || value.includes("FIELD")) return "SALES_PERSON";
+  if (value === "ACCOUNT_STAFF" || value === "STAFF" || value === "ACCOUNTING" || value === "ACCOUNTS" || value.includes("ACCOUNTING")) return "ACCOUNT_STAFF";
+  if (value === "SHOP_OWNER_ADMIN" || value === "ADMIN") return "SHOP_ADMIN";
+  return value;
 }
 
 export function roleLabel(role: AppRole) {

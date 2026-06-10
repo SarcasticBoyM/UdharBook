@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import type { Prisma, UserRole } from "@prisma/client";
+import { Prisma, type UserRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { resolveOperationalShopId } from "@/lib/tenant";
@@ -29,12 +29,22 @@ type StaffRow = {
   currentStatus: "ACTIVE" | "IDLE" | "OFFLINE" | "LOGGED_OUT";
 };
 
+type StaffUserRow = {
+  id: string;
+  name: string;
+  role: UserRole;
+  disabledAt: Date | null;
+};
+
 type SimpleAttendanceRow = {
   id: string;
   staffId: string;
+  staffName: string;
+  role: string;
   workDate: Date;
   startedAt: Date;
   endedAt: Date | null;
+  activeMinutes: number;
   status: string;
 };
 
@@ -238,12 +248,29 @@ export async function GET(request: Request) {
     });
     return 0;
   });
-  const simpleRawRows: SimpleAttendanceRow[] = await prisma.attendance.findMany({
-    where: rawAttendanceWhere,
-    select: { id: true, staffId: true, workDate: true, startedAt: true, endedAt: true, status: true },
-    orderBy: { startedAt: "desc" },
-    take: 500,
-  });
+  const simpleRawRows = await prisma.$queryRaw<SimpleAttendanceRow[]>(Prisma.sql`
+    SELECT
+      a."id",
+      a."staffId",
+      COALESCE(u."name", 'Staff') AS "staffName",
+      CASE
+        WHEN u."role"::text = 'SUPER_ADMIN' THEN 'SUPER_ADMIN'
+        WHEN u."role"::text = 'SHOP_ADMIN' THEN 'SHOP_ADMIN'
+        WHEN u."role"::text = 'SALES_PERSON_CUM_ACCOUNTS' OR (u."role"::text LIKE '%SALES%' AND (u."role"::text LIKE '%ACCOUNT%' OR u."role"::text LIKE '%ACCOUNTING%')) THEN 'SALES_PERSON_CUM_ACCOUNTS'
+        WHEN u."role"::text = 'SALES_PERSON' OR u."role"::text = 'SALES' OR u."role"::text LIKE '%FIELD%' THEN 'SALES_PERSON'
+        ELSE 'ACCOUNT_STAFF'
+      END AS "role",
+      a."workDate",
+      a."startedAt",
+      a."endedAt",
+      a."activeMinutes",
+      a."status"::text AS "status"
+    FROM "Attendance" a
+    LEFT JOIN "User" u ON u."id" = a."staffId"
+    WHERE a."shopId" = ${shopId}
+    ORDER BY a."startedAt" DESC
+    LIMIT 500
+  `);
 
   if (isolateMode) {
     const debug = {
@@ -307,7 +334,35 @@ export async function GET(request: Request) {
     attendanceWhere,
   });
 
-  const users = await prisma.user.findMany({ where: userWhere, select: { id: true, name: true, role: true, disabledAt: true }, orderBy: { name: "asc" } }).catch((error: unknown) => {
+  const userConditions: Prisma.Sql[] = [Prisma.sql`u."shopId" = ${shopId}`];
+  if (staffName) userConditions.push(Prisma.sql`u."name" ILIKE ${`%${staffName}%`}`);
+  if (role) userConditions.push(Prisma.sql`
+    CASE
+      WHEN u."role"::text = 'SALES_PERSON_CUM_ACCOUNTS' OR (u."role"::text LIKE '%SALES%' AND (u."role"::text LIKE '%ACCOUNT%' OR u."role"::text LIKE '%ACCOUNTING%')) THEN 'SALES_PERSON_CUM_ACCOUNTS'
+      WHEN u."role"::text = 'SALES_PERSON' OR u."role"::text = 'SALES' OR u."role"::text LIKE '%FIELD%' THEN 'SALES_PERSON'
+      WHEN u."role"::text = 'SUPER_ADMIN' THEN 'SUPER_ADMIN'
+      WHEN u."role"::text = 'SHOP_ADMIN' THEN 'SHOP_ADMIN'
+      ELSE 'ACCOUNT_STAFF'
+    END = ${role}
+  `);
+  if (activeFilter === "active") userConditions.push(Prisma.sql`u."disabledAt" IS NULL`);
+  if (activeFilter === "inactive") userConditions.push(Prisma.sql`u."disabledAt" IS NOT NULL`);
+  const users = await prisma.$queryRaw<StaffUserRow[]>(Prisma.sql`
+    SELECT
+      u."id",
+      u."name",
+      CASE
+        WHEN u."role"::text = 'SALES_PERSON_CUM_ACCOUNTS' OR (u."role"::text LIKE '%SALES%' AND (u."role"::text LIKE '%ACCOUNT%' OR u."role"::text LIKE '%ACCOUNTING%')) THEN 'SALES_PERSON_CUM_ACCOUNTS'
+        WHEN u."role"::text = 'SALES_PERSON' OR u."role"::text = 'SALES' OR u."role"::text LIKE '%FIELD%' THEN 'SALES_PERSON'
+        WHEN u."role"::text = 'SUPER_ADMIN' THEN 'SUPER_ADMIN'
+        WHEN u."role"::text = 'SHOP_ADMIN' THEN 'SHOP_ADMIN'
+        ELSE 'ACCOUNT_STAFF'
+      END AS "role",
+      u."disabledAt"
+    FROM "User" u
+    WHERE ${Prisma.join(userConditions, " AND ")}
+    ORDER BY u."name" ASC
+  `).catch((error: unknown) => {
     console.error("staff_attendance_prisma_query_failed", {
       label: "users",
       message: error instanceof Error ? error.message : "Unknown Prisma query failure",
@@ -398,16 +453,10 @@ export async function GET(request: Request) {
   });
   let usedRawAttendanceFallback = false;
   if (rows.length === 0 && rawAttendanceCount && rawAttendanceCount > 0) {
-    const rawAttendanceRows = await prisma.attendance.findMany({
-      where: rawAttendanceWhere,
-      include: { staff: { select: { id: true, name: true, role: true } } },
-      orderBy: { startedAt: "desc" },
-      take: 500,
-    });
-    rows = rawAttendanceRows.map((item) => ({
+    rows = simpleRawRows.map((item) => ({
       staffId: item.staffId,
-      staffName: item.staff?.name ?? "Staff",
-      role: item.staff?.role ?? "ACCOUNT_STAFF",
+      staffName: item.staffName,
+      role: item.role as UserRole,
       loginTime: item.startedAt,
       logoutTime: item.endedAt,
       firstActivity: item.startedAt,

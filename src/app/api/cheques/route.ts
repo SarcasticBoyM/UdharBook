@@ -151,9 +151,9 @@ async function safeChequeAmount(label: string, where: Prisma.ChequeWhereInput) {
 function chequeInclude() {
   return {
     customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true } },
-    collectedBy: { select: { id: true, name: true, role: true } },
-    depositedBy: { select: { id: true, name: true, role: true } },
-    depositReceiptUploadedBy: { select: { id: true, name: true, role: true } },
+    collectedBy: { select: { id: true, name: true } },
+    depositedBy: { select: { id: true, name: true } },
+    depositReceiptUploadedBy: { select: { id: true, name: true } },
     depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
     staffVisit: {
       select: {
@@ -166,12 +166,12 @@ function chequeInclude() {
         result: true,
         visitType: true,
         verified: true,
-        staff: { select: { name: true, role: true } },
+        staff: { select: { name: true } },
       },
     },
     activities: {
       orderBy: { createdAt: "desc" as const },
-      include: { user: { select: { name: true, role: true } } },
+      include: { user: { select: { name: true } } },
       take: 20,
     },
   };
@@ -493,7 +493,7 @@ export async function GET(request: Request) {
         take: format ? 1000 : limit,
       }),
       prisma.cheque.count({ where }),
-      prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
+      prisma.user.findMany({ where: { shopId }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
       prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }),
     ]).catch((error: unknown) => {
       console.error("cheque_report_prisma_query_failed", {
@@ -756,7 +756,7 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     items,
-    users,
+    users: users.map((user) => ({ ...user, role: "ACCOUNT_STAFF" })),
     ...(runtimeDebug ? { debug: runtimeDebug } : {}),
     alerts: {
       pendingDeposit,
