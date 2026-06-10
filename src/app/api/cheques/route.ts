@@ -14,7 +14,6 @@ import { isSalesRole } from "@/lib/operational-roles";
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
 const VALID_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
-const ACTIVE_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "RETURNED_TO_PARTY"];
 const PENDING_DEPOSIT_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT"];
 
 const createSchema = z.object({
@@ -74,6 +73,23 @@ function asNumber(value: string | null) {
   if (!value) return undefined;
   const amount = Number(value);
   return Number.isFinite(amount) ? amount : undefined;
+}
+
+function safeText(value: unknown, fallback = "-") {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function safeIso(value: unknown) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function safeDateOnly(value: unknown) {
+  const iso = safeIso(value);
+  return iso ? iso.slice(0, 10) : "";
 }
 
 function dateFieldForStatus(status?: ChequeStatus | null) {
@@ -136,15 +152,15 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     : cheque.depositBankAccount ?? "";
   return {
     id: cheque.id,
-    customerName: cheque.customer.partyName,
-    batchTag: cheque.customer.batchTag ?? "",
-    mobileNumber: cheque.customer.contactNumber,
-    chequeNumber: cheque.chequeNumber,
-    bankName: cheque.bankName,
+    customerName: safeText(cheque.customer?.partyName),
+    batchTag: cheque.customer?.batchTag ?? "",
+    mobileNumber: safeText(cheque.customer?.contactNumber),
+    chequeNumber: safeText(cheque.chequeNumber),
+    bankName: safeText(cheque.bankName),
     branch: cheque.branch ?? "",
     chequeDate: cheque.chequeDate,
     amount: cheque.amount,
-    accountHolderName: cheque.accountHolderName,
+    accountHolderName: safeText(cheque.accountHolderName),
     status: cheque.status,
     collectionDateTime: cheque.collectionDateTime,
     collectionLatitude: cheque.collectionLatitude,
@@ -156,7 +172,7 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     visitResult: cheque.staffVisit?.result ?? "",
     visitType: cheque.staffVisit?.visitType ?? "",
     visitGps: cheque.staffVisit ? `${cheque.staffVisit.checkInLat},${cheque.staffVisit.checkInLng}` : "",
-    collectedBy: cheque.collectedBy.name,
+    collectedBy: safeText(cheque.collectedBy?.name),
     depositedBy: cheque.depositedBy?.name ?? "",
     depositedAccount: depositAccount,
     depositDateTime: cheque.depositDateTime,
@@ -174,8 +190,8 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     bouncedAt: cheque.bouncedAt,
     createdAt: cheque.createdAt,
     notes: cheque.collectionNotes || cheque.bounceReason || "",
-    activitySummary: cheque.activities
-      .map((activity) => `${activity.type}${activity.toStatus ? ` ${activity.toStatus}` : ""} by ${activity.user.name}`)
+    activitySummary: (cheque.activities ?? [])
+      .map((activity) => `${activity.type}${activity.toStatus ? ` ${activity.toStatus}` : ""} by ${safeText(activity.user?.name)}`)
       .join(" | "),
   };
 }
@@ -208,12 +224,12 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[], sheetName = 
   rows.forEach((row) =>
     sheet.addRow({
       ...row,
-      chequeDate: row.chequeDate.toISOString(),
-      collectionDateTime: row.collectionDateTime.toISOString(),
-      depositDateTime: row.depositDateTime?.toISOString() ?? "",
-      clearedAt: row.clearedAt?.toISOString() ?? "",
-      bouncedAt: row.bouncedAt?.toISOString() ?? "",
-      createdAt: row.createdAt.toISOString(),
+      chequeDate: safeIso(row.chequeDate),
+      collectionDateTime: safeIso(row.collectionDateTime),
+      depositDateTime: safeIso(row.depositDateTime),
+      clearedAt: safeIso(row.clearedAt),
+      bouncedAt: safeIso(row.bouncedAt),
+      createdAt: safeIso(row.createdAt),
     })
   );
   return workbook.xlsx.writeBuffer();
@@ -249,16 +265,16 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       String(row.amount),
       row.chequeNumber,
       row.bankName,
-      row.chequeDate.toISOString(),
-      row.collectionDateTime.toISOString(),
-      row.depositDateTime?.toISOString() ?? "",
-      row.clearedAt?.toISOString() ?? "",
-      row.bouncedAt?.toISOString() ?? "",
+      safeIso(row.chequeDate),
+      safeIso(row.collectionDateTime),
+      safeIso(row.depositDateTime),
+      safeIso(row.clearedAt),
+      safeIso(row.bouncedAt),
       row.status,
       row.collectedBy,
       row.depositedAccount,
       row.notes,
-      row.createdAt.toISOString(),
+      safeIso(row.createdAt),
       row.frontImageUrl,
       row.depositReceiptUrl,
       row.activitySummary,
@@ -267,8 +283,8 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
 }
 
 function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: string; filters: string[]; summary: Record<string, string | number>; title?: string }) {
-  const escape = (value: string) =>
-    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escape = (value: unknown) =>
+    safeText(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const generatedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
   const reportTitle = input.title ?? "Cheques Report";
   const statusClass = (status: string) => status === "CLEARED" ? "green" : status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
@@ -305,7 +321,7 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     "Deposit Account",
     "Notes",
     "Created At",
-  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.batchTag)}</td><td>${escape(r.mobileNumber)}</td><td>${r.amount}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${r.chequeDate.toISOString().slice(0,10)}</td><td>${r.collectionDateTime.toISOString().slice(0,10)}</td><td>${r.depositDateTime?.toISOString().slice(0,10) ?? ""}</td><td>${r.clearedAt?.toISOString().slice(0,10) ?? ""}</td><td>${r.bouncedAt?.toISOString().slice(0,10) ?? ""}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : r.status}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td><td>${r.createdAt.toISOString().slice(0,10)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook ${escape(reportTitle)}.</footer><script>window.print()</script></body></html>`;
+  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.batchTag)}</td><td>${escape(r.mobileNumber)}</td><td>${safeText(r.amount)}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${safeDateOnly(r.chequeDate)}</td><td>${safeDateOnly(r.collectionDateTime)}</td><td>${safeDateOnly(r.depositDateTime)}</td><td>${safeDateOnly(r.clearedAt)}</td><td>${safeDateOnly(r.bouncedAt)}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : safeText(r.status)}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td><td>${safeDateOnly(r.createdAt)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook ${escape(reportTitle)}.</footer><script>window.print()</script></body></html>`;
 }
 
 export async function GET(request: Request) {
@@ -386,8 +402,6 @@ export async function GET(request: Request) {
     conditions.push({ chequeDate: { gte: todayStart, lte: todayEnd } });
   } else if (quickStatus) {
     conditions.push({ status: quickStatus });
-  } else {
-    conditions.push({ status: { in: ACTIVE_CHEQUE_STATUSES } });
   }
   if (chequeNumber) conditions.push({ chequeNumber: { contains: chequeNumber, mode: "insensitive" } });
   if (depositedAccountId) conditions.push({ depositedAccountId });
@@ -587,21 +601,47 @@ export async function GET(request: Request) {
       minAmount !== undefined ? `Min amount: ${minAmount}` : "",
       maxAmount !== undefined ? `Max amount: ${maxAmount}` : "",
     ].filter(Boolean);
-    return new NextResponse(
-      printableHtml(rows, {
+    try {
+      const html = printableHtml(rows, {
+          shopName: shop?.shopName ?? "UdharBook",
+          title: reportTitle,
+          filters,
+          summary: {
+            "Total Cheques": total,
+            "Total Amount": filteredTotalAmount._sum.amount ?? 0,
+            "Pending Clearance": filteredPendingAmount._sum.amount ?? 0,
+            "Cleared Amount": clearedAmount._sum.amount ?? 0,
+            "Bounced Amount": bouncedAmount._sum.amount ?? 0,
+          },
+        });
+      console.info("cheque_pdf_report_generated", {
+        report: report || null,
+        rowCount: rows.length,
+        fileName: `${exportFileName}-print.html`,
+      });
+      return new NextResponse(html, {
+        headers: { "Content-Type": "text/html", "Content-Disposition": `inline; filename="${exportFileName}-print.html"` },
+      });
+    } catch (error: unknown) {
+      console.error("cheque_pdf_report_failed", {
+        message: error instanceof Error ? error.message : "Unknown PDF report failure",
+        report: report || null,
+        rowCount: rows.length,
+        sampleRowIds: rows.slice(0, 5).map((row) => row.id),
+      });
+      const fallbackHtml = printableHtml([], {
         shopName: shop?.shopName ?? "UdharBook",
         title: reportTitle,
-        filters,
+        filters: [...filters, "Export warning: one or more rows could not be rendered"],
         summary: {
           "Total Cheques": total,
-          "Total Amount": filteredTotalAmount._sum.amount ?? 0,
-          "Pending Clearance": filteredPendingAmount._sum.amount ?? 0,
-          "Cleared Amount": clearedAmount._sum.amount ?? 0,
-          "Bounced Amount": bouncedAmount._sum.amount ?? 0,
+          "Rows Rendered": 0,
         },
-      }),
-      { headers: { "Content-Type": "text/html", "Content-Disposition": `inline; filename="${exportFileName}-print.html"` } }
-    );
+      });
+      return new NextResponse(fallbackHtml, {
+        headers: { "Content-Type": "text/html", "Content-Disposition": `inline; filename="${exportFileName}-print.html"` },
+      });
+    }
   }
 
   return NextResponse.json({

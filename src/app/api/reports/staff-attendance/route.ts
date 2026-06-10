@@ -103,6 +103,15 @@ function currentStatus(input: { attendanceStatus?: string; endedAt?: Date | null
   return "OFFLINE";
 }
 
+function settledValue<T>(result: PromiseSettledResult<T>, fallback: T, label: string) {
+  if (result.status === "fulfilled") return result.value;
+  console.error("staff_attendance_aggregation_failed", {
+    label,
+    message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+  });
+  return fallback;
+}
+
 async function rowsToExcel(rows: StaffRow[]) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Staff Attendance");
@@ -217,8 +226,17 @@ export async function GET(request: Request) {
     userWhere,
   });
 
-  const [users, attendances, visits, orders, payments, cheques, locations, activity, followUps, chequeActivities] = await prisma.$transaction([
-    prisma.user.findMany({ where: userWhere, select: { id: true, name: true, role: true, disabledAt: true }, orderBy: { name: "asc" } }),
+  const users = await prisma.user.findMany({ where: userWhere, select: { id: true, name: true, role: true, disabledAt: true }, orderBy: { name: "asc" } }).catch((error: unknown) => {
+    console.error("staff_attendance_prisma_query_failed", {
+      label: "users",
+      message: error instanceof Error ? error.message : "Unknown Prisma query failure",
+      shopId,
+      range: { from: from.toISOString(), to: to.toISOString(), label },
+      userWhere,
+    });
+    throw error;
+  });
+  const aggregationResults = await Promise.allSettled([
     prisma.attendance.findMany({ where: { shopId, workDate: { gte: from, lte: to } }, orderBy: { startedAt: "asc" } }),
     prisma.staffVisit.groupBy({
       by: ["staffId", "status"],
@@ -234,15 +252,16 @@ export async function GET(request: Request) {
     prisma.activityLog.groupBy({ by: ["userId"], where: { shopId, createdAt: { gte: from, lte: to }, userId: { not: null } }, orderBy: { userId: "asc" }, _min: { createdAt: true }, _max: { createdAt: true }, _count: { id: true } }),
     prisma.followUp.groupBy({ by: ["createdById"], where: { shopId, followupDate: { gte: from, lte: to } }, orderBy: { createdById: "asc" }, _count: { id: true } }),
     prisma.chequeActivity.groupBy({ by: ["userId"], where: { shopId, createdAt: { gte: from, lte: to } }, orderBy: { userId: "asc" }, _count: { id: true } }),
-  ]).catch((error: unknown) => {
-    console.error("staff_attendance_prisma_query_failed", {
-      message: error instanceof Error ? error.message : "Unknown Prisma query failure",
-      shopId,
-      range: { from: from.toISOString(), to: to.toISOString(), label },
-      userWhere,
-    });
-    throw error;
-  });
+  ]);
+  const attendances = settledValue(aggregationResults[0], [], "attendance");
+  const visits = settledValue(aggregationResults[1], [], "visits");
+  const orders = settledValue(aggregationResults[2], [], "orders");
+  const payments = settledValue(aggregationResults[3], [], "payments");
+  const cheques = settledValue(aggregationResults[4], [], "cheques");
+  const locations = settledValue(aggregationResults[5], [], "locations");
+  const activity = settledValue(aggregationResults[6], [], "activity");
+  const followUps = settledValue(aggregationResults[7], [], "followUps");
+  const chequeActivities = settledValue(aggregationResults[8], [], "chequeActivities");
 
   const attendanceByStaff = new Map<string, typeof attendances>();
   for (const item of attendances) attendanceByStaff.set(item.staffId, [...(attendanceByStaff.get(item.staffId) ?? []), item]);
@@ -297,13 +316,22 @@ export async function GET(request: Request) {
     };
   });
 
+  const pendingStaffCheckouts = await prisma.staffVisit.count({ where: { shopId, status: "CHECKED_IN", checkInAt: { gte: from, lte: to } } }).catch((error: unknown) => {
+    console.error("staff_attendance_pending_checkout_count_failed", {
+      message: error instanceof Error ? error.message : "Unknown pending checkout count failure",
+      shopId,
+      range: { from: from.toISOString(), to: to.toISOString(), label },
+    });
+    return 0;
+  });
+
   const summary = {
     staffPresentToday: rows.filter((row) => row.loginTime || row.firstActivity).length,
     activeInField: rows.filter((row) => row.currentStatus === "ACTIVE").length,
     totalVisits: rows.reduce((sum, row) => sum + row.totalVisits, 0),
     ordersTakenToday: rows.reduce((sum, row) => sum + row.ordersTaken, 0),
     paymentsCollectedToday: rows.reduce((sum, row) => sum + row.paymentsCollected, 0),
-    pendingStaffCheckouts: await prisma.staffVisit.count({ where: { shopId, status: "CHECKED_IN", checkInAt: { gte: from, lte: to } } }),
+    pendingStaffCheckouts,
   };
 
   console.info("staff_attendance_report_result", {
