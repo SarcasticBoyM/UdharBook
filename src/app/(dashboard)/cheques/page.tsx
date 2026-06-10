@@ -136,6 +136,8 @@ type ChequeResponse = {
     filteredTotalAmount: number;
     filteredDepositedAmount: number;
     filteredPendingAmount: number;
+    filteredClearedAmount: number;
+    filteredBouncedAmount: number;
   };
   pagination: { page: number; limit: number; total: number; pages: number };
 };
@@ -184,17 +186,6 @@ type CustomerSearchResponse = {
   customers: CustomerOption[];
   error?: string;
 };
-
-const tabs: { label: string; value: ChequeStatus | "ALL" }[] = [
-  { label: "All", value: "ALL" },
-  { label: "Collected", value: "COLLECTED" },
-  { label: "Pending Deposit", value: "PENDING_DEPOSIT" },
-  { label: "Deposited", value: "DEPOSITED" },
-  { label: "Cleared", value: "CLEARED" },
-  { label: "Bounced", value: "BOUNCED" },
-  { label: "Returned", value: "RETURNED_TO_PARTY" },
-  { label: "Cancelled", value: "CANCELLED" },
-];
 
 const quickFilters = [
   { label: "All Cheques", value: "all" },
@@ -386,12 +377,17 @@ function StatCard({
 }
 
 export default function ChequeCollectionsPage() {
-  const [activeStatus, setActiveStatus] = useState<ChequeStatus | "ALL">("ALL");
   const [quick, setQuick] = useState("all");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [bankFilter, setBankFilter] = useState("");
+  const [chequeNumberFilter, setChequeNumberFilter] = useState("");
+  const [minAmount, setMinAmount] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
   const [batchTag, setBatchTag] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [debouncedCustomerQuery, setDebouncedCustomerQuery] = useState("");
+  const [debouncedBankFilter, setDebouncedBankFilter] = useState("");
+  const [debouncedChequeNumberFilter, setDebouncedChequeNumberFilter] = useState("");
   const [staffId, setStaffId] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
   const [from, setFrom] = useState("");
@@ -430,37 +426,54 @@ export default function ChequeCollectionsPage() {
   const [receiptPreview, setReceiptPreview] = useState("");
   const [receiptUploading, setReceiptUploading] = useState(false);
   const touchStart = useRef<Record<string, number>>({});
+  const loadSequence = useRef(0);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 350);
+    const timer = window.setTimeout(() => {
+      setDebouncedCustomerQuery(customerQuery.trim());
+      setDebouncedBankFilter(bankFilter.trim());
+      setDebouncedChequeNumberFilter(chequeNumberFilter.trim());
+    }, 350);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [bankFilter, chequeNumberFilter, customerQuery]);
 
   const params = useMemo(() => {
     const search = new URLSearchParams();
-    if (activeStatus !== "ALL") search.set("status", activeStatus);
     if (quick && quick !== "all") search.set("quick", quick);
-    if (debouncedQuery) search.set("q", debouncedQuery);
+    if (debouncedCustomerQuery) search.set("partyName", debouncedCustomerQuery);
+    if (debouncedBankFilter) search.set("bankName", debouncedBankFilter);
+    if (debouncedChequeNumberFilter) search.set("chequeNumber", debouncedChequeNumberFilter);
     if (batchTag.trim()) search.set("batchTag", batchTag.trim());
     if (staffId) search.set("staffId", staffId);
     if (accountFilter) search.set("depositedAccountId", accountFilter);
     if (from) search.set("from", from);
     if (to) search.set("to", to);
+    if (minAmount) search.set("minAmount", minAmount);
+    if (maxAmount) search.set("maxAmount", maxAmount);
     search.set("limit", "40");
     return search;
-  }, [accountFilter, activeStatus, batchTag, debouncedQuery, from, quick, staffId, to]);
+  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, maxAmount, minAmount, quick, staffId, to]);
 
   const loadCheques = useCallback(async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
-    const res = await fetch(`/api/cheques?${params.toString()}`);
-    if (res.ok) {
-      const payload = (await res.json()) as ChequeResponse;
-      setData(payload);
-      setSelectedCheque((current) =>
-        current ? payload.items.find((item) => item.id === current.id) ?? current : null
-      );
+    try {
+      const res = await fetch(`/api/cheques?${params.toString()}`);
+      if (sequence !== loadSequence.current) return;
+      if (res.ok) {
+        const payload = (await res.json()) as ChequeResponse;
+        if (sequence !== loadSequence.current) return;
+        setData(payload);
+        setSelectedCheque((current) => {
+          if (!payload.items.length) return null;
+          return current ? payload.items.find((item) => item.id === current.id) ?? payload.items[0] : payload.items[0];
+        });
+        setExpandedId((current) => (current && payload.items.some((item) => item.id === current) ? current : null));
+      }
+    } finally {
+      if (sequence === loadSequence.current) setLoading(false);
     }
-    setLoading(false);
   }, [params]);
 
   useEffect(() => {
@@ -718,7 +731,6 @@ export default function ChequeCollectionsPage() {
       setSelectedCustomer(null);
       setCustomers([]);
       setFormOpen(false);
-      setActiveStatus("ALL");
       setQuick("all");
       loadCheques();
     } else {
@@ -740,10 +752,15 @@ export default function ChequeCollectionsPage() {
   };
 
   const resetFilters = () => {
-    setActiveStatus("ALL");
     setQuick("all");
-    setQuery("");
-    setDebouncedQuery("");
+    setCustomerQuery("");
+    setBankFilter("");
+    setChequeNumberFilter("");
+    setDebouncedCustomerQuery("");
+    setDebouncedBankFilter("");
+    setDebouncedChequeNumberFilter("");
+    setMinAmount("");
+    setMaxAmount("");
     setBatchTag("");
     setStaffId("");
     setAccountFilter("");
@@ -1007,9 +1024,9 @@ export default function ChequeCollectionsPage() {
         <StatCard label="Filtered amount" value={formatCurrency(summary?.filteredTotalAmount ?? 0)} icon={IndianRupee} tone="border-slate-200 bg-white text-slate-800" />
         <StatCard label="Deposited amount" value={formatCurrency(summary?.filteredDepositedAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
         <StatCard label="Pending amount" value={formatCurrency(summary?.filteredPendingAmount ?? 0)} icon={Landmark} tone="border-amber-200 bg-amber-50 text-amber-800" />
-        <StatCard label="Cleared amount" value={formatCurrency(summary?.clearedAmount ?? 0)} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
+        <StatCard label="Cleared amount" value={formatCurrency(summary?.filteredClearedAmount ?? 0)} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
+        <StatCard label="Bounced amount" value={formatCurrency(summary?.filteredBouncedAmount ?? 0)} icon={AlertTriangle} tone="border-red-200 bg-red-50 text-red-800" />
         <StatCard label="Today deposits" value={formatCurrency(summary?.depositedTodayAmount ?? 0)} icon={Banknote} tone="border-slate-200 bg-white text-slate-800" />
-        <StatCard label="Today cleared" value={formatCurrency(summary?.clearedTodayAmount ?? 0)} icon={CheckCircle2} tone="border-teal-200 bg-teal-50 text-teal-800" />
       </div>
 
       {accountAudit.length > 0 && (
@@ -1116,7 +1133,6 @@ export default function ChequeCollectionsPage() {
                   type="button"
                   onClick={() => {
                     setQuick(filter.value);
-                    setActiveStatus("ALL");
                   }}
                   className={cn(
                     "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
@@ -1139,7 +1155,7 @@ export default function ChequeCollectionsPage() {
                 <SlidersHorizontal className="h-4 w-4" />
                 Advanced Filters
               </button>
-              {((quick && quick !== "all") || activeStatus !== "ALL" || query || batchTag || staffId || accountFilter || from || to) && (
+              {((quick && quick !== "all") || customerQuery || bankFilter || chequeNumberFilter || batchTag || staffId || accountFilter || from || to || minAmount || maxAmount) && (
                 <button type="button" onClick={resetFilters} className="min-h-10 rounded-lg border px-3 text-sm">
                   Reset
                 </button>
@@ -1148,34 +1164,28 @@ export default function ChequeCollectionsPage() {
 
             {advancedFiltersOpen && (
               <div className="mt-3 space-y-3">
-                <div className="flex gap-2 overflow-x-auto pb-2">
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab.value}
-                      type="button"
-                      onClick={() => setActiveStatus(tab.value)}
-                      className={cn(
-                        "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
-                        activeStatus === tab.value
-                          ? "border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950"
-                          : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
-                      )}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_160px_180px_150px_150px]">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(180px,1fr)_150px_150px_150px_160px_180px_120px_120px_150px_150px]">
                   <label className="relative block">
                     <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                     <input
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Search cheque number, customer, bank, amount"
+                      value={customerQuery}
+                      onChange={(e) => setCustomerQuery(e.target.value)}
+                      placeholder="Customer search"
                       className="min-h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
                     />
                   </label>
+                  <input
+                    value={chequeNumberFilter}
+                    onChange={(e) => setChequeNumberFilter(e.target.value)}
+                    placeholder="Cheque no."
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
+                  <input
+                    value={bankFilter}
+                    onChange={(e) => setBankFilter(e.target.value)}
+                    placeholder="Bank name"
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
                   <input
                     value={batchTag}
                     onChange={(e) => setBatchTag(e.target.value)}
@@ -1206,6 +1216,20 @@ export default function ChequeCollectionsPage() {
                       </option>
                     ))}
                   </select>
+                  <input
+                    value={minAmount}
+                    onChange={(e) => setMinAmount(e.target.value)}
+                    type="number"
+                    placeholder="Min amount"
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
+                  <input
+                    value={maxAmount}
+                    onChange={(e) => setMaxAmount(e.target.value)}
+                    type="number"
+                    placeholder="Max amount"
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
                   <label className="relative z-10 block cursor-pointer text-xs font-medium text-slate-500">
                     From Date
                     <input

@@ -13,6 +13,8 @@ import { isSalesRole } from "@/lib/operational-roles";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
+const ACTIVE_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "RETURNED_TO_PARTY"];
+const PENDING_DEPOSIT_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT"];
 
 const createSchema = z.object({
   customerId: z.string(),
@@ -81,8 +83,17 @@ function dateFieldForStatus(status?: ChequeStatus | null) {
   return "collectionDateTime";
 }
 
+function dateFieldForQuick(quick: string, status?: ChequeStatus | null) {
+  if (status) return dateFieldForStatus(status);
+  if (quick === "due_today") return "chequeDate";
+  if (quick === "deposited") return "depositDateTime";
+  if (quick === "bounced") return "bouncedAt";
+  if (quick === "returned") return "cancelledAt";
+  return "collectionDateTime";
+}
+
 function dateRangeCondition(
-  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt" | "cancelledAt",
+  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt" | "cancelledAt" | "chequeDate",
   from?: Date,
   to?: Date,
 ): Prisma.ChequeWhereInput {
@@ -294,6 +305,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status") as ChequeStatus | null;
   const q = searchParams.get("q")?.trim();
   const partyName = searchParams.get("partyName")?.trim();
+  const chequeNumber = searchParams.get("chequeNumber")?.trim();
   const bankName = searchParams.get("bankName")?.trim();
   const batchTag = searchParams.get("batchTag")?.trim();
   const staffId = searchParams.get("staffId") || undefined;
@@ -302,7 +314,7 @@ export async function GET(request: Request) {
   const maxAmount = asNumber(searchParams.get("maxAmount"));
   const from = asDate(searchParams.get("from"));
   const to = asDate(searchParams.get("to"), true);
-  const quick = searchParams.get("quick");
+  const quick = searchParams.get("quick") || "all";
   const format = searchParams.get("format");
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
   const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 30)));
@@ -340,27 +352,24 @@ export async function GET(request: Request) {
   if (bankName) conditions.push({ bankName: { contains: bankName, mode: "insensitive" } });
 
   const quickStatus: ChequeStatus | undefined =
-    quick === "bounced" ? "BOUNCED" : quick === "cleared" ? "CLEARED" : quick === "deposited" ? "DEPOSITED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
-  const effectiveStatus = status || quickStatus;
-  const dateField = dateFieldForStatus(effectiveStatus);
+    quick === "bounced" ? "BOUNCED" : quick === "deposited" ? "DEPOSITED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
+  const dateField = dateFieldForQuick(quick, status || quickStatus);
   if (from || to) {
     conditions.push(dateRangeCondition(dateField, from, to));
   }
 
-  if (status === "PENDING_DEPOSIT") conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+  if (status === "PENDING_DEPOSIT") conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
   else if (status) conditions.push({ status });
-  if (quick === "pending") conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
-  if (quickStatus) conditions.push({ status: quickStatus });
-  if (quick === "today") conditions.push({ collectionDateTime: { gte: todayStart, lte: todayEnd } });
-  if (quick === "due_today") {
-    conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+  else if (quick === "pending") conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
+  else if (quick === "due_today") {
+    conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
     conditions.push({ chequeDate: { gte: todayStart, lte: todayEnd } });
+  } else if (quickStatus) {
+    conditions.push({ status: quickStatus });
+  } else {
+    conditions.push({ status: { in: ACTIVE_CHEQUE_STATUSES } });
   }
-  if (quick === "overdue") {
-    conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
-    conditions.push({ collectionDateTime: { lt: staleDate } });
-  }
-  if (quick === "high") conditions.push({ amount: { gte: HIGH_VALUE } });
+  if (chequeNumber) conditions.push({ chequeNumber: { contains: chequeNumber, mode: "insensitive" } });
   if (depositedAccountId) conditions.push({ depositedAccountId });
   if (staffId) conditions.push({ collectedById: staffId });
   if (minAmount !== undefined) conditions.push({ amount: { gte: minAmount } });
@@ -389,6 +398,8 @@ export async function GET(request: Request) {
     filteredTotalAmount,
     filteredDepositedAmount,
     filteredPendingAmount,
+    filteredClearedAmount,
+    filteredBouncedAmount,
     shop,
   ] =
     await prisma.$transaction([
@@ -421,11 +432,39 @@ export async function GET(request: Request) {
       prisma.cheque.aggregate({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where, _sum: { amount: true } }),
       prisma.cheque.aggregate({ where: { AND: [where, { status: "DEPOSITED" }] }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { AND: [where, { status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }] }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { AND: [where, { status: { in: PENDING_DEPOSIT_STATUSES } }] }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { AND: [where, { status: "CLEARED" }] }, _sum: { amount: true } }),
+      prisma.cheque.aggregate({ where: { AND: [where, { status: "BOUNCED" }] }, _sum: { amount: true } }),
       prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }),
     ]);
 
   const rows = items.map(chequeRow);
+  if (!format) {
+    console.info("cheque_filter_query", {
+      quick,
+      advanced: {
+        status,
+        customer: partyName || null,
+        chequeNumber: chequeNumber || null,
+        bankName: bankName || null,
+        batchTag: batchTag || null,
+        staffId: staffId || null,
+        depositedAccountId: depositedAccountId || null,
+        from: from?.toISOString() ?? null,
+        to: to?.toISOString() ?? null,
+        minAmount: minAmount ?? null,
+        maxAmount: maxAmount ?? null,
+      },
+      timezone: {
+        offsetMinutes: INDIA_TIMEZONE_OFFSET_MINUTES,
+        todayStart: todayStart.toISOString(),
+        todayEnd: todayEnd.toISOString(),
+      },
+      resultCount: total,
+      page,
+      limit,
+    });
+  }
   if (quick === "due_today") {
     const chequeDateMatches = await prisma.cheque.findMany({
       where: { shopId, chequeDate: { gte: todayStart, lte: todayEnd } },
@@ -433,6 +472,7 @@ export async function GET(request: Request) {
       take: 5,
     });
     console.info("cheque_due_today_filter", {
+      quick,
       todayStart: todayStart.toISOString(),
       todayEnd: todayEnd.toISOString(),
       resultCount: total,
@@ -464,9 +504,11 @@ export async function GET(request: Request) {
   }
   if (format === "pdf") {
     const filters = [
+      quick && quick !== "all" ? `Quick filter: ${quick.replace(/_/g, " ")}` : "",
       status ? `Status: ${status === "RETURNED_TO_PARTY" ? "RETURNED" : status}` : "",
       q ? `Search: ${q}` : "",
       partyName ? `Party: ${partyName}` : "",
+      chequeNumber ? `Cheque number: ${chequeNumber}` : "",
       bankName ? `Bank: ${bankName}` : "",
       staffId ? "Collected by selected staff" : "",
       depositedAccountId ? "Deposit account selected" : "",
@@ -523,6 +565,8 @@ export async function GET(request: Request) {
       filteredTotalAmount: filteredTotalAmount._sum.amount ?? 0,
       filteredDepositedAmount: filteredDepositedAmount._sum.amount ?? 0,
       filteredPendingAmount: filteredPendingAmount._sum.amount ?? 0,
+      filteredClearedAmount: filteredClearedAmount._sum.amount ?? 0,
+      filteredBouncedAmount: filteredBouncedAmount._sum.amount ?? 0,
     },
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });
