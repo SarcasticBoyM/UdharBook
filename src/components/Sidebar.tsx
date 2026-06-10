@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   CalendarClock,
   CalendarCheck2,
+  Calculator,
   ClipboardList,
   Landmark,
   FileBarChart,
@@ -52,6 +53,7 @@ const links: SidebarLink[] = [
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
   { href: "/reports", label: "All Reports", icon: FileBarChart, adminOnly: true, section: "Reports" },
+  { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator, adminOnly: true, section: "Owner Tools" },
   { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true, section: "Business Profile" },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true, section: "Admin" },
   { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true, section: "Platform" },
@@ -61,6 +63,7 @@ const platformLinks: SidebarLink[] = [
   { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
   { href: "/shops", label: "Onboard Shop", icon: Store },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck },
+  { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator },
 ];
 
 export function Sidebar({ userName, role }: { userName: string; role: string }) {

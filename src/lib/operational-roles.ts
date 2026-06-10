@@ -47,7 +47,7 @@ export function isAccountsRole(role: AppRole) {
 
 export function canAccessModule(role: AppRole, href: string) {
   const normalized = normalizeFixedRole(role);
-  if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff";
+  if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff" || href === "/trade-calculator";
   if (normalized === "SHOP_ADMIN") return true;
   if (normalized === "SALES_PERSON") {
     return ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
