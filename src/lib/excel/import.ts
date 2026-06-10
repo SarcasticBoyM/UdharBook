@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { ImportSummary } from "@/types";
@@ -196,18 +197,7 @@ export async function importCustomersFromExcel(buffer: Buffer, shopId: string, o
           )
         );
         const createResults = await Promise.allSettled(
-          creates.map((row) =>
-            prisma.customer.create({
-              data: {
-                shopId,
-                partyName: row.partyName,
-                contactNumber: row.contactNumber,
-                batchTag,
-                outstandingBalance: row.outstandingBalance,
-                status: row.outstandingBalance === 0 ? "CLEARED" : "PENDING",
-              },
-            })
-          )
+          creates.map((row) => createImportedCustomer({ shopId, row, batchTag, reservedContacts }))
         );
 
         const batchUpdated = countFulfilled(updateResults);
@@ -374,27 +364,80 @@ function findExistingLedgerMatch(
   const targetTagKey = batchTagKey(batchTag);
   const nameMatches = lookup.byName.get(nameKey) ?? [];
   const contactMatches = contactNumber ? lookup.byContact.get(contactNumber) ?? [] : [];
-  const candidates = [
+  const globalCandidates = [
     ...nameMatches,
     ...contactMatches.map((match) => ({ id: match.id, batchTag: match.batchTag, contactNumber: contactNumber ?? "" })),
   ].filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
 
-  const sameTag = candidates.find((candidate) => batchTagKey(candidate.batchTag) === targetTagKey);
+  const sameTag = globalCandidates.find((candidate) => batchTagKey(candidate.batchTag) === targetTagKey);
   if (sameTag) return sameTag;
 
   if (batchTag) {
-    const untagged = candidates.filter((candidate) => !candidate.batchTag);
+    const differentTagMatches = globalCandidates.filter((candidate) => candidate.batchTag && batchTagKey(candidate.batchTag) !== targetTagKey);
+    if (differentTagMatches.length > 0) {
+      logger.info("customer_import_different_tag_matches_ignored", {
+        nameKey,
+        contactNumber,
+        uploadedBatchTag: batchTag,
+        ignoredTags: differentTagMatches.map((candidate) => candidate.batchTag),
+      });
+    }
+    const untagged = globalCandidates.filter((candidate) => !candidate.batchTag);
     if (untagged.length === 1) return untagged[0];
-    logger.info("customer_import_separate_ledger_required", {
+    logger.info("customer_import_new_ledger_required", {
       nameKey,
       contactNumber,
       uploadedBatchTag: batchTag,
-      candidateTags: candidates.map((candidate) => candidate.batchTag ?? null),
+      candidateTags: globalCandidates.map((candidate) => candidate.batchTag ?? null),
     });
     return null;
   }
 
-  return candidates.length === 1 ? candidates[0] : null;
+  return globalCandidates.length === 1 ? globalCandidates[0] : null;
+}
+
+async function createImportedCustomer(input: {
+  shopId: string;
+  row: {
+    rowNumber: number;
+    partyName: string;
+    contactNumber: string;
+    outstandingBalance: number;
+  };
+  batchTag: string | null;
+  reservedContacts: Set<string>;
+}) {
+  const data = {
+    shopId: input.shopId,
+    partyName: input.row.partyName,
+    contactNumber: input.row.contactNumber,
+    batchTag: input.batchTag,
+    outstandingBalance: input.row.outstandingBalance,
+    status: input.row.outstandingBalance === 0 ? "CLEARED" as const : "PENDING" as const,
+  };
+
+  try {
+    return await prisma.customer.create({ data });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const fallbackContact = reserveContactNumber(input.row.partyName, `${input.row.rowNumber}-ledger`, null, input.reservedContacts);
+      logger.warn("customer_import_duplicate_contact_fallback", {
+        shopId: input.shopId,
+        partyName: input.row.partyName,
+        uploadedBatchTag: input.batchTag,
+        originalContact: input.row.contactNumber,
+        fallbackContact,
+        reason: "Existing database unique contact constraint blocked separate ledger create",
+      });
+      return prisma.customer.create({
+        data: {
+          ...data,
+          contactNumber: fallbackContact,
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 function addCustomerToLookup(
@@ -427,17 +470,17 @@ function updateCustomerLookupTag(
   }
 }
 
-function reserveContactNumber(partyName: string, rowNumber: number, contactNumber: string | null, reservedContacts: Set<string>) {
+function reserveContactNumber(partyName: string, rowNumber: string | number, contactNumber: string | null, reservedContacts: Set<string>) {
   if (contactNumber && !reservedContacts.has(contactNumber)) {
     reservedContacts.add(contactNumber);
     return contactNumber;
   }
 
-  let suffix = rowNumber;
-  let placeholder = placeholderContact(partyName, suffix);
+  let attempt = 0;
+  let placeholder = placeholderContact(partyName, rowNumber);
   while (reservedContacts.has(placeholder)) {
-    suffix++;
-    placeholder = placeholderContact(partyName, suffix);
+    attempt++;
+    placeholder = placeholderContact(partyName, `${rowNumber}-${attempt}`);
   }
   reservedContacts.add(placeholder);
   return placeholder;
