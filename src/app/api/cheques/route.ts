@@ -474,6 +474,21 @@ export async function GET(request: Request) {
   if (!format) {
     console.info("cheque_filter_query", {
       report: report || null,
+      incomingFilters: {
+        status: rawStatus || null,
+        q: q || null,
+        partyName: partyName || null,
+        chequeNumber: chequeNumber || null,
+        bankName: bankName || null,
+        batchTag: batchTag || null,
+        staffId: staffId || null,
+        depositedAccountId: depositedAccountId || null,
+        from: searchParams.get("from") || null,
+        to: searchParams.get("to") || null,
+        minAmount: searchParams.get("minAmount") || null,
+        maxAmount: searchParams.get("maxAmount") || null,
+      },
+      where,
       quick,
       advanced: {
         status,

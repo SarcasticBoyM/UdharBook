@@ -6,6 +6,9 @@ import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 
+const VALID_USER_ROLES: UserRole[] = ["SUPER_ADMIN", "SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"];
+const VALID_ACTIVE_FILTERS = new Set(["", "active", "inactive"]);
+
 type StaffRow = {
   staffId: string;
   staffName: string;
@@ -40,6 +43,11 @@ function endOfDay(date: Date) {
 
 function rangeFromPreset(preset: string | null, fromParam: string | null, toParam: string | null) {
   const now = new Date();
+  const safeDate = (value: string | null) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
   if (preset === "yesterday") {
     const date = new Date(now);
     date.setDate(date.getDate() - 1);
@@ -55,7 +63,11 @@ function rangeFromPreset(preset: string | null, fromParam: string | null, toPara
     return { from, to: endOfDay(now), label: "This Month" };
   }
   if (preset === "custom" && fromParam && toParam) {
-    return { from: startOfDay(new Date(fromParam)), to: endOfDay(new Date(toParam)), label: "Custom Range" };
+    const customFrom = safeDate(fromParam);
+    const customTo = safeDate(toParam);
+    if (customFrom && customTo) {
+      return { from: startOfDay(customFrom), to: endOfDay(customTo), label: "Custom Range" };
+    }
   }
   return { from: startOfDay(now), to: endOfDay(now), label: "Today" };
 }
@@ -171,9 +183,17 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const { from, to, label } = rangeFromPreset(searchParams.get("preset"), searchParams.get("from"), searchParams.get("to"));
   const staffName = searchParams.get("staffName")?.trim();
-  const role = searchParams.get("role") as UserRole | null;
-  const activeFilter = searchParams.get("active") ?? "";
+  const rawRole = searchParams.get("role")?.trim();
+  const role = rawRole && VALID_USER_ROLES.includes(rawRole as UserRole) ? rawRole as UserRole : null;
+  const rawActiveFilter = searchParams.get("active")?.trim() ?? "";
+  const activeFilter = VALID_ACTIVE_FILTERS.has(rawActiveFilter) ? rawActiveFilter : "";
   const format = searchParams.get("format");
+  if (rawRole && !role) {
+    console.warn("staff_attendance_invalid_role_filter", { rawRole, shopId });
+  }
+  if (rawActiveFilter && !VALID_ACTIVE_FILTERS.has(rawActiveFilter)) {
+    console.warn("staff_attendance_invalid_active_filter", { rawActiveFilter, shopId });
+  }
 
   const userWhere: Prisma.UserWhereInput = {
     shopId,
@@ -182,6 +202,20 @@ export async function GET(request: Request) {
     ...(activeFilter === "active" ? { disabledAt: null } : {}),
     ...(activeFilter === "inactive" ? { disabledAt: { not: null } } : {}),
   };
+
+  console.info("staff_attendance_report_query", {
+    incomingFilters: {
+      preset: searchParams.get("preset") || "today",
+      from: searchParams.get("from") || null,
+      to: searchParams.get("to") || null,
+      staffName: staffName || null,
+      role: role || null,
+      active: activeFilter || null,
+      format: format || null,
+    },
+    range: { from: from.toISOString(), to: to.toISOString(), label },
+    userWhere,
+  });
 
   const [users, attendances, visits, orders, payments, cheques, locations, activity, followUps, chequeActivities] = await prisma.$transaction([
     prisma.user.findMany({ where: userWhere, select: { id: true, name: true, role: true, disabledAt: true }, orderBy: { name: "asc" } }),
@@ -200,7 +234,15 @@ export async function GET(request: Request) {
     prisma.activityLog.groupBy({ by: ["userId"], where: { shopId, createdAt: { gte: from, lte: to }, userId: { not: null } }, orderBy: { userId: "asc" }, _min: { createdAt: true }, _max: { createdAt: true }, _count: { id: true } }),
     prisma.followUp.groupBy({ by: ["createdById"], where: { shopId, followupDate: { gte: from, lte: to } }, orderBy: { createdById: "asc" }, _count: { id: true } }),
     prisma.chequeActivity.groupBy({ by: ["userId"], where: { shopId, createdAt: { gte: from, lte: to } }, orderBy: { userId: "asc" }, _count: { id: true } }),
-  ]);
+  ]).catch((error: unknown) => {
+    console.error("staff_attendance_prisma_query_failed", {
+      message: error instanceof Error ? error.message : "Unknown Prisma query failure",
+      shopId,
+      range: { from: from.toISOString(), to: to.toISOString(), label },
+      userWhere,
+    });
+    throw error;
+  });
 
   const attendanceByStaff = new Map<string, typeof attendances>();
   for (const item of attendances) attendanceByStaff.set(item.staffId, [...(attendanceByStaff.get(item.staffId) ?? []), item]);
@@ -263,6 +305,14 @@ export async function GET(request: Request) {
     paymentsCollectedToday: rows.reduce((sum, row) => sum + row.paymentsCollected, 0),
     pendingStaffCheckouts: await prisma.staffVisit.count({ where: { shopId, status: "CHECKED_IN", checkInAt: { gte: from, lte: to } } }),
   };
+
+  console.info("staff_attendance_report_result", {
+    userCount: users.length,
+    attendanceCount: attendances.length,
+    visitGroups: visits.length,
+    responseRows: rows.length,
+    summary,
+  });
 
   if (format === "xlsx") {
     const buffer = await rowsToExcel(rows);

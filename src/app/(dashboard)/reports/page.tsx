@@ -137,6 +137,7 @@ export default function ReportsPage() {
   const [attendanceActive, setAttendanceActive] = useState("");
   const [attendanceData, setAttendanceData] = useState<StaffAttendanceResponse | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(true);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
   const chequeFilterKey = useMemo(
     () => JSON.stringify({ from, to, status, partyName, batchTag, bankName, query, staffId, minAmount, maxAmount }),
@@ -173,7 +174,8 @@ export default function ReportsPage() {
       if (attendanceFrom) params.set("from", attendanceFrom);
       if (attendanceTo) params.set("to", attendanceTo);
     }
-    if (attendanceStaff) params.set("staffName", attendanceStaff);
+    const staff = attendanceStaff.trim();
+    if (staff) params.set("staffName", staff);
     if (attendanceRole) params.set("role", attendanceRole);
     if (attendanceActive) params.set("active", attendanceActive);
     return params;
@@ -240,10 +242,45 @@ export default function ReportsPage() {
   useEffect(() => {
     let alive = true;
     setAttendanceLoading(true);
-    fetch(`/api/reports/staff-attendance?${attendanceParams.toString()}`)
-      .then((response) => (response.ok ? response.json() : null))
+    setAttendanceError(null);
+    const url = `/api/reports/staff-attendance?${attendanceParams.toString()}`;
+    console.info("reports_attendance_filter_payload", {
+      params: Object.fromEntries(attendanceParams.entries()),
+    });
+    fetch(url, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = response.headers.get("content-type")?.includes("application/json") ? await response.json() : await response.text();
+        if (!response.ok) {
+          throw new Error(typeof payload === "string" ? payload : payload?.error ?? "Attendance report request failed");
+        }
+        if (!payload || !Array.isArray(payload.rows)) {
+          throw new Error("Attendance report returned an invalid response shape");
+        }
+        return payload as StaffAttendanceResponse;
+      })
       .then((payload: StaffAttendanceResponse | null) => {
-        if (alive) setAttendanceData(payload);
+        if (!alive || !payload) return;
+        setAttendanceData(payload);
+        console.info("reports_attendance_query_result", {
+          renderedCount: payload.rows.length,
+          summary: payload.summary,
+        });
+        if (payload.rows.length === 0) {
+          console.info("reports_attendance_empty_state", {
+            reason: "No staff matched current filters",
+            params: Object.fromEntries(attendanceParams.entries()),
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        const message = error instanceof Error ? error.message : "Attendance report could not be loaded";
+        console.error("reports_attendance_query_failed", {
+          message,
+          params: Object.fromEntries(attendanceParams.entries()),
+        });
+        setAttendanceError(message);
+        setAttendanceData(null);
       })
       .finally(() => {
         if (alive) setAttendanceLoading(false);
@@ -261,11 +298,6 @@ export default function ReportsPage() {
     window.open(`/api/reports/${type}?${params.toString()}`, "_blank");
   };
 
-  const downloadCheques = (format: "xlsx" | "csv" | "pdf") => {
-    const params = new URLSearchParams(chequeParams);
-    params.set("format", format);
-    window.open(`/api/cheques?${params.toString()}`, "_blank");
-  };
   const downloadChequeTracker = (format: "xlsx" | "csv" | "pdf") => {
     const params = new URLSearchParams(chequeParams);
     params.set("format", format);
@@ -299,11 +331,6 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-bold sm:text-3xl">Reports</h1>
           <p className="mt-1 text-sm text-slate-500">Accounting, recovery, customer, and cheque tracking exports.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <ExportButton label="Excel" icon={FileSpreadsheet} onClick={() => downloadCheques("xlsx")} />
-          <ExportButton label="CSV" icon={Download} onClick={() => downloadCheques("csv")} />
-          <ExportButton label="PDF" icon={FileText} onClick={() => downloadCheques("pdf")} />
-        </div>
       </div>
 
       <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -312,14 +339,9 @@ export default function ReportsPage() {
             <h2 className="text-lg font-bold">Cheques Report</h2>
             <p className="text-sm text-slate-500">Complete cheque-wise collection, deposit, clearance, bounce, and account tracking.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <ExportButton label="Tracker Excel" icon={FileSpreadsheet} onClick={() => downloadChequeTracker("xlsx")} />
-            <ExportButton label="Tracker CSV" icon={Download} onClick={() => downloadChequeTracker("csv")} />
-            <ExportButton label="Tracker PDF" icon={FileText} onClick={() => downloadChequeTracker("pdf")} />
-            <Link href="/cheques" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
-              Open Cheque Collections
-            </Link>
-          </div>
+          <Link href="/cheques" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
+            Open Cheque Collections
+          </Link>
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -531,6 +553,8 @@ export default function ReportsPage() {
             <tbody>
               {attendanceLoading ? (
                 <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
+              ) : attendanceError ? (
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{attendanceError}</td></tr>
               ) : attendanceData?.rows.length ? (
                 attendanceData.rows.map((row) => (
                   <tr key={row.staffId} className="border-t border-slate-200 dark:border-slate-800">
@@ -558,6 +582,8 @@ export default function ReportsPage() {
           <div className="space-y-3 p-3 lg:hidden">
             {attendanceLoading ? (
               <p className="py-6 text-center text-sm text-slate-500">Loading attendance report...</p>
+            ) : attendanceError ? (
+              <p className="py-6 text-center text-sm text-red-600">{attendanceError}</p>
             ) : attendanceData?.rows.length ? (
               attendanceData.rows.map((row) => (
                 <article key={row.staffId} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
@@ -585,7 +611,7 @@ export default function ReportsPage() {
         </div>
       </section>
 
-      <section className="mt-5 grid gap-4 md:grid-cols-3">
+      <section className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {baseReports.map((report) => (
           <div key={report.type} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <h3 className="font-semibold">{report.label}</h3>
@@ -597,6 +623,15 @@ export default function ReportsPage() {
             </div>
           </div>
         ))}
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h3 className="font-semibold">Cheque Tracker Report</h3>
+          <p className="mt-1 text-sm text-slate-500">Detailed cheque tracker export using the current cheque report filters.</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <ExportButton label="Excel" icon={FileSpreadsheet} onClick={() => downloadChequeTracker("xlsx")} />
+            <ExportButton label="CSV" icon={Download} onClick={() => downloadChequeTracker("csv")} />
+            <ExportButton label="PDF" icon={FileText} onClick={() => downloadChequeTracker("pdf")} />
+          </div>
+        </div>
       </section>
     </div>
   );
