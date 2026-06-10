@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   Settings,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   XCircle,
@@ -185,21 +186,26 @@ type CustomerSearchResponse = {
 };
 
 const tabs: { label: string; value: ChequeStatus | "ALL" }[] = [
+  { label: "All", value: "ALL" },
   { label: "Collected", value: "COLLECTED" },
   { label: "Pending Deposit", value: "PENDING_DEPOSIT" },
   { label: "Deposited", value: "DEPOSITED" },
   { label: "Cleared", value: "CLEARED" },
   { label: "Bounced", value: "BOUNCED" },
+  { label: "Returned", value: "RETURNED_TO_PARTY" },
   { label: "Cancelled", value: "CANCELLED" },
 ];
 
 const quickFilters = [
-  { label: "Today", value: "today" },
+  { label: "Deposit Due Today", value: "due_today" },
   { label: "Pending Deposit", value: "pending" },
+  { label: "Deposited", value: "deposited" },
   { label: "Bounced", value: "bounced" },
-  { label: "High Amount", value: "high" },
+  { label: "Returned", value: "returned" },
   { label: "Cleared", value: "cleared" },
   { label: "Overdue Deposit", value: "overdue" },
+  { label: "Collected Today", value: "today" },
+  { label: "High Amount", value: "high" },
 ];
 
 const statusTone: Record<ChequeStatus, string> = {
@@ -209,6 +215,7 @@ const statusTone: Record<ChequeStatus, string> = {
   CLEARED: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   BOUNCED: "bg-red-50 text-red-700 ring-red-200",
   REPLACED: "bg-violet-50 text-violet-700 ring-violet-200",
+  RETURNED_TO_PARTY: "bg-rose-50 text-rose-700 ring-rose-200",
   CANCELLED: "bg-slate-100 text-slate-700 ring-slate-200",
 };
 
@@ -382,8 +389,9 @@ function StatCard({
 }
 
 export default function ChequeCollectionsPage() {
-  const [activeStatus, setActiveStatus] = useState<ChequeStatus | "ALL">("PENDING_DEPOSIT");
+  const [activeStatus, setActiveStatus] = useState<ChequeStatus | "ALL">("ALL");
   const [quick, setQuick] = useState("");
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [batchTag, setBatchTag] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -433,7 +441,7 @@ export default function ChequeCollectionsPage() {
 
   const params = useMemo(() => {
     const search = new URLSearchParams();
-    if (activeStatus !== "ALL" && !quick) search.set("status", activeStatus);
+    if (activeStatus !== "ALL") search.set("status", activeStatus);
     if (quick) search.set("quick", quick);
     if (debouncedQuery) search.set("q", debouncedQuery);
     if (batchTag.trim()) search.set("batchTag", batchTag.trim());
@@ -470,7 +478,7 @@ export default function ChequeCollectionsPage() {
     if (staffId) search.set("staffId", staffId);
     if (quick === "cleared") search.set("status", "CLEARED");
     if (quick === "bounced") search.set("status", "BOUNCED");
-    if (quick === "pending") search.set("status", "DEPOSITED");
+    if (quick === "deposited") search.set("status", "DEPOSITED");
     const res = await fetch(`/api/cheque-deposit-accounts?${search.toString()}`);
     if (res.ok) {
       const payload = await res.json();
@@ -568,6 +576,11 @@ export default function ChequeCollectionsPage() {
       if (reason === null) return;
       body.bounceReason = reason;
       body.notes = reason;
+    }
+    if (status === "RETURNED_TO_PARTY") {
+      const confirmed = window.confirm("Mark this cheque as returned to party and close the workflow? Outstanding will be restored only if this cheque was already credited.");
+      if (!confirmed) return;
+      body.notes = "Cheque returned to party";
     }
 
     setData((current) =>
@@ -708,7 +721,7 @@ export default function ChequeCollectionsPage() {
       setSelectedCustomer(null);
       setCustomers([]);
       setFormOpen(false);
-      setActiveStatus("PENDING_DEPOSIT");
+      setActiveStatus("ALL");
       setQuick("");
       loadCheques();
     } else {
@@ -727,6 +740,18 @@ export default function ChequeCollectionsPage() {
     const exportParams = new URLSearchParams(params);
     exportParams.set("format", format);
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
+  };
+
+  const resetFilters = () => {
+    setActiveStatus("ALL");
+    setQuick("");
+    setQuery("");
+    setDebouncedQuery("");
+    setBatchTag("");
+    setStaffId("");
+    setAccountFilter("");
+    setFrom("");
+    setTo("");
   };
 
   const saveDepositAccount = async (event: React.FormEvent) => {
@@ -1087,90 +1112,7 @@ export default function ChequeCollectionsPage() {
       <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <main className="min-w-0">
           <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-            <div className="flex gap-2 overflow-x-auto pb-2">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.value}
-                  type="button"
-                  onClick={() => {
-                    setActiveStatus(tab.value);
-                    setQuick("");
-                  }}
-                  className={cn(
-                    "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
-                    activeStatus === tab.value && !quick
-                      ? "border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950"
-                      : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_160px_180px_150px_150px]">
-              <label className="relative block">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search cheque number, customer, bank, amount"
-                  className="min-h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                />
-              </label>
-              <input
-                value={batchTag}
-                onChange={(e) => setBatchTag(e.target.value)}
-                placeholder="Firm / batch"
-                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-              />
-              <select
-                value={staffId}
-                onChange={(e) => setStaffId(e.target.value)}
-                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                <option value="">All staff</option>
-                {data?.users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={accountFilter}
-                onChange={(e) => setAccountFilter(e.target.value)}
-                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                <option value="">All accounts</option>
-                {depositAccounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.bankName} - {account.accountName} - {account.lastFourDigits}
-                  </option>
-                ))}
-              </select>
-              <label className="relative z-10 block cursor-pointer text-xs font-medium text-slate-500">
-                From Date
-                <input
-                  type="date"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                  onClick={(e) => e.currentTarget.showPicker?.()}
-                  className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                />
-              </label>
-              <label className="relative z-20 block cursor-pointer text-xs font-medium text-slate-500">
-                To Date
-                <input
-                  type="date"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  onClick={(e) => e.currentTarget.showPicker?.()}
-                  className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            <div className="flex gap-2 overflow-x-auto pb-1">
               {quickFilters.map((filter) => (
                 <button
                   key={filter.value}
@@ -1187,6 +1129,106 @@ export default function ChequeCollectionsPage() {
                 </button>
               ))}
             </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setAdvancedFiltersOpen((open) => !open)}
+                className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Advanced Filters
+              </button>
+              {(quick || activeStatus !== "ALL" || query || batchTag || staffId || accountFilter || from || to) && (
+                <button type="button" onClick={resetFilters} className="min-h-10 rounded-lg border px-3 text-sm">
+                  Reset
+                </button>
+              )}
+            </div>
+
+            {advancedFiltersOpen && (
+              <div className="mt-3 space-y-3">
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {tabs.map((tab) => (
+                    <button
+                      key={tab.value}
+                      type="button"
+                      onClick={() => setActiveStatus(tab.value)}
+                      className={cn(
+                        "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
+                        activeStatus === tab.value
+                          ? "border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950"
+                          : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_150px_160px_180px_150px_150px]">
+                  <label className="relative block">
+                    <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search cheque number, customer, bank, amount"
+                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    />
+                  </label>
+                  <input
+                    value={batchTag}
+                    onChange={(e) => setBatchTag(e.target.value)}
+                    placeholder="Firm / batch"
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  />
+                  <select
+                    value={staffId}
+                    onChange={(e) => setStaffId(e.target.value)}
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  >
+                    <option value="">All staff</option>
+                    {data?.users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={accountFilter}
+                    onChange={(e) => setAccountFilter(e.target.value)}
+                    className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  >
+                    <option value="">All accounts</option>
+                    {depositAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.bankName} - {account.accountName} - {account.lastFourDigits}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="relative z-10 block cursor-pointer text-xs font-medium text-slate-500">
+                    From Date
+                    <input
+                      type="date"
+                      value={from}
+                      onChange={(e) => setFrom(e.target.value)}
+                      onClick={(e) => e.currentTarget.showPicker?.()}
+                      className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                  </label>
+                  <label className="relative z-20 block cursor-pointer text-xs font-medium text-slate-500">
+                    To Date
+                    <input
+                      type="date"
+                      value={to}
+                      onChange={(e) => setTo(e.target.value)}
+                      onClick={(e) => e.currentTarget.showPicker?.()}
+                      className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -1304,9 +1346,14 @@ export default function ChequeCollectionsPage() {
                       </>
                     )}
                     {normalizedChequeStatus(cheque.status) === "BOUNCED" && (
-                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg border border-indigo-300 px-3 text-sm font-medium text-indigo-700">
-                        Re-deposit
-                      </button>
+                      <>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg border border-indigo-300 px-3 text-sm font-medium text-indigo-700">
+                          Re-deposit
+                        </button>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "RETURNED_TO_PARTY"); }} className="min-h-10 rounded-lg border border-rose-300 px-3 text-sm font-medium text-rose-700">
+                          Cheque Returned
+                        </button>
+                      </>
                     )}
                     <button type="button" onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === cheque.id ? null : cheque.id); }} className="min-h-10 rounded-lg border px-3 text-sm">
                       Timeline
@@ -1591,8 +1638,6 @@ export default function ChequeCollectionsPage() {
               <Input label="Cheque date" type="date" value={form.chequeDate} confidence={scanResult?.fieldConfidence.chequeDate} onChange={(value) => setForm((current) => ({ ...current, chequeDate: value }))} required />
               <Input label="Amount" type="number" value={form.amount} confidence={scanResult?.fieldConfidence.amount} onChange={(value) => setForm((current) => ({ ...current, amount: value }))} required />
               <Input label="Account holder name" value={form.accountHolderName} confidence={scanResult?.fieldConfidence.accountHolderName} onChange={(value) => setForm((current) => ({ ...current, accountHolderName: value }))} required />
-              <Input label="MICR code" value={form.micrCode} confidence={scanResult?.fieldConfidence.micrCode} onChange={(value) => setForm((current) => ({ ...current, micrCode: value }))} />
-              <Input label="IFSC code" value={form.ifscCode} confidence={scanResult?.fieldConfidence.ifscCode} onChange={(value) => setForm((current) => ({ ...current, ifscCode: value.toUpperCase() }))} />
               <Input label="Collection date" type="date" value={form.collectionDate} onChange={(value) => setForm((current) => ({ ...current, collectionDate: value }))} required />
               <Input label="Collection time" type="time" value={form.collectionTime} onChange={(value) => setForm((current) => ({ ...current, collectionTime: value }))} required />
               <label className="md:col-span-2">

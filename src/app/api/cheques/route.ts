@@ -68,11 +68,12 @@ function dateFieldForStatus(status?: ChequeStatus | null) {
   if (status === "CLEARED") return "clearedAt";
   if (status === "DEPOSITED") return "depositDateTime";
   if (status === "BOUNCED") return "bouncedAt";
+  if (status === "RETURNED_TO_PARTY" || status === "CANCELLED") return "cancelledAt";
   return "collectionDateTime";
 }
 
 function dateRangeCondition(
-  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt",
+  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt" | "cancelledAt",
   from?: Date,
   to?: Date,
 ): Prisma.ChequeWhereInput {
@@ -240,7 +241,7 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
   const escape = (value: string) =>
     value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const generatedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
-  const statusClass = (status: string) => status === "CLEARED" ? "green" : status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
+  const statusClass = (status: string) => status === "CLEARED" ? "green" : status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
   return `<!doctype html><html><head><meta charset="utf-8"><title>Cheques Report</title><style>
     body{font-family:Arial,sans-serif;color:#0f172a;margin:0;padding:20px;background:#fff}
     header{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:14px}
@@ -272,7 +273,7 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     "Collected By",
     "Deposit Account",
     "Notes",
-  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.mobileNumber)}</td><td>${r.amount}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${r.chequeDate.toISOString().slice(0,10)}</td><td>${r.collectionDateTime.toISOString().slice(0,10)}</td><td>${r.depositDateTime?.toISOString().slice(0,10) ?? ""}</td><td>${r.clearedAt?.toISOString().slice(0,10) ?? ""}</td><td>${r.bouncedAt?.toISOString().slice(0,10) ?? ""}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "REPLACED" ? "RETURNED" : r.status}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook Cheques Report.</footer><script>window.print()</script></body></html>`;
+  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.mobileNumber)}</td><td>${r.amount}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${r.chequeDate.toISOString().slice(0,10)}</td><td>${r.collectionDateTime.toISOString().slice(0,10)}</td><td>${r.depositDateTime?.toISOString().slice(0,10) ?? ""}</td><td>${r.clearedAt?.toISOString().slice(0,10) ?? ""}</td><td>${r.bouncedAt?.toISOString().slice(0,10) ?? ""}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : r.status}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook Cheques Report.</footer><script>window.print()</script></body></html>`;
 }
 
 export async function GET(request: Request) {
@@ -330,7 +331,7 @@ export async function GET(request: Request) {
   if (bankName) conditions.push({ bankName: { contains: bankName, mode: "insensitive" } });
 
   const quickStatus: ChequeStatus | undefined =
-    quick === "bounced" ? "BOUNCED" : quick === "cleared" ? "CLEARED" : undefined;
+    quick === "bounced" ? "BOUNCED" : quick === "cleared" ? "CLEARED" : quick === "deposited" ? "DEPOSITED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
   const effectiveStatus = status || quickStatus;
   const dateField = dateFieldForStatus(effectiveStatus);
   if (from || to) {
@@ -342,6 +343,10 @@ export async function GET(request: Request) {
   if (quick === "pending") conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
   if (quickStatus) conditions.push({ status: quickStatus });
   if (quick === "today") conditions.push({ collectionDateTime: { gte: todayStart, lte: todayEnd } });
+  if (quick === "due_today") {
+    conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
+    conditions.push({ chequeDate: { gte: todayStart, lte: todayEnd } });
+  }
   if (quick === "overdue") {
     conditions.push({ status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } });
     conditions.push({ collectionDateTime: { lt: staleDate } });
@@ -428,7 +433,7 @@ export async function GET(request: Request) {
   }
   if (format === "pdf") {
     const filters = [
-      status ? `Status: ${status === "REPLACED" ? "RETURNED" : status}` : "",
+      status ? `Status: ${status === "RETURNED_TO_PARTY" ? "RETURNED" : status}` : "",
       q ? `Search: ${q}` : "",
       partyName ? `Party: ${partyName}` : "",
       bankName ? `Bank: ${bankName}` : "",
@@ -591,6 +596,35 @@ export async function POST(request: Request) {
           ocrConfidence: body.ocrConfidence ?? null,
         },
         recordPayment: false,
+      });
+      const nextBalance = Math.max(0, customer.outstandingBalance - body.amount);
+      const nextStatus = nextBalance <= 0 ? "CLEARED" : customer.status === "CLEARED" ? "PENDING" : customer.status;
+      await tx.customer.update({
+        where: { id: body.customerId },
+        data: {
+          outstandingBalance: nextBalance,
+          status: nextStatus,
+        },
+      });
+      await tx.paymentEntry.create({
+        data: {
+          shopId,
+          customerId: body.customerId,
+          amount: body.amount,
+          method: "CHEQUE",
+          notes: `Cheque collected: ${body.chequeNumber}`,
+          paidAt: new Date(body.collectionDateTime),
+          createdById: session.id,
+        },
+      });
+      await tx.statusHistory.create({
+        data: {
+          customerId: body.customerId,
+          fromStatus: customer.status,
+          toStatus: nextStatus,
+          notes: `Cheque collected: ${body.chequeNumber}. Balance reduced by ${body.amount}`,
+          changedById: session.id,
+        },
       });
       if (linkedVisit) {
         await tx.staffVisit.update({

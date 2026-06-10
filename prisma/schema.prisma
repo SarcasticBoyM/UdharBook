@@ -69,6 +69,7 @@ enum ChequeStatus {
   CLEARED
   BOUNCED
   REPLACED
+  RETURNED_TO_PARTY
   CANCELLED
 }
 

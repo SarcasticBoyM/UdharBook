@@ -76,7 +76,7 @@ export async function GET(request: Request) {
   }
 
   const audit = accounts.map((account) => {
-      const statuses: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "CANCELLED"];
+      const statuses: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
       const total = statuses.reduce(
         (sum, item) => {
           const value = bucket.get(`${account.id}:${item}`);

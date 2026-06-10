@@ -95,18 +95,19 @@ const statuses: { value: ChequeStatus | ""; label: string }[] = [
   { value: "CLEARED", label: "Cleared" },
   { value: "BOUNCED", label: "Bounced" },
   { value: "CANCELLED", label: "Cancelled" },
-  { value: "REPLACED", label: "Returned" },
+  { value: "RETURNED_TO_PARTY", label: "Returned" },
+  { value: "REPLACED", label: "Replaced" },
 ];
 
 function statusLabel(status: string) {
-  if (status === "REPLACED") return "Returned";
+  if (status === "RETURNED_TO_PARTY") return "Returned";
   if (status === "PENDING_DEPOSIT") return "Pending Deposit";
   return status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function statusTone(status: ChequeStatus) {
   if (status === "CLEARED") return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100";
-  if (status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED") return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100";
+  if (status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY") return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100";
   if (status === "DEPOSITED") return "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100";
   return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-100";
 }
