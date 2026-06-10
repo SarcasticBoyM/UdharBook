@@ -222,13 +222,13 @@ export async function GET(request: Request) {
   const rawAttendanceWhere: Prisma.AttendanceWhereInput = { shopId };
   const filteredAttendanceWhere: Prisma.AttendanceWhereInput = { shopId, workDate: { gte: from, lte: to } };
   const attendanceWhere = isolateMode ? rawAttendanceWhere : filteredAttendanceWhere;
-  const rawAttendanceCount = debugMode ? await prisma.attendance.count({ where: rawAttendanceWhere }).catch((error: unknown) => {
+  const rawAttendanceCount = await prisma.attendance.count({ where: rawAttendanceWhere }).catch((error: unknown) => {
     console.error("staff_attendance_raw_count_failed", {
       message: error instanceof Error ? error.message : "Unknown raw attendance count failure",
       shopId,
     });
     return 0;
-  }) : undefined;
+  });
 
   if (isolateMode) {
     const rawRows = await prisma.attendance.findMany({
@@ -336,7 +336,7 @@ export async function GET(request: Request) {
   const followUpMap = new Map(followUps.map((item) => [item.createdById, aggregateCount(item._count)]));
   const chequeActivityMap = new Map(chequeActivities.map((item) => [item.userId, aggregateCount(item._count)]));
 
-  const rows: StaffRow[] = users.map((user) => {
+  let rows: StaffRow[] = users.map((user) => {
     const staffAttendances = attendanceByStaff.get(user.id) ?? [];
     const loginTime = staffAttendances[0]?.startedAt ?? null;
     const logoutTime = [...staffAttendances].reverse().find((item) => item.endedAt)?.endedAt ?? null;
@@ -369,6 +369,41 @@ export async function GET(request: Request) {
       currentStatus: currentStatus({ attendanceStatus: staffAttendances.at(-1)?.status, endedAt: logoutTime, lastActivity }),
     };
   });
+  let usedRawAttendanceFallback = false;
+  if (rows.length === 0 && rawAttendanceCount && rawAttendanceCount > 0) {
+    const rawAttendanceRows = await prisma.attendance.findMany({
+      where: rawAttendanceWhere,
+      include: { staff: { select: { id: true, name: true, role: true } } },
+      orderBy: { startedAt: "desc" },
+      take: 500,
+    });
+    rows = rawAttendanceRows.map((item) => ({
+      staffId: item.staffId,
+      staffName: item.staff?.name ?? "Staff",
+      role: item.staff?.role ?? "ACCOUNT_STAFF",
+      loginTime: item.startedAt,
+      logoutTime: item.endedAt,
+      firstActivity: item.startedAt,
+      lastActivity: item.endedAt ?? item.startedAt,
+      totalActiveMinutes: item.activeMinutes || minutesBetween(item.startedAt, item.endedAt ?? new Date()),
+      totalVisits: 0,
+      completedVisits: 0,
+      ordersTaken: 0,
+      paymentsCollected: 0,
+      chequesCollected: 0,
+      followUpsHandled: 0,
+      chequeProcessing: 0,
+      gpsActiveStatus: "Not checked",
+      currentStatus: currentStatus({ attendanceStatus: item.status, endedAt: item.endedAt, lastActivity: item.endedAt ?? item.startedAt }),
+    }));
+    usedRawAttendanceFallback = true;
+    console.warn("staff_attendance_raw_fallback_used", {
+      shopId,
+      rawAttendanceCount,
+      fallbackRows: rows.length,
+      reason: "Aggregated staff report produced no rows while raw attendance exists",
+    });
+  }
 
   const pendingStaffCheckouts = await prisma.staffVisit.count({ where: { shopId, status: "CHECKED_IN", checkInAt: { gte: from, lte: to } } }).catch((error: unknown) => {
     console.error("staff_attendance_pending_checkout_count_failed", {
@@ -412,6 +447,7 @@ export async function GET(request: Request) {
         rawAttendanceCount: rawAttendanceCount ?? null,
         filteredAttendanceRows: attendances.length,
         returnedReportRows: rows.length,
+        usedRawAttendanceFallback,
         rowsDisappearAfterFilters: typeof rawAttendanceCount === "number" ? rawAttendanceCount > 0 && attendances.length === 0 : null,
       }
     : undefined;
@@ -424,6 +460,7 @@ export async function GET(request: Request) {
     attendanceCount: attendances.length,
     visitGroups: visits.length,
     responseRows: rows.length,
+    usedRawAttendanceFallback,
     summary,
   });
 

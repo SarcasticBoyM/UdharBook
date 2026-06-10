@@ -359,8 +359,10 @@ export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const shopId = await resolveOperationalShopId(request, session);
   const { searchParams } = new URL(request.url);
+  const debugRequested = searchParams.get("debug") === "runtime";
+  try {
+  const shopId = await resolveOperationalShopId(request, session);
   const rawStatus = searchParams.get("status")?.trim();
   const status = rawStatus && VALID_CHEQUE_STATUSES.includes(rawStatus as ChequeStatus) ? rawStatus as ChequeStatus : null;
   const q = searchParams.get("q")?.trim();
@@ -393,6 +395,34 @@ export async function GET(request: Request) {
   tomorrowStart.setDate(tomorrowStart.getDate() + 1);
   const tomorrowEnd = new Date(todayEnd);
   tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+
+  if (isolateMode) {
+    const [rawChequeCount, simpleCheques] = await Promise.all([
+      prisma.cheque.count({ where: { shopId } }),
+      prisma.cheque.findMany({
+        where: { shopId },
+        select: { id: true, amount: true, chequeDate: true, status: true, chequeNumber: true },
+        orderBy: { chequeDate: "desc" },
+        take: 20,
+      }),
+    ]);
+    const debug = {
+      enabled: true,
+      isolateMode: true,
+      phase: "simple-cheque-query-no-includes-no-filters-no-transforms",
+      session: {
+        userId: session.id,
+        role: session.role,
+        sessionShopId: session.shopId,
+        resolvedShopId: shopId,
+      },
+      rawWhere: { shopId },
+      rawChequeCount,
+      returnedRowCount: simpleCheques.length,
+    };
+    console.info("cheque_simple_runtime_isolation_success", debug);
+    return NextResponse.json({ success: true, debug, items: simpleCheques, pagination: { page: 1, limit: 20, total: rawChequeCount, pages: Math.max(1, Math.ceil(rawChequeCount / 20)) } });
+  }
 
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
   if (!canViewReports(session.role) && format) {
@@ -758,6 +788,32 @@ export async function GET(request: Request) {
     },
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown cheque API runtime error";
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error("cheque_api_runtime_crash", {
+      message,
+      stack,
+      session: {
+        userId: session.id,
+        role: session.role,
+        sessionShopId: session.shopId,
+      },
+      debugRequested,
+    });
+    return NextResponse.json({
+      success: false,
+      error: message,
+      stack: canUseRuntimeDebug(session.role) ? stack : undefined,
+      session: canUseRuntimeDebug(session.role)
+        ? {
+            userId: session.id,
+            role: session.role,
+            sessionShopId: session.shopId,
+          }
+        : undefined,
+    }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
