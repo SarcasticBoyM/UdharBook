@@ -3,7 +3,7 @@ import ExcelJS from "exceljs";
 import type { Prisma, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { requireShopId } from "@/lib/tenant";
+import { resolveOperationalShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 
 const VALID_USER_ROLES: UserRole[] = ["SUPER_ADMIN", "SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"];
@@ -188,7 +188,7 @@ export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const shopId = requireShopId(request, session);
+  const shopId = await resolveOperationalShopId(request, session);
   const { searchParams } = new URL(request.url);
   const { from, to, label } = rangeFromPreset(searchParams.get("preset"), searchParams.get("from"), searchParams.get("to"));
   const staffName = searchParams.get("staffName")?.trim();

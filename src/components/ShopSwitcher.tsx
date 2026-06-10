@@ -17,7 +17,7 @@ export function ShopSwitcher({ enabled }: { enabled: boolean }) {
       .then((res) => res.json())
       .then((data) => {
         setShops(data.shops ?? []);
-        setValue(data.shops?.[0]?.id ?? "");
+        setValue(data.selectedShopId ?? data.shops?.[0]?.id ?? "");
       })
       .catch(() => undefined);
   }, [enabled]);

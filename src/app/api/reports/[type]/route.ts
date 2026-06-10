@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { customersToExcel, followUpsToExcel, reportToCsv } from "@/lib/excel/export";
 import { agingBucket, agingBucketLabel } from "@/lib/aging";
-import { requireShopId } from "@/lib/tenant";
+import { resolveOperationalShopId } from "@/lib/tenant";
 
 function printableReportHtml(input: {
   title: string;
@@ -40,7 +40,7 @@ export async function GET(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { type } = await params;
-  const shopId = requireShopId(request, session);
+  const shopId = await resolveOperationalShopId(request, session);
   const { searchParams } = new URL(request.url);
   const format = searchParams.get("format") ?? "xlsx";
   const from = searchParams.get("from");

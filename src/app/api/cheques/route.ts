@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ChequeStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { requireShopId } from "@/lib/tenant";
+import { resolveOperationalShopId, requireShopId } from "@/lib/tenant";
 import { reportToCsv } from "@/lib/excel/export";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
@@ -115,6 +115,33 @@ function dateRangeCondition(
   to?: Date,
 ): Prisma.ChequeWhereInput {
   return { [field]: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } };
+}
+
+async function safeChequeCount(label: string, where: Prisma.ChequeWhereInput) {
+  try {
+    return await prisma.cheque.count({ where });
+  } catch (error) {
+    console.error("cheque_report_count_failed", {
+      label,
+      message: error instanceof Error ? error.message : "Unknown count failure",
+      where,
+    });
+    return 0;
+  }
+}
+
+async function safeChequeAmount(label: string, where: Prisma.ChequeWhereInput) {
+  try {
+    const result = await prisma.cheque.aggregate({ where, _sum: { amount: true } });
+    return result._sum.amount ?? 0;
+  } catch (error) {
+    console.error("cheque_report_amount_failed", {
+      label,
+      message: error instanceof Error ? error.message : "Unknown amount aggregation failure",
+      where,
+    });
+    return 0;
+  }
 }
 
 function chequeInclude() {
@@ -328,7 +355,7 @@ export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const shopId = requireShopId(request, session);
+  const shopId = await resolveOperationalShopId(request, session);
   const { searchParams } = new URL(request.url);
   const rawStatus = searchParams.get("status")?.trim();
   const status = rawStatus && VALID_CHEQUE_STATUSES.includes(rawStatus as ChequeStatus) ? rawStatus as ChequeStatus : null;
@@ -412,30 +439,7 @@ export async function GET(request: Request) {
   const where: Prisma.ChequeWhereInput = { AND: conditions };
 
   const include = chequeInclude();
-  const [
-    items,
-    total,
-    users,
-    collectedToday,
-    depositedToday,
-    clearedToday,
-    pendingDeposit,
-    bounced,
-    highValue,
-    totalCollected,
-    underClearingAmount,
-    clearedAmount,
-    bouncedAmount,
-    pendingDepositAmount,
-    depositedTodayAmount,
-    clearedTodayAmount,
-    filteredTotalAmount,
-    filteredDepositedAmount,
-    filteredPendingAmount,
-    filteredClearedAmount,
-    filteredBouncedAmount,
-    shop,
-  ] =
+  const [items, total, users, shop] =
     await prisma.$transaction([
       prisma.cheque.findMany({
         where,
@@ -451,24 +455,6 @@ export async function GET(request: Request) {
       }),
       prisma.cheque.count({ where }),
       prisma.user.findMany({ where: { shopId, role: { in: ["SHOP_ADMIN", "ACCOUNT_STAFF", "SALES_PERSON", "SALES_PERSON_CUM_ACCOUNTS"] } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
-      prisma.cheque.count({ where: { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } } }),
-      prisma.cheque.count({ where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } } }),
-      prisma.cheque.count({ where: { shopId, status: "BOUNCED" } }),
-      prisma.cheque.count({ where: { shopId, amount: { gte: HIGH_VALUE } } }),
-      prisma.cheque.count({ where: { shopId } }),
-      prisma.cheque.aggregate({ where: { shopId, status: "DEPOSITED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, status: "CLEARED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, status: "BOUNCED" }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { AND: [where, { status: "DEPOSITED" }] }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { AND: [where, { status: { in: PENDING_DEPOSIT_STATUSES } }] }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { AND: [where, { status: "CLEARED" }] }, _sum: { amount: true } }),
-      prisma.cheque.aggregate({ where: { AND: [where, { status: "BOUNCED" }] }, _sum: { amount: true } }),
       prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }),
     ]).catch((error: unknown) => {
       console.error("cheque_report_prisma_query_failed", {
@@ -483,6 +469,50 @@ export async function GET(request: Request) {
       });
       throw error;
     });
+
+  const [
+    collectedToday,
+    depositedToday,
+    clearedToday,
+    pendingDeposit,
+    bounced,
+    highValue,
+    totalCollected,
+    stale,
+    chequeDateTomorrow,
+    underClearingAmount,
+    clearedAmount,
+    bouncedAmount,
+    pendingDepositAmount,
+    depositedTodayAmount,
+    clearedTodayAmount,
+    filteredTotalAmount,
+    filteredDepositedAmount,
+    filteredPendingAmount,
+    filteredClearedAmount,
+    filteredBouncedAmount,
+  ] = await Promise.all([
+    safeChequeCount("collectedToday", { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } }),
+    safeChequeCount("depositedToday", { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }),
+    safeChequeCount("clearedToday", { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }),
+    safeChequeCount("pendingDeposit", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
+    safeChequeCount("bounced", { shopId, status: "BOUNCED" }),
+    safeChequeCount("highValue", { shopId, amount: { gte: HIGH_VALUE } }),
+    safeChequeCount("totalCollected", { shopId }),
+    safeChequeCount("stale", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } }),
+    safeChequeCount("chequeDateTomorrow", { shopId, chequeDate: { gte: tomorrowStart, lte: tomorrowEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
+    safeChequeAmount("underClearingAmount", { shopId, status: "DEPOSITED" }),
+    safeChequeAmount("clearedAmount", { shopId, status: "CLEARED" }),
+    safeChequeAmount("bouncedAmount", { shopId, status: "BOUNCED" }),
+    safeChequeAmount("pendingDepositAmount", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
+    safeChequeAmount("depositedTodayAmount", { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }),
+    safeChequeAmount("clearedTodayAmount", { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }),
+    safeChequeAmount("filteredTotalAmount", where),
+    safeChequeAmount("filteredDepositedAmount", { AND: [where, { status: "DEPOSITED" }] }),
+    safeChequeAmount("filteredPendingAmount", { AND: [where, { status: { in: PENDING_DEPOSIT_STATUSES } }] }),
+    safeChequeAmount("filteredClearedAmount", { AND: [where, { status: "CLEARED" }] }),
+    safeChequeAmount("filteredBouncedAmount", { AND: [where, { status: "BOUNCED" }] }),
+  ]);
 
   const rows = items.map(chequeRow);
   if (!format) {
@@ -607,11 +637,11 @@ export async function GET(request: Request) {
           title: reportTitle,
           filters,
           summary: {
-            "Total Cheques": total,
-            "Total Amount": filteredTotalAmount._sum.amount ?? 0,
-            "Pending Clearance": filteredPendingAmount._sum.amount ?? 0,
-            "Cleared Amount": clearedAmount._sum.amount ?? 0,
-            "Bounced Amount": bouncedAmount._sum.amount ?? 0,
+          "Total Cheques": total,
+          "Total Amount": filteredTotalAmount,
+          "Pending Clearance": filteredPendingAmount,
+          "Cleared Amount": clearedAmount,
+          "Bounced Amount": bouncedAmount,
           },
         });
       console.info("cheque_pdf_report_generated", {
@@ -651,12 +681,8 @@ export async function GET(request: Request) {
       pendingDeposit,
       bounced,
       highValue,
-      stale: await prisma.cheque.count({
-        where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } },
-      }),
-      chequeDateTomorrow: await prisma.cheque.count({
-        where: { shopId, chequeDate: { gte: tomorrowStart, lte: tomorrowEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
-      }),
+      stale,
+      chequeDateTomorrow,
     },
     summary: {
       collectedToday,
@@ -666,18 +692,18 @@ export async function GET(request: Request) {
       bounced,
       highValue,
       totalCollected,
-      underClearingAmount: underClearingAmount._sum.amount ?? 0,
-      clearedAmount: clearedAmount._sum.amount ?? 0,
-      bouncedAmount: bouncedAmount._sum.amount ?? 0,
-      pendingDepositAmount: pendingDepositAmount._sum.amount ?? 0,
-      depositedTodayAmount: depositedTodayAmount._sum.amount ?? 0,
-      clearedTodayAmount: clearedTodayAmount._sum.amount ?? 0,
+      underClearingAmount,
+      clearedAmount,
+      bouncedAmount,
+      pendingDepositAmount,
+      depositedTodayAmount,
+      clearedTodayAmount,
       filteredChequeCount: total,
-      filteredTotalAmount: filteredTotalAmount._sum.amount ?? 0,
-      filteredDepositedAmount: filteredDepositedAmount._sum.amount ?? 0,
-      filteredPendingAmount: filteredPendingAmount._sum.amount ?? 0,
-      filteredClearedAmount: filteredClearedAmount._sum.amount ?? 0,
-      filteredBouncedAmount: filteredBouncedAmount._sum.amount ?? 0,
+      filteredTotalAmount,
+      filteredDepositedAmount,
+      filteredPendingAmount,
+      filteredClearedAmount,
+      filteredBouncedAmount,
     },
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
   });

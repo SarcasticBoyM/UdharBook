@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { isSuperAdmin, visibleShops } from "@/lib/tenant";
+import { isSuperAdmin, resolveOperationalShopId, visibleShops } from "@/lib/tenant";
 
 const schema = z.object({
   shopName: z.string().min(1),
@@ -14,11 +14,12 @@ const schema = z.object({
   subscriptionStatus: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED", "CANCELLED"]).default("TRIAL"),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const shops = await visibleShops(session);
-  return NextResponse.json({ shops });
+  const selectedShopId = await resolveOperationalShopId(request, session).catch(() => shops[0]?.id ?? session.shopId);
+  return NextResponse.json({ shops, selectedShopId });
 }
 
 export async function POST(request: Request) {
