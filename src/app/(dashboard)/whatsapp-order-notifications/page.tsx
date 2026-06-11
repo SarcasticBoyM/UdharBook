@@ -16,9 +16,20 @@ type Setting = {
   lastDisconnectReason?: string | null;
   lastConnectionState?: string | null;
   lastPairingError?: string | null;
+  lastCredsUpdateAt?: string | null;
   lastCredsSavedAt?: string | null;
   lastCredsSaveError?: string | null;
   hasRegisteredCreds?: boolean | null;
+  socketStartedAt?: string | null;
+  qrGeneratedAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  lastHeartbeatSocketState?: string | null;
+  postQrAliveCheckedAt?: string | null;
+  socketState10sAfterQr?: string | null;
+  socketAlive10sAfterQr?: boolean | null;
+  processExitAt?: string | null;
+  processExitEvent?: string | null;
+  lastConnectionUpdateAt?: string | null;
 };
 
 type Group = { jid: string; name: string; participants: number };
@@ -212,7 +223,14 @@ export default function WhatsAppOrderNotificationsPage() {
               <p><span className="font-semibold">Connection:</span> {setting.lastConnectionState ?? setting.connectionStatus}</p>
               <p className="mt-1"><span className="font-semibold">Disconnect:</span> {setting.lastDisconnectReason ?? "-"}</p>
               <p className="mt-1"><span className="font-semibold">Pairing:</span> {setting.lastPairingError ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Socket Started:</span> {setting.socketStartedAt ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">QR Generated:</span> {setting.qrGeneratedAt ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Last Update:</span> {setting.lastConnectionUpdateAt ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Heartbeat:</span> {setting.lastHeartbeatAt ?? "-"} {setting.lastHeartbeatSocketState ? `(${setting.lastHeartbeatSocketState})` : ""}</p>
+              <p className="mt-1"><span className="font-semibold">10s After QR:</span> {setting.postQrAliveCheckedAt ? `${setting.socketAlive10sAfterQr ? "Alive" : "Not alive"} (${setting.socketState10sAfterQr ?? "unknown"})` : "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Creds Update:</span> {setting.lastCredsUpdateAt ?? "-"}</p>
               <p className="mt-1"><span className="font-semibold">Session Saved:</span> {setting.lastCredsSavedAt ? "Yes" : "No"}</p>
+              <p className="mt-1"><span className="font-semibold">Process Exit:</span> {setting.processExitAt ? `${setting.processExitAt} (${setting.processExitEvent ?? "unknown"})` : "-"}</p>
               {setting.lastCredsSaveError && <p className="mt-1 text-red-600">{setting.lastCredsSaveError}</p>}
             </div>
             <div className="mt-4 space-y-3">

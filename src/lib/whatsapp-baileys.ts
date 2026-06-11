@@ -13,6 +13,12 @@ type SocketLike = {
   ev: {
     on: (event: string, handler: (...args: unknown[]) => void) => void;
   };
+  ws?: {
+    isOpen?: boolean;
+    isClosed?: boolean;
+    isClosing?: boolean;
+    isConnecting?: boolean;
+  };
   sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   groupFetchAllParticipating: () => Promise<Record<string, { id?: string; subject?: string; participants?: unknown[] }>>;
   logout?: () => Promise<void>;
@@ -31,6 +37,7 @@ type BaileysRuntime = {
 type ShopClient = {
   socket: SocketLike;
   startedAt: number;
+  heartbeatTimer?: ReturnType<typeof setInterval>;
 };
 
 type ConnectionUpdatePayload = {
@@ -42,6 +49,8 @@ type ConnectionUpdatePayload = {
 };
 
 const clients = new Map<string, ShopClient>();
+const activeShopIds = new Set<string>();
+let processHooksRegistered = false;
 
 function forceSafeWebSocketImplementation() {
   process.env.WS_NO_BUFFER_UTIL = "1";
@@ -108,6 +117,14 @@ function hasRegisteredSession(state: { creds?: unknown }) {
   return Boolean((state.creds as { me?: unknown } | undefined)?.me);
 }
 
+function socketRuntimeState(socket: SocketLike) {
+  if (socket.ws?.isOpen) return "OPEN";
+  if (socket.ws?.isConnecting) return "CONNECTING";
+  if (socket.ws?.isClosing) return "CLOSING";
+  if (socket.ws?.isClosed) return "CLOSED";
+  return "UNKNOWN";
+}
+
 function diagnosticTemplates(current: Prisma.JsonValue | null | undefined, patch: Record<string, unknown>) {
   const base = current && typeof current === "object" && !Array.isArray(current) ? current as Prisma.JsonObject : {};
   const existingDiagnostics = base.whatsappDiagnostics && typeof base.whatsappDiagnostics === "object" && !Array.isArray(base.whatsappDiagnostics)
@@ -143,6 +160,65 @@ async function updateWhatsAppDiagnostics(shopId: string, patch: Record<string, u
   }
 }
 
+function registerProcessLifecycleHooks() {
+  if (processHooksRegistered) return;
+  processHooksRegistered = true;
+  const markExit = (event: string) => {
+    const processExitAt = new Date().toISOString();
+    for (const shopId of activeShopIds) {
+      logger.error("whatsapp_process_lifecycle_event", { shopId, event, processExitAt });
+      void updateWhatsAppDiagnostics(shopId, { processExitAt, processExitEvent: event });
+    }
+  };
+  process.once("beforeExit", () => markExit("beforeExit"));
+  process.once("exit", () => markExit("exit"));
+  process.once("SIGTERM", () => markExit("SIGTERM"));
+}
+
+function startHeartbeat(shopId: string, socket: SocketLike) {
+  const writeHeartbeat = () => {
+    const lastHeartbeatAt = new Date().toISOString();
+    const state = socketRuntimeState(socket);
+    logger.info("whatsapp_socket_heartbeat", { shopId, state, lastHeartbeatAt });
+    void updateWhatsAppDiagnostics(shopId, {
+      lastHeartbeatAt,
+      lastHeartbeatSocketState: state,
+      heartbeatRuntime: process.env.VERCEL ? "vercel" : "node",
+    });
+  };
+  writeHeartbeat();
+  const heartbeatTimer = setInterval(writeHeartbeat, 5000);
+  heartbeatTimer.unref?.();
+  return heartbeatTimer;
+}
+
+function stopClient(shopId: string) {
+  const client = clients.get(shopId);
+  if (client?.heartbeatTimer) clearInterval(client.heartbeatTimer);
+  clients.delete(shopId);
+  activeShopIds.delete(shopId);
+}
+
+function schedulePostQrAliveCheck(shopId: string, socket: SocketLike) {
+  const timer = setTimeout(() => {
+    const postQrAliveCheckedAt = new Date().toISOString();
+    const socketState10sAfterQr = socketRuntimeState(socket);
+    const socketAlive10sAfterQr = socketState10sAfterQr === "OPEN" || socketState10sAfterQr === "CONNECTING";
+    logger.info("whatsapp_socket_alive_after_qr", {
+      shopId,
+      postQrAliveCheckedAt,
+      socketState10sAfterQr,
+      socketAlive10sAfterQr,
+    });
+    void updateWhatsAppDiagnostics(shopId, {
+      postQrAliveCheckedAt,
+      socketState10sAfterQr,
+      socketAlive10sAfterQr,
+    });
+  }, 10000);
+  timer.unref?.();
+}
+
 function parseDisconnectReason(update: ConnectionUpdatePayload, disconnectReasonMap: Record<string, number>) {
   const statusCode = update.lastDisconnect?.error?.output?.statusCode;
   const reasonName = Object.entries(disconnectReasonMap).find(([, code]) => code === statusCode)?.[0] ?? null;
@@ -162,6 +238,8 @@ export async function startWhatsAppSession(shopId: string) {
 
   logger.info("whatsapp_connect_start", { shopId });
   forceSafeWebSocketImplementation();
+  registerProcessLifecycleHooks();
+  activeShopIds.add(shopId);
 
   await prisma.whatsAppOrderNotificationSetting.upsert({
     where: { shopId },
@@ -178,6 +256,7 @@ export async function startWhatsAppSession(shopId: string) {
     lastConnectionState: "CONNECTING",
     lastPairingError: null,
     socketStartedAt: new Date().toISOString(),
+    processExitAt: null,
     runtime: process.env.VERCEL ? "vercel" : "node",
   });
 
@@ -196,7 +275,9 @@ export async function startWhatsAppSession(shopId: string) {
 
   socket.ev.on("creds.update", (credsUpdate: unknown) => {
     const hasMe = Boolean((credsUpdate as { me?: unknown } | undefined)?.me || (state.creds as { me?: unknown } | undefined)?.me);
-    logger.info("whatsapp_creds_update", { shopId, hasMe });
+    const lastCredsUpdateAt = new Date().toISOString();
+    logger.info("whatsapp_creds_update", { shopId, hasMe, lastCredsUpdateAt });
+    void updateWhatsAppDiagnostics(shopId, { lastCredsUpdateAt, hasRegisteredCreds: hasMe });
     void saveCreds()
       .then(() => {
         logger.info("whatsapp_creds_persisted", { shopId, hasMe });
@@ -225,7 +306,7 @@ export async function startWhatsAppSession(shopId: string) {
     void handleConnectionUpdate(shopId, payload, runtime.DisconnectReason);
   });
 
-  clients.set(shopId, { socket, startedAt: Date.now() });
+  clients.set(shopId, { socket, startedAt: Date.now(), heartbeatTimer: startHeartbeat(shopId, socket) });
   return socket;
 }
 
@@ -247,6 +328,7 @@ async function handleConnectionUpdate(
   });
   await updateWhatsAppDiagnostics(shopId, {
     lastConnectionState: update.connection ?? (update.qr ? "QR_GENERATED" : "UNKNOWN"),
+    lastConnectionUpdateAt: new Date().toISOString(),
     lastDisconnectReason: reason.reasonName ?? reason.message ?? null,
     lastDisconnectStatusCode: reason.statusCode ?? null,
   });
@@ -257,6 +339,7 @@ async function handleConnectionUpdate(
   }
 
   if (update.qr) {
+    const qrGeneratedAt = new Date().toISOString();
     logger.info("whatsapp_qr_generated", { shopId });
     await prisma.whatsAppOrderNotificationSetting.upsert({
       where: { shopId },
@@ -271,7 +354,9 @@ async function handleConnectionUpdate(
         lastQrCode: update.qr,
       },
     });
-    await updateWhatsAppDiagnostics(shopId, { lastConnectionState: "QR_GENERATED", lastPairingError: null });
+    await updateWhatsAppDiagnostics(shopId, { lastConnectionState: "QR_GENERATED", qrGeneratedAt, lastPairingError: null });
+    const client = clients.get(shopId);
+    schedulePostQrAliveCheck(shopId, client?.socket ?? ({ } as SocketLike));
   }
 
   if (update.connection === "open") {
@@ -289,7 +374,7 @@ async function handleConnectionUpdate(
   }
 
   if (update.connection === "close") {
-    clients.delete(shopId);
+    stopClient(shopId);
     const statusCode = reason.statusCode;
     const loggedOut = statusCode === disconnectReason.loggedOut;
     const pairingError = reason.reasonName ?? reason.message ?? "Connection closed before pairing completed";
@@ -353,7 +438,7 @@ export async function logoutWhatsAppSession(shopId: string) {
   const client = clients.get(shopId);
   await client?.socket.logout?.().catch(() => undefined);
   client?.socket.end?.(new Error("Admin requested WhatsApp logout"));
-  clients.delete(shopId);
+  stopClient(shopId);
   await clearSessionSecrets(shopId);
   await prisma.whatsAppOrderNotificationSetting.update({
     where: { shopId },
