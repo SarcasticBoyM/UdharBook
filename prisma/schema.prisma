@@ -166,10 +166,30 @@ model Shop {
   whatsappOrderSetting WhatsAppOrderNotificationSetting?
   whatsappNotificationJobs WhatsAppNotificationJob[]
   whatsappSessionSecrets WhatsAppSessionSecret[]
+  productPresets     ProductPreset[]
   qrVCard            QRVCard?
 
   @@index([subscriptionStatus])
   @@index([createdAt])
+}
+
+model ProductPreset {
+  id                    String   @id @default(cuid())
+  shopId                String
+  shop                  Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  productName           String
+  baseRate              Float
+  discountPercent       Float    @default(0)
+  extraDiscountPercent  Float    @default(0)
+  schemeDiscountPercent Float    @default(0)
+  gstPercent            Float    @default(0)
+  transportLoading      Float    @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([shopId, productName])
+  @@index([shopId, productName])
+  @@index([shopId, updatedAt])
 }
 
 model QRVCard {
