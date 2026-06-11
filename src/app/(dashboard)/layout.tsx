@@ -10,9 +10,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (onboarding.needsOnboarding) redirect("/onboarding");
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen min-w-0 overflow-x-hidden">
       <Sidebar userName={session.name} role={session.role} />
-      <main className="w-full flex-1 overflow-auto p-4 pt-16 md:p-8">{children}</main>
+      <main className="min-w-0 w-full flex-1 overflow-x-hidden overflow-y-auto p-4 pt-16 md:p-8">{children}</main>
     </div>
   );
 }

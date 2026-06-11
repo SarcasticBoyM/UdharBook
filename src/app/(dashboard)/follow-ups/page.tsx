@@ -547,7 +547,40 @@ export default function FollowUpReportsPage() {
           </div>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 space-y-3 md:hidden">
+          {chequeReportData.items.length ? (
+            chequeReportData.items.map((cheque) => (
+              <article key={cheque.id} className="rounded-lg border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="break-words font-bold">{cheque.customer.partyName}{cheque.customer.batchTag ? ` [${cheque.customer.batchTag}]` : ""}</p>
+                    <p className="mt-1 text-xs text-slate-500">Cheque {cheque.chequeNumber} · {cheque.collectedBy.name}</p>
+                  </div>
+                  <StatusPill status={cheque.status} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                  <span>Amount: <strong className="text-slate-700 dark:text-slate-200">{formatCurrency(cheque.amount)}</strong></span>
+                  <span>Collected: {formatDateTime(cheque.collectionDateTime)}</span>
+                  <span>Deposited: {formatDateTime(cheque.depositDateTime)}</span>
+                  <span>Cleared: {formatDateTime(cheque.clearedAt)}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {cheque.frontImageUrl && <a href={cheque.frontImageUrl} target="_blank" className="min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold text-brand-600">Cheque Image</a>}
+                  {cheque.depositReceiptUrl && <a href={cheque.depositReceiptUrl} target="_blank" className="min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold text-brand-600">Receipt</a>}
+                  {cheque.staffVisit ? (
+                    <a href={`https://www.google.com/maps?q=${cheque.staffVisit.checkInLat},${cheque.staffVisit.checkInLng}`} target="_blank" className="min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold text-brand-600">Map</a>
+                  ) : cheque.collectionLatitude && cheque.collectionLongitude ? (
+                    <a href={`https://www.google.com/maps?q=${cheque.collectionLatitude},${cheque.collectionLongitude}`} target="_blank" className="min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold text-brand-600">Map</a>
+                  ) : null}
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500 dark:border-slate-700">No cheque rows match the selected filters.</div>
+          )}
+        </div>
+
+        <div className="mt-4 hidden overflow-x-auto md:block">
           <table className="min-w-[1500px] w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
               <tr>

@@ -359,14 +359,14 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
       <div className="space-y-3 p-4 lg:hidden">
         {visits.map((visit, index) => (
           <div key={visit.id} className="rounded-lg border p-3 dark:border-slate-700">
-            <div className="flex justify-between gap-3">
-              <div>
-                <p className="font-semibold">{index + 1}. {visit.customer.partyName}</p>
-                <p className="text-xs text-slate-500">{visit.staff.name} | {visit.visitType} | {duration(visit.checkInAt, visit.checkOutAt)}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="break-words font-semibold">{index + 1}. {visit.customer.partyName}</p>
+                <p className="mt-1 break-words text-xs text-slate-500">{visit.staff.name} | {visit.visitType} | {duration(visit.checkInAt, visit.checkOutAt)}</p>
               </div>
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
+              <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
             </div>
-            <p className="mt-2 text-sm">{notesSummary(visit)}</p>
+            <p className="mt-2 break-words text-sm">{notesSummary(visit)}</p>
             <p className="mt-2 text-sm font-bold">{money(visit.recoveryAmount)}</p>
           </div>
         ))}

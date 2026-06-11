@@ -201,7 +201,63 @@ export default function CustomersPage() {
         </select>
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+      <div className="mt-4 space-y-3 md:hidden">
+        {loading ? (
+          <div className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500 dark:border-slate-700">Loading...</div>
+        ) : items.length === 0 ? (
+          <div className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500 dark:border-slate-700">No customers found</div>
+        ) : (
+          items.map((c) => {
+            const inactive = c.outstandingBalance <= 0 || c.status === "CLEARED";
+            const archived = Boolean(c.isArchived);
+            return (
+              <article
+                key={c.id}
+                className={cn(
+                  "rounded-xl border bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900",
+                  inactive && "bg-slate-50 text-slate-500 opacity-80 dark:bg-slate-900/50",
+                  archived && "bg-slate-100 text-slate-500 opacity-80 dark:bg-slate-900"
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <Link href={`/customers/${c.id}`} className="block break-words text-base font-bold text-brand-700 dark:text-brand-300">
+                      {c.partyName}
+                    </Link>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {c.batchTag && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">{c.batchTag}</span>}
+                      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", statusBadgeClass(c.status))}>{formatStatus(c.status)}</span>
+                      {archived && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">Archived</span>}
+                    </div>
+                  </div>
+                  <input type="checkbox" checked={selected.has(c.id)} disabled={archived} onChange={() => toggleSelect(c.id)} className="mt-1 h-5 w-5 shrink-0" />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                  <span>Mobile: <strong className="text-slate-700 dark:text-slate-200">{c.contactNumber}</strong></span>
+                  <span>Balance: <strong className="text-slate-700 dark:text-slate-200">{formatCurrency(c.outstandingBalance)}</strong></span>
+                  <span>Last: {formatDate(c.lastFollowupDate)}</span>
+                  <span>Next: {formatDate(c.nextFollowupDate)}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {!archived && <CallActions partyName={c.partyName} contactNumber={c.contactNumber} balance={c.outstandingBalance} dueDate={c.nextFollowupDate} compact />}
+                  {!isReadOnlySales && !archived && (
+                    <button type="button" onClick={() => setFollowUpId(c.id)} className="min-h-10 rounded-lg border border-brand-200 px-3 text-xs font-semibold text-brand-700">
+                      Quick Follow-up
+                    </button>
+                  )}
+                  {!isReadOnlySales && (
+                    <button type="button" onClick={() => setArchiveState(c.id, archived ? "restore" : "archive")} className={cn("min-h-10 rounded-lg border px-3 text-xs font-semibold", archived ? "border-emerald-200 text-emerald-700" : "border-slate-200 text-slate-600")}>
+                      {archived ? "Restore" : "Archive"}
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })
+        )}
+      </div>
+
+      <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 md:block">
         <table className="w-full min-w-[800px] text-left text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800">
             <tr>

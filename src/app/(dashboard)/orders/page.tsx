@@ -141,6 +141,7 @@ export default function OrderDeskPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
   const [customerMode, setCustomerMode] = useState<CustomerMode>("existing");
   const [newCustomer, setNewCustomer] = useState({ partyName: "", contactNumber: "", address: "", area: "", gstNumber: "", notes: "" });
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [duplicateCustomer, setDuplicateCustomer] = useState<CustomerSuggestion | null>(null);
   const [orderDetails, setOrderDetails] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
@@ -210,6 +211,7 @@ export default function OrderDeskPage() {
     setCustomerQuery("");
     setCustomerResults([]);
     setNewCustomer({ partyName: "", contactNumber: "", address: "", area: "", gstNumber: "", notes: "" });
+    setMoreDetailsOpen(false);
     setDuplicateCustomer(null);
     setOrderDetails("");
     setDeliveryDate("");
@@ -222,6 +224,7 @@ export default function OrderDeskPage() {
     setOrderDetails(order.orderDetails);
     setDeliveryDate(toInputDate(order.preferredDeliveryDate));
     setPriority(order.priority);
+    setMoreDetailsOpen(false);
     setEditor({ mode: "edit", order });
   }
 
@@ -397,9 +400,9 @@ export default function OrderDeskPage() {
       </div>
 
       {editor && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
-          <div className="w-full rounded-t-2xl bg-white p-4 shadow-xl dark:bg-slate-950 sm:max-w-xl sm:rounded-2xl">
-            <div className="flex items-center justify-between gap-3">
+        <div className="fixed inset-0 z-50 flex items-start bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
+          <div className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl dark:bg-slate-950 sm:max-h-[calc(100dvh-2rem)] sm:max-w-xl sm:rounded-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4 pt-[max(1rem,env(safe-area-inset-top))] dark:border-slate-800">
               <div>
                 <h2 className="text-lg font-bold">{editor.mode === "create" ? "New Order" : "Edit Order"}</h2>
                 <p className="text-sm text-slate-500">Use free-text order details for fast field and counter entry.</p>
@@ -409,7 +412,7 @@ export default function OrderDeskPage() {
               </button>
             </div>
 
-            <div className="mt-4 space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-24">
               {editor.mode === "create" && (
                 <div>
                   <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-900">
@@ -454,7 +457,7 @@ export default function OrderDeskPage() {
                     </div>
                   ) : (
                     <div className="mt-3 space-y-3">
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-3 sm:grid-cols-3">
                         <div>
                           <label className="text-sm font-semibold">Customer Name *</label>
                           <input value={newCustomer.partyName} onChange={(e) => setNewCustomer((current) => ({ ...current, partyName: e.target.value }))} placeholder="Fresh customer name" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -463,13 +466,21 @@ export default function OrderDeskPage() {
                           <label className="text-sm font-semibold">Contact Number *</label>
                           <input value={newCustomer.contactNumber} onChange={(e) => setNewCustomer((current) => ({ ...current, contactNumber: e.target.value }))} placeholder="Mobile number" inputMode="tel" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
                         </div>
+                        <div>
+                          <label className="text-sm font-semibold">Area</label>
+                          <input value={newCustomer.area} onChange={(e) => setNewCustomer((current) => ({ ...current, area: e.target.value }))} placeholder="Area / Location" className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                        </div>
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <input value={newCustomer.area} onChange={(e) => setNewCustomer((current) => ({ ...current, area: e.target.value }))} placeholder="Area / Location" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                        <input value={newCustomer.gstNumber} onChange={(e) => setNewCustomer((current) => ({ ...current, gstNumber: e.target.value }))} placeholder="GST optional" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                      </div>
-                      <input value={newCustomer.address} onChange={(e) => setNewCustomer((current) => ({ ...current, address: e.target.value }))} placeholder="Address optional" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                      <textarea value={newCustomer.notes} onChange={(e) => setNewCustomer((current) => ({ ...current, notes: e.target.value }))} placeholder="Customer notes optional" rows={2} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+                      <button type="button" onClick={() => setMoreDetailsOpen((value) => !value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-semibold dark:border-slate-700">
+                        More Details {moreDetailsOpen ? "▲" : "▼"}
+                      </button>
+                      {moreDetailsOpen && (
+                        <div className="space-y-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                          <input value={newCustomer.gstNumber} onChange={(e) => setNewCustomer((current) => ({ ...current, gstNumber: e.target.value }))} placeholder="GST optional" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                          <input value={newCustomer.address} onChange={(e) => setNewCustomer((current) => ({ ...current, address: e.target.value }))} placeholder="Address optional" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                          <textarea value={newCustomer.notes} onChange={(e) => setNewCustomer((current) => ({ ...current, notes: e.target.value }))} placeholder="Customer notes optional" rows={2} className="w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+                        </div>
+                      )}
                       {duplicateCustomer && (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                           Existing customer found: <strong>{duplicateCustomer.partyName}</strong> - {duplicateCustomer.contactNumber}
@@ -493,9 +504,9 @@ export default function OrderDeskPage() {
               )}
               <div>
                 <label className="text-sm font-semibold">Order Details</label>
-                <textarea value={orderDetails} onChange={(e) => setOrderDetails(e.target.value)} rows={5} placeholder="Example: 100 bags cement + 20 steel rods" className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+                <textarea value={orderDetails} onChange={(e) => setOrderDetails(e.target.value)} rows={3} placeholder="Example: 100 bags cement + 20 steel rods" className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-sm font-semibold">Delivery Preferred Date</label>
                   <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -511,11 +522,11 @@ export default function OrderDeskPage() {
               </div>
             </div>
 
-            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setEditor(null)} className="rounded-lg border border-slate-300 px-4 py-3 text-sm font-semibold dark:border-slate-700">
+            <div className="sticky bottom-0 z-10 flex gap-2 border-t border-slate-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-slate-800 dark:bg-slate-950">
+              <button type="button" onClick={() => setEditor(null)} className="min-h-12 flex-1 rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700">
                 Cancel
               </button>
-              <button type="button" onClick={submitEditor} disabled={!orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              <button type="button" onClick={submitEditor} disabled={!orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="min-h-12 flex-1 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
                 Save Order
               </button>
             </div>
