@@ -239,8 +239,9 @@ function toDateTime(date: string, time: string) {
   return new Date(`${date}T${time || "00:00"}`).toISOString();
 }
 
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+function formatStatus(status?: string | null) {
+  const safeStatus = status ?? "UNKNOWN";
+  return safeStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function fileToDataUrl(file: File) {
@@ -350,7 +351,7 @@ function alertText(alerts: ChequeResponse["alerts"]) {
   return parts.join(", ");
 }
 
-function normalizedChequeStatus(status: ChequeStatus) {
+function normalizedChequeStatus(status?: ChequeStatus | null) {
   return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
 }
 
