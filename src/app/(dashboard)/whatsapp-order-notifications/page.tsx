@@ -17,6 +17,7 @@ type Setting = {
 
 type Group = { jid: string; name: string; participants: number };
 type Job = { id: string; event: string; status: string; retryCount: number; lastError: string | null; targetGroupName: string | null; createdAt: string; sentAt: string | null };
+type WhatsAppAction = "CONNECT" | "GROUPS" | "TEST" | "LOGOUT";
 
 const eventLabels: Record<string, string> = {
   ORDER_CREATED: "New Order Created",
@@ -37,7 +38,7 @@ export default function WhatsAppOrderNotificationsPage() {
 
   async function load() {
     setLoading(true);
-    const res = await fetch("/api/whatsapp/order-settings");
+    const res = await fetch("/api/whatsapp/settings");
     const data = await res.json().catch(() => ({}));
     setLoading(false);
     if (!res.ok) {
@@ -50,7 +51,7 @@ export default function WhatsAppOrderNotificationsPage() {
 
   async function save(patch: Partial<Setting>) {
     setMessage("");
-    const res = await fetch("/api/whatsapp/order-settings", {
+    const res = await fetch("/api/whatsapp/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
@@ -63,14 +64,16 @@ export default function WhatsAppOrderNotificationsPage() {
     setSetting(data.setting);
   }
 
-  async function action(name: "CONNECT" | "GROUPS" | "TEST" | "LOGOUT") {
+  async function action(name: WhatsAppAction) {
     setBusy(name);
     setMessage("");
-    const res = await fetch("/api/whatsapp/order-settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: name }),
-    });
+    const endpoint: Record<WhatsAppAction, string> = {
+      CONNECT: "/api/whatsapp/connect",
+      GROUPS: "/api/whatsapp/groups",
+      TEST: "/api/whatsapp/test",
+      LOGOUT: "/api/whatsapp/logout",
+    };
+    const res = await fetch(endpoint[name], { method: name === "GROUPS" ? "GET" : "POST" });
     const data = await res.json().catch(() => ({}));
     setBusy("");
     if (!res.ok) {
