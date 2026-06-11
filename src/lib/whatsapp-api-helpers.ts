@@ -1,5 +1,6 @@
 import QRCode from "qrcode";
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
@@ -24,15 +25,31 @@ export async function whatsappSettingFor(shopId: string) {
   });
 }
 
-export async function settingResponse(shopId: string) {
-  const setting = await whatsappSettingFor(shopId);
-  const qrCodeImage = setting.lastQrCode ? await QRCode.toDataURL(setting.lastQrCode, { margin: 1, width: 240 }) : null;
-  const recentJobs = await prisma.whatsAppNotificationJob.findMany({
-    where: { shopId },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-    select: { id: true, event: true, status: true, retryCount: true, lastError: true, sentAt: true, createdAt: true, targetGroupName: true },
-  });
+export function isMissingWhatsAppTables(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && ["P2021", "P2022"].includes(error.code);
+}
 
-  return NextResponse.json({ setting: { ...setting, qrCodeImage }, recentJobs });
+export function missingWhatsAppTablesResponse() {
+  return NextResponse.json({
+    success: false,
+    error: "WhatsApp tables not installed",
+  });
+}
+
+export async function settingResponse(shopId: string) {
+  try {
+    const setting = await whatsappSettingFor(shopId);
+    const qrCodeImage = setting.lastQrCode ? await QRCode.toDataURL(setting.lastQrCode, { margin: 1, width: 240 }) : null;
+    const recentJobs = await prisma.whatsAppNotificationJob.findMany({
+      where: { shopId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, event: true, status: true, retryCount: true, lastError: true, sentAt: true, createdAt: true, targetGroupName: true },
+    });
+
+    return NextResponse.json({ success: true, setting: { ...setting, qrCodeImage }, recentJobs });
+  } catch (error) {
+    if (isMissingWhatsAppTables(error)) return missingWhatsAppTablesResponse();
+    throw error;
+  }
 }

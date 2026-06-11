@@ -45,6 +45,12 @@ export default function WhatsAppOrderNotificationsPage() {
       setMessage(data.error ?? "Could not load WhatsApp settings.");
       return;
     }
+    if (data.success === false) {
+      setMessage(data.error ?? "WhatsApp settings are not available.");
+      setSetting(null);
+      setJobs([]);
+      return;
+    }
     setSetting(data.setting);
     setJobs(data.recentJobs ?? []);
   }
@@ -59,6 +65,10 @@ export default function WhatsAppOrderNotificationsPage() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setMessage(data.error ?? "Could not save settings.");
+      return;
+    }
+    if (data.success === false) {
+      setMessage(data.error ?? "WhatsApp settings are not available.");
       return;
     }
     setSetting(data.setting);

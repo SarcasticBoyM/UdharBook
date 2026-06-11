@@ -34,7 +34,13 @@ type ShopClient = {
 
 const clients = new Map<string, ShopClient>();
 
+function forceSafeWebSocketImplementation() {
+  process.env.WS_NO_BUFFER_UTIL = "1";
+  process.env.WS_NO_UTF_8_VALIDATE = "1";
+}
+
 async function loadBaileys(): Promise<BaileysRuntime> {
+  forceSafeWebSocketImplementation();
   const baileys = await import("@whiskeysockets/baileys");
   const moduleWithDefault = baileys as typeof baileys & { default?: BaileysRuntime["makeWASocket"] };
   return {
@@ -89,9 +95,16 @@ async function createEncryptedAuthState(shopId: string, runtime: BaileysRuntime)
   };
 }
 
+function hasRegisteredSession(state: { creds?: unknown }) {
+  return Boolean((state.creds as { me?: unknown } | undefined)?.me);
+}
+
 export async function startWhatsAppSession(shopId: string) {
   const existing = clients.get(shopId);
   if (existing) return existing.socket;
+
+  logger.info("whatsapp_connect_start", { shopId });
+  forceSafeWebSocketImplementation();
 
   await prisma.whatsAppOrderNotificationSetting.upsert({
     where: { shopId },
@@ -101,6 +114,9 @@ export async function startWhatsAppSession(shopId: string) {
 
   const runtime = await loadBaileys();
   const { state, saveCreds } = await createEncryptedAuthState(shopId, runtime);
+  if (!hasRegisteredSession(state)) {
+    logger.info("whatsapp_registration_start", { shopId });
+  }
   const { version } = await runtime.fetchLatestBaileysVersion();
   const socket = runtime.makeWASocket({
     auth: state,
@@ -128,6 +144,7 @@ async function handleConnectionUpdate(
   disconnectReason: Record<string, number>,
 ) {
   if (update.qr) {
+    logger.info("whatsapp_qr_generated", { shopId });
     await prisma.whatsAppOrderNotificationSetting.upsert({
       where: { shopId },
       update: { connectionStatus: "CONNECTING", lastQrCode: update.qr, lastError: null },
@@ -136,6 +153,7 @@ async function handleConnectionUpdate(
   }
 
   if (update.connection === "open") {
+    logger.info("whatsapp_connection_open", { shopId });
     await prisma.whatsAppOrderNotificationSetting.update({
       where: { shopId },
       data: { connectionStatus: "CONNECTED", lastQrCode: null, lastConnectedAt: new Date(), lastError: null },
@@ -146,6 +164,12 @@ async function handleConnectionUpdate(
     clients.delete(shopId);
     const statusCode = update.lastDisconnect?.error?.output?.statusCode;
     const loggedOut = statusCode === disconnectReason.loggedOut;
+    logger.error("whatsapp_connection_error", {
+      shopId,
+      statusCode,
+      loggedOut,
+      error: update.lastDisconnect?.error?.message ?? null,
+    });
     await prisma.whatsAppOrderNotificationSetting.update({
       where: { shopId },
       data: {
