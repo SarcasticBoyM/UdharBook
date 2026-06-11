@@ -14,6 +14,7 @@ import {
   History,
   IndianRupee,
   Loader2,
+  MessageCircle,
   Phone,
   Search,
   ShieldAlert,
@@ -26,6 +27,7 @@ import {
 import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/client";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
+import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
 
 type QueueStatus =
   | "CALLBACK"
@@ -229,14 +231,14 @@ const NO_RESPONSE_OUTCOMES: { value: QueueStatus; label: string; notes: string; 
 ];
 
 const FOLLOW_UP_LATER_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
-  { value: "RESCHEDULED", label: "Reminder Scheduled", notes: "Follow-up reminder scheduled.", response: "Reminder scheduled" },
+  { value: "RESCHEDULED", label: "WhatsApp Reminder Sent", notes: "WhatsApp reminder sent.", response: "WhatsApp reminder sent" },
 ];
 
 const NOTE_TEMPLATES = [
   "Customer promised payment today.",
   "Asked to call again in evening.",
   "Not reachable after multiple attempts.",
-  "Follow-up reminder scheduled.",
+  "WhatsApp reminder sent.",
   "Payment collector visit required.",
 ];
 
@@ -1609,6 +1611,7 @@ function ActionPanel({
   const [saving, setSaving] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [whatsAppMessage, setWhatsAppMessage] = useState("");
   const [visibleReminderMonth, setVisibleReminderMonth] = useState(() => monthStart(""));
 
   useEffect(() => {
@@ -1625,6 +1628,7 @@ function ActionPanel({
     setVisibleReminderMonth(monthStart(existingDate));
     setDatePickerOpen(false);
     setTimePickerOpen(false);
+    setWhatsAppMessage("");
   }, [customer]);
 
   if (!customer) {
@@ -1653,6 +1657,34 @@ function ActionPanel({
     setNextDate(combineReminderDateTime(selectedReminderDate || todayValue, time));
     setSetReminder(true);
     setTimePickerOpen(false);
+  };
+
+  const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate);
+  const reminderWhatsAppUrl = whatsappHref(customer.contactNumber, reminderMessage);
+
+  const sendWhatsAppReminder = async () => {
+    setWhatsAppMessage("");
+    setPrimaryAction("FOLLOW_UP_LATER");
+    setStatus("RESCHEDULED");
+    setSetReminder(true);
+    if (!notes) setNotes("WhatsApp reminder sent.");
+    if (!customerResponse) setCustomerResponse("WhatsApp reminder sent");
+    if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    if (isAndroid && navigator.share) {
+      try {
+        await navigator.share({
+          title: `Reminder for ${customer.partyName}`,
+          text: whatsappShareText(customer.contactNumber, reminderMessage),
+        });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setWhatsAppMessage("Could not open Android share chooser. Opening WhatsApp Web instead.");
+      }
+    }
+    window.open(reminderWhatsAppUrl, "_blank", "noopener,noreferrer");
   };
 
   const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
@@ -1752,7 +1784,16 @@ function ActionPanel({
                 <Phone className="h-4 w-4" />
                 Call
               </a>
+              <button
+                type="button"
+                onClick={sendWhatsAppReminder}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700"
+              >
+                <MessageCircle className="h-4 w-4" />
+                Send WhatsApp Reminder
+              </button>
             </div>
+            {whatsAppMessage && <p className="-mt-2 text-xs font-semibold text-amber-700">{whatsAppMessage}</p>}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
               <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the recovery outcome</p>
