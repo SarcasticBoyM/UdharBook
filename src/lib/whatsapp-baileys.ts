@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { clearSessionSecrets, deleteSessionSecret, readSessionSecret, writeSessionSecret } from "@/lib/whatsapp-session-store";
@@ -30,6 +31,14 @@ type BaileysRuntime = {
 type ShopClient = {
   socket: SocketLike;
   startedAt: number;
+};
+
+type ConnectionUpdatePayload = {
+  connection?: string;
+  qr?: string;
+  isNewLogin?: boolean;
+  receivedPendingNotifications?: boolean;
+  lastDisconnect?: { error?: { output?: { statusCode?: number; payload?: unknown }; message?: string; stack?: string; name?: string; data?: unknown } };
 };
 
 const clients = new Map<string, ShopClient>();
@@ -99,6 +108,54 @@ function hasRegisteredSession(state: { creds?: unknown }) {
   return Boolean((state.creds as { me?: unknown } | undefined)?.me);
 }
 
+function diagnosticTemplates(current: Prisma.JsonValue | null | undefined, patch: Record<string, unknown>) {
+  const base = current && typeof current === "object" && !Array.isArray(current) ? current as Prisma.JsonObject : {};
+  const existingDiagnostics = base.whatsappDiagnostics && typeof base.whatsappDiagnostics === "object" && !Array.isArray(base.whatsappDiagnostics)
+    ? base.whatsappDiagnostics as Prisma.JsonObject
+    : {};
+  return {
+    ...base,
+    whatsappDiagnostics: {
+      ...existingDiagnostics,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    },
+  } satisfies Prisma.JsonObject;
+}
+
+async function updateWhatsAppDiagnostics(shopId: string, patch: Record<string, unknown>) {
+  try {
+    const setting = await prisma.whatsAppOrderNotificationSetting.findUnique({
+      where: { shopId },
+      select: { templates: true },
+    });
+    if (!setting) return;
+    await prisma.whatsAppOrderNotificationSetting.update({
+      where: { shopId },
+      data: { templates: diagnosticTemplates(setting.templates, patch) },
+    });
+  } catch (error) {
+    logger.error("whatsapp_diagnostics_persist_failed", {
+      shopId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
+}
+
+function parseDisconnectReason(update: ConnectionUpdatePayload, disconnectReasonMap: Record<string, number>) {
+  const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+  const reasonName = Object.entries(disconnectReasonMap).find(([, code]) => code === statusCode)?.[0] ?? null;
+  const message = update.lastDisconnect?.error?.message ?? null;
+  return {
+    statusCode,
+    reasonName,
+    message,
+    name: update.lastDisconnect?.error?.name ?? null,
+    payload: update.lastDisconnect?.error?.output?.payload ?? null,
+  };
+}
+
 export async function startWhatsAppSession(shopId: string) {
   const existing = clients.get(shopId);
   if (existing) return existing.socket;
@@ -108,8 +165,20 @@ export async function startWhatsAppSession(shopId: string) {
 
   await prisma.whatsAppOrderNotificationSetting.upsert({
     where: { shopId },
-    update: { connectionStatus: "CONNECTING", lastError: null },
-    create: { shopId, connectionStatus: "CONNECTING" },
+    update: {
+      connectionStatus: "CONNECTING",
+      lastError: null,
+    },
+    create: {
+      shopId,
+      connectionStatus: "CONNECTING",
+    },
+  });
+  await updateWhatsAppDiagnostics(shopId, {
+    lastConnectionState: "CONNECTING",
+    lastPairingError: null,
+    socketStartedAt: new Date().toISOString(),
+    runtime: process.env.VERCEL ? "vercel" : "node",
   });
 
   const runtime = await loadBaileys();
@@ -125,12 +194,34 @@ export async function startWhatsAppSession(shopId: string) {
     browser: ["UdharBook", "Chrome", "1.0.0"],
   });
 
-  socket.ev.on("creds.update", () => {
-    void saveCreds();
+  socket.ev.on("creds.update", (credsUpdate: unknown) => {
+    const hasMe = Boolean((credsUpdate as { me?: unknown } | undefined)?.me || (state.creds as { me?: unknown } | undefined)?.me);
+    logger.info("whatsapp_creds_update", { shopId, hasMe });
+    void saveCreds()
+      .then(() => {
+        logger.info("whatsapp_creds_persisted", { shopId, hasMe });
+        return updateWhatsAppDiagnostics(shopId, {
+          lastCredsSavedAt: new Date().toISOString(),
+          lastCredsSaveError: null,
+          hasRegisteredCreds: hasMe,
+        });
+      })
+      .catch((error) => {
+        logger.error("whatsapp_creds_persist_failed", {
+          shopId,
+          hasMe,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+        return updateWhatsAppDiagnostics(shopId, {
+          lastCredsSaveError: error instanceof Error ? error.message : String(error),
+          hasRegisteredCreds: hasMe,
+        });
+      });
   });
 
   socket.ev.on("connection.update", (update: unknown) => {
-    const payload = update as { connection?: string; qr?: string; lastDisconnect?: { error?: { output?: { statusCode?: number }; message?: string } } };
+    const payload = update as ConnectionUpdatePayload;
     void handleConnectionUpdate(shopId, payload, runtime.DisconnectReason);
   });
 
@@ -140,16 +231,47 @@ export async function startWhatsAppSession(shopId: string) {
 
 async function handleConnectionUpdate(
   shopId: string,
-  update: { connection?: string; qr?: string; lastDisconnect?: { error?: { output?: { statusCode?: number }; message?: string } } },
+  update: ConnectionUpdatePayload,
   disconnectReason: Record<string, number>,
 ) {
+  const reason = parseDisconnectReason(update, disconnectReason);
+  logger.info("whatsapp_connection_update", {
+    shopId,
+    connection: update.connection ?? null,
+    hasQr: Boolean(update.qr),
+    isNewLogin: update.isNewLogin ?? null,
+    receivedPendingNotifications: update.receivedPendingNotifications ?? null,
+    disconnectReason: reason.reasonName,
+    statusCode: reason.statusCode ?? null,
+    error: reason.message,
+  });
+  await updateWhatsAppDiagnostics(shopId, {
+    lastConnectionState: update.connection ?? (update.qr ? "QR_GENERATED" : "UNKNOWN"),
+    lastDisconnectReason: reason.reasonName ?? reason.message ?? null,
+    lastDisconnectStatusCode: reason.statusCode ?? null,
+  });
+
+  if (update.isNewLogin) {
+    logger.info("whatsapp_pairing_success", { shopId });
+    await updateWhatsAppDiagnostics(shopId, { lastPairingError: null, lastPairingSuccessAt: new Date().toISOString() });
+  }
+
   if (update.qr) {
     logger.info("whatsapp_qr_generated", { shopId });
     await prisma.whatsAppOrderNotificationSetting.upsert({
       where: { shopId },
-      update: { connectionStatus: "CONNECTING", lastQrCode: update.qr, lastError: null },
-      create: { shopId, connectionStatus: "CONNECTING", lastQrCode: update.qr },
+      update: {
+        connectionStatus: "CONNECTING",
+        lastQrCode: update.qr,
+        lastError: null,
+      },
+      create: {
+        shopId,
+        connectionStatus: "CONNECTING",
+        lastQrCode: update.qr,
+      },
     });
+    await updateWhatsAppDiagnostics(shopId, { lastConnectionState: "QR_GENERATED", lastPairingError: null });
   }
 
   if (update.connection === "open") {
@@ -158,25 +280,47 @@ async function handleConnectionUpdate(
       where: { shopId },
       data: { connectionStatus: "CONNECTED", lastQrCode: null, lastConnectedAt: new Date(), lastError: null },
     });
+    await updateWhatsAppDiagnostics(shopId, {
+      lastConnectionState: "CONNECTED",
+      lastPairingError: null,
+      lastDisconnectReason: null,
+      connectedAt: new Date().toISOString(),
+    });
   }
 
   if (update.connection === "close") {
     clients.delete(shopId);
-    const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+    const statusCode = reason.statusCode;
     const loggedOut = statusCode === disconnectReason.loggedOut;
+    const pairingError = reason.reasonName ?? reason.message ?? "Connection closed before pairing completed";
+    logger.error("whatsapp_pairing_failure", {
+      shopId,
+      statusCode,
+      reason: reason.reasonName,
+      error: reason.message,
+      stack: update.lastDisconnect?.error?.stack,
+    });
     logger.error("whatsapp_connection_error", {
       shopId,
       statusCode,
       loggedOut,
-      error: update.lastDisconnect?.error?.message ?? null,
+      reason: reason.reasonName,
+      error: reason.message,
     });
     await prisma.whatsAppOrderNotificationSetting.update({
       where: { shopId },
       data: {
         connectionStatus: loggedOut ? "LOGGED_OUT" : "DISCONNECTED",
         lastDisconnectedAt: new Date(),
-        lastError: update.lastDisconnect?.error?.message ?? null,
+        lastError: pairingError,
       },
+    });
+    await updateWhatsAppDiagnostics(shopId, {
+      lastConnectionState: loggedOut ? "LOGGED_OUT" : "DISCONNECTED",
+      lastDisconnectReason: pairingError,
+      lastDisconnectStatusCode: statusCode ?? null,
+      lastPairingError: pairingError,
+      lastPairingFailureAt: new Date().toISOString(),
     });
     if (!loggedOut) {
       setTimeout(() => {

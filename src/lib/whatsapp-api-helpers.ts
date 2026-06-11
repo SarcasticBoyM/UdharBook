@@ -36,9 +36,17 @@ export function missingWhatsAppTablesResponse() {
   });
 }
 
+function whatsappDiagnostics(templates: Prisma.JsonValue | null | undefined) {
+  if (!templates || typeof templates !== "object" || Array.isArray(templates)) return {};
+  const diagnostics = (templates as Prisma.JsonObject).whatsappDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return {};
+  return diagnostics as Prisma.JsonObject;
+}
+
 export async function settingResponse(shopId: string) {
   try {
     const setting = await whatsappSettingFor(shopId);
+    const diagnostics = whatsappDiagnostics(setting.templates);
     const qrCodeImage = setting.lastQrCode ? await QRCode.toDataURL(setting.lastQrCode, { margin: 1, width: 240 }) : null;
     const recentJobs = await prisma.whatsAppNotificationJob.findMany({
       where: { shopId },
@@ -47,7 +55,20 @@ export async function settingResponse(shopId: string) {
       select: { id: true, event: true, status: true, retryCount: true, lastError: true, sentAt: true, createdAt: true, targetGroupName: true },
     });
 
-    return NextResponse.json({ success: true, setting: { ...setting, qrCodeImage }, recentJobs });
+    return NextResponse.json({
+      success: true,
+      setting: {
+        ...setting,
+        qrCodeImage,
+        lastDisconnectReason: diagnostics.lastDisconnectReason ?? null,
+        lastConnectionState: diagnostics.lastConnectionState ?? setting.connectionStatus,
+        lastPairingError: diagnostics.lastPairingError ?? null,
+        lastCredsSavedAt: diagnostics.lastCredsSavedAt ?? null,
+        lastCredsSaveError: diagnostics.lastCredsSaveError ?? null,
+        hasRegisteredCreds: diagnostics.hasRegisteredCreds ?? null,
+      },
+      recentJobs,
+    });
   } catch (error) {
     if (isMissingWhatsAppTables(error)) return missingWhatsAppTablesResponse();
     throw error;

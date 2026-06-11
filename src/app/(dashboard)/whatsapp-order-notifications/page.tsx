@@ -13,6 +13,12 @@ type Setting = {
   connectionStatus: string;
   qrCodeImage?: string | null;
   lastError?: string | null;
+  lastDisconnectReason?: string | null;
+  lastConnectionState?: string | null;
+  lastPairingError?: string | null;
+  lastCredsSavedAt?: string | null;
+  lastCredsSaveError?: string | null;
+  hasRegisteredCreds?: boolean | null;
 };
 
 type Group = { jid: string; name: string; participants: number };
@@ -202,6 +208,13 @@ export default function WhatsAppOrderNotificationsPage() {
           <aside className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <h2 className="font-bold">Queue Status</h2>
             <p className="mt-1 text-sm text-slate-500">{selectedGroup ? `Group: ${selectedGroup.name}` : setting.groupName ? `Group: ${setting.groupName}` : "No group selected"}</p>
+            <div className="mt-4 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+              <p><span className="font-semibold">Connection:</span> {setting.lastConnectionState ?? setting.connectionStatus}</p>
+              <p className="mt-1"><span className="font-semibold">Disconnect:</span> {setting.lastDisconnectReason ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Pairing:</span> {setting.lastPairingError ?? "-"}</p>
+              <p className="mt-1"><span className="font-semibold">Session Saved:</span> {setting.lastCredsSavedAt ? "Yes" : "No"}</p>
+              {setting.lastCredsSaveError && <p className="mt-1 text-red-600">{setting.lastCredsSaveError}</p>}
+            </div>
             <div className="mt-4 space-y-3">
               {jobs.length === 0 && <p className="text-sm text-slate-500">No notifications queued yet.</p>}
               {jobs.map((job) => (
