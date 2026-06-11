@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ExternalLink, Globe2, MapPin, Phone, Share2, UserPlus } from "lucide-react";
+import { Globe2, MapPin, Phone, UserPlus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { ensureUrl, normalizePhone, publicVCardUrl, qrCodeUrl } from "@/lib/qrvcard";
 
@@ -56,7 +56,6 @@ export default async function PublicQRVCardPage({ params }: Params) {
   const pageUrl = publicVCardUrl(card.slug);
   const phone = normalizePhone(card.mobile1);
   const phone2 = normalizePhone(card.mobile2);
-  const whatsapp = normalizePhone(card.whatsappNumber || card.mobile1);
   const theme = themeClasses(card.theme);
 
   return (
@@ -86,17 +85,14 @@ export default async function PublicQRVCardPage({ params }: Params) {
 
           <div className="grid gap-6 p-4 md:grid-cols-[minmax(0,1fr)_320px] md:p-8">
             <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <Action href={phone ? `tel:+${phone}` : "#"} icon={<Phone className="h-5 w-5" />} label="Call Now" primary />
-                <Action href={whatsapp ? `https://wa.me/${whatsapp}` : "#"} icon={<Share2 className="h-5 w-5" />} label="WhatsApp" primary />
                 <Action href={card.mapsLink || card.mapUrl || "#"} icon={<MapPin className="h-5 w-5" />} label="Navigate" />
                 <Action href={`/vcard/${card.slug}/contact.vcf`} icon={<UserPlus className="h-5 w-5" />} label="Save Contact" />
-                <Action href={`https://wa.me/?text=${encodeURIComponent(pageUrl)}`} icon={<ExternalLink className="h-5 w-5" />} label="Share Card" />
               </div>
 
               <InfoBlock title="Contact Details">
                 <InfoLine label="Mobile" value={[card.mobile1, card.mobile2].filter(Boolean).join(" / ")} />
-                <InfoLine label="WhatsApp" value={card.whatsappNumber ?? card.mobile1 ?? ""} />
                 <InfoLine label="Email" value={card.email ?? ""} href={card.email ? `mailto:${card.email}` : undefined} />
                 <InfoLine label="Website" value={card.website ?? ""} href={card.website ? ensureUrl(card.website) : undefined} />
                 <InfoLine label="GST" value={card.gstNumber ?? ""} />

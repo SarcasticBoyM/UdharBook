@@ -7,7 +7,6 @@ import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
-import { enqueueOrderWhatsAppNotification, eventForOrderAction } from "@/lib/whatsapp-order-notifications";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -422,13 +421,6 @@ export async function POST(request: Request) {
       newStatus: order.status,
       notes: order.sourceModule === "NEW_CUSTOMER_ORDER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
     });
-    await enqueueOrderWhatsAppNotification({
-      requestId,
-      shopId,
-      order,
-      event: "ORDER_CREATED",
-      actorName: session.name,
-    });
     return NextResponse.json({ order }, { status: 201 });
   } catch (error) {
     logger.error("order_create_failed", {
@@ -539,13 +531,6 @@ export async function PATCH(request: Request) {
       previousStatus: previousStatusForActivity,
       newStatus: order.status,
       notes: action === "EDIT" ? "Order details edited" : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
-    });
-    await enqueueOrderWhatsAppNotification({
-      requestId,
-      shopId,
-      order,
-      event: eventForOrderAction(action, order.status),
-      actorName: session.name,
     });
     logger.info("order_update_success", {
       requestId,

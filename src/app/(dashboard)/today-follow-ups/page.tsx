@@ -14,7 +14,6 @@ import {
   History,
   IndianRupee,
   Loader2,
-  MessageCircle,
   Phone,
   Search,
   ShieldAlert,
@@ -27,7 +26,6 @@ import {
 import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/client";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
-import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
 
 type QueueStatus =
   | "CALLBACK"
@@ -231,14 +229,14 @@ const NO_RESPONSE_OUTCOMES: { value: QueueStatus; label: string; notes: string; 
 ];
 
 const FOLLOW_UP_LATER_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
-  { value: "RESCHEDULED", label: "WhatsApp Reminder Sent", notes: "WhatsApp reminder sent.", response: "WhatsApp reminder sent" },
+  { value: "RESCHEDULED", label: "Reminder Scheduled", notes: "Follow-up reminder scheduled.", response: "Reminder scheduled" },
 ];
 
 const NOTE_TEMPLATES = [
   "Customer promised payment today.",
   "Asked to call again in evening.",
   "Not reachable after multiple attempts.",
-  "WhatsApp reminder sent.",
+  "Follow-up reminder scheduled.",
   "Payment collector visit required.",
 ];
 
@@ -1612,7 +1610,6 @@ function ActionPanel({
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [visibleReminderMonth, setVisibleReminderMonth] = useState(() => monthStart(""));
-  const [whatsAppMessage, setWhatsAppMessage] = useState("");
 
   useEffect(() => {
     if (!customer) return;
@@ -1628,7 +1625,6 @@ function ActionPanel({
     setVisibleReminderMonth(monthStart(existingDate));
     setDatePickerOpen(false);
     setTimePickerOpen(false);
-    setWhatsAppMessage("");
   }, [customer]);
 
   if (!customer) {
@@ -1646,29 +1642,6 @@ function ActionPanel({
   const selectedReminderTime = reminderTimePart(nextDate);
   const todayValue = todayReminderDateValue();
   const visibleCalendarCells = calendarCells(visibleReminderMonth);
-  const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate);
-  const reminderWhatsAppUrl = whatsappHref(customer.contactNumber, reminderMessage);
-
-  const sendWhatsAppReminder = async () => {
-    setWhatsAppMessage("");
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    if (isAndroid && navigator.share) {
-      try {
-        await navigator.share({
-          title: `Reminder for ${customer.partyName}`,
-          text: whatsappShareText(customer.contactNumber, reminderMessage),
-        });
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setWhatsAppMessage("Could not open the Android share chooser. Opening WhatsApp Web instead.");
-      }
-    } else if (isAndroid) {
-      setWhatsAppMessage("Android share chooser is not available in this browser. Opening WhatsApp Web instead.");
-    }
-    window.open(reminderWhatsAppUrl, "_blank", "noopener,noreferrer");
-  };
-
   const updateReminderDate = (date: string) => {
     setNextDate(combineReminderDateTime(date, selectedReminderTime || "10:00"));
     setVisibleReminderMonth(monthStart(`${date}T${selectedReminderTime || "10:00"}`));
@@ -1779,16 +1752,7 @@ function ActionPanel({
                 <Phone className="h-4 w-4" />
                 Call
               </a>
-              <button
-                type="button"
-                onClick={sendWhatsAppReminder}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white"
-              >
-                <MessageCircle className="h-4 w-4" />
-                WhatsApp
-              </button>
             </div>
-            {whatsAppMessage && <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">{whatsAppMessage}</p>}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
               <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the recovery outcome</p>

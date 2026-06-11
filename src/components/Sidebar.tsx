@@ -12,7 +12,6 @@ import {
   FileBarChart,
   Map,
   MapPinned,
-  MessageCircle,
   QrCode,
   LayoutDashboard,
   LogOut,
@@ -56,7 +55,6 @@ const links: SidebarLink[] = [
   { href: "/reports", label: "All Reports", icon: FileBarChart, adminOnly: true, section: "Reports" },
   { href: "/qrvcard", label: "Your QRVCard", icon: QrCode, adminOnly: true, section: "Business Profile" },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck, adminOnly: true, section: "Admin" },
-  { href: "/whatsapp-order-notifications", label: "WhatsApp Orders", icon: MessageCircle, adminOnly: true, section: "Admin" },
   { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator, adminOnly: true, section: "Owner Tools" },
   { href: "/shops", label: "Onboard Shop", icon: Store, superOnly: true, section: "Platform" },
 ];

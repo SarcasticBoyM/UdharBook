@@ -61,7 +61,6 @@ export function vcfText(card: {
   ownerName?: string | null;
   mobile1?: string | null;
   mobile2?: string | null;
-  whatsappNumber?: string | null;
   email?: string | null;
   address?: string | null;
   website?: string | null;
@@ -73,7 +72,6 @@ export function vcfText(card: {
     `ORG:${card.businessName}`,
     card.mobile1 ? `TEL;TYPE=CELL:${card.mobile1}` : "",
     card.mobile2 ? `TEL;TYPE=WORK:${card.mobile2}` : "",
-    card.whatsappNumber && card.whatsappNumber !== card.mobile1 ? `TEL;TYPE=WHATSAPP:${card.whatsappNumber}` : "",
     card.email ? `EMAIL:${card.email}` : "",
     card.address ? `ADR;TYPE=WORK:;;${card.address.replace(/\n/g, " ")}` : "",
     card.website ? `URL:${ensureUrl(card.website)}` : "",

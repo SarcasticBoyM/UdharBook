@@ -12,7 +12,6 @@ type CardForm = {
   ownerName: string;
   mobile1: string;
   mobile2: string;
-  whatsappNumber: string;
   email: string;
   address: string;
   mapUrl: string;
@@ -41,7 +40,6 @@ const emptyForm: CardForm = {
   ownerName: "",
   mobile1: "",
   mobile2: "",
-  whatsappNumber: "",
   email: "",
   address: "",
   mapUrl: "",
@@ -110,7 +108,6 @@ export default function QRVCardPage() {
           ownerName: data.card.ownerName ?? "",
           mobile1: data.card.mobile1 ?? "",
           mobile2: data.card.mobile2 ?? "",
-          whatsappNumber: data.card.whatsappNumber ?? "",
           email: data.card.email ?? "",
           address: data.card.address ?? "",
           mapUrl: data.card.mapsLink ?? data.card.mapUrl ?? "",
@@ -294,7 +291,6 @@ export default function QRVCardPage() {
             <h2 className="font-bold">Quick Actions</h2>
             <div className="mt-3 grid gap-2">
               <a href={`/vcard/${form.slug}/contact.vcf`} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold">Download Contact</a>
-              <a href={`https://wa.me/?text=${encodeURIComponent(publicUrl)}`} target="_blank" className="rounded-lg bg-emerald-600 px-3 py-3 text-center text-sm font-semibold text-white" rel="noreferrer">Share on WhatsApp</a>
             </div>
           </section>
         </aside>
@@ -346,7 +342,6 @@ export default function QRVCardPage() {
             <Input label="GST Number" value={form.gstNumber} onChange={(v) => setValue("gstNumber", v)} />
             <Input label="Mobile Number 1" value={form.mobile1} onChange={(v) => setValue("mobile1", v)} />
             <Input label="Mobile Number 2" value={form.mobile2} onChange={(v) => setValue("mobile2", v)} />
-            <Input label="WhatsApp Number" value={form.whatsappNumber} onChange={(v) => setValue("whatsappNumber", v)} />
             <Input label="Email" value={form.email} onChange={(v) => setValue("email", v)} />
             <Input label="Website" value={form.website} onChange={(v) => setValue("website", v)} />
             <Input label="Google Maps Link" value={form.mapsLink || form.mapUrl} onChange={(v) => { setValue("mapsLink", v); setValue("mapUrl", v); }} />
@@ -433,7 +428,6 @@ export default function QRVCardPage() {
               <input readOnly value={publicUrl} className="w-full rounded-lg border px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900" />
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => navigator.clipboard.writeText(publicUrl)} className="rounded-lg border px-3 py-2 text-sm font-semibold">Copy Link</button>
-                <a href={`https://wa.me/?text=${encodeURIComponent(publicUrl)}`} target="_blank" className="rounded-lg bg-emerald-600 px-3 py-2 text-center text-sm font-semibold text-white" rel="noreferrer">WhatsApp</a>
               </div>
             </div>
           ) : <p className="mt-3 text-sm text-slate-500">Save card to generate public link and QR code.</p>}
@@ -471,7 +465,6 @@ function UploadBox({ label, image, onFile, onUrl }: { label: string; image: stri
 
 function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string }) {
   const phone = normalizePhone(form.mobile1);
-  const whatsapp = normalizePhone(form.whatsappNumber || form.mobile1);
   return (
     <section className={`overflow-hidden rounded-lg border bg-white shadow-sm dark:border-slate-700 ${themeClass(form.theme)}`}>
       <div className="relative h-36 bg-slate-900">
@@ -490,7 +483,6 @@ function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string })
       <div className="space-y-4 p-4">
         <div className="grid grid-cols-2 gap-2">
           <a href={phone ? `tel:+${phone}` : undefined} className="rounded-lg bg-slate-950 px-3 py-3 text-center text-sm font-semibold text-white"><Phone className="mx-auto mb-1 h-4 w-4" />Call Now</a>
-          <a href={whatsapp ? `https://wa.me/${whatsapp}` : undefined} className="rounded-lg bg-emerald-600 px-3 py-3 text-center text-sm font-semibold text-white"><Share2 className="mx-auto mb-1 h-4 w-4" />WhatsApp</a>
           <a href={form.mapsLink || form.mapUrl || undefined} target="_blank" rel="noreferrer" className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><MapPin className="mx-auto mb-1 h-4 w-4" />Navigate</a>
           <a href={form.email ? `mailto:${form.email}` : undefined} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><Mail className="mx-auto mb-1 h-4 w-4" />Email</a>
         </div>

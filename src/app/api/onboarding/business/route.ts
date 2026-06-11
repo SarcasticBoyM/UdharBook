@@ -28,7 +28,6 @@ const schema = z.object({
       defaultFollowupTiming: z.string().optional(),
       chequeModuleEnabled: z.boolean().optional(),
       fieldStaffTrackingEnabled: z.boolean().optional(),
-      whatsappShortcutsEnabled: z.boolean().optional(),
       highAmountThreshold: z.number().min(0).optional(),
     })
     .optional(),

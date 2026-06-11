@@ -57,10 +57,9 @@ type WorkflowForm = {
   defaultFollowupTiming: string;
   chequeModuleEnabled: boolean;
   fieldStaffTrackingEnabled: boolean;
-  whatsappShortcutsEnabled: boolean;
   highAmountThreshold: string;
 };
-type BooleanWorkflowKey = "remindersEnabled" | "chequeModuleEnabled" | "fieldStaffTrackingEnabled" | "whatsappShortcutsEnabled";
+type BooleanWorkflowKey = "remindersEnabled" | "chequeModuleEnabled" | "fieldStaffTrackingEnabled";
 
 const steps = [
   { id: "welcome", label: "Welcome", icon: WalletCards },
@@ -109,7 +108,6 @@ export default function OnboardingPage() {
     defaultFollowupTiming: "10:00",
     chequeModuleEnabled: true,
     fieldStaffTrackingEnabled: true,
-    whatsappShortcutsEnabled: true,
     highAmountThreshold: "50000",
   });
   const [staff, setStaff] = useState<StaffDraft>(defaultStaff);
@@ -512,7 +510,6 @@ function WorkflowStep({
           ["remindersEnabled", "Enable reminders"],
           ["chequeModuleEnabled", "Enable cheque module"],
           ["fieldStaffTrackingEnabled", "Enable field staff tracking"],
-          ["whatsappShortcutsEnabled", "Enable WhatsApp shortcuts"],
         ] as [BooleanWorkflowKey, string][]).map(([key, label]) => (
           <button key={key} type="button" onClick={() => toggle(key)} className={cn("flex min-h-14 items-center justify-between rounded-lg border px-4 text-left text-sm font-semibold", workflow[key] ? "border-brand-200 bg-brand-50 text-brand-800" : "border-slate-200 dark:border-slate-800")}>
             {label}

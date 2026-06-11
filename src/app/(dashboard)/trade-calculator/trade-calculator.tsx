@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, Clipboard, MessageCircle, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Calculator, Clipboard, RotateCcw, Save, Trash2 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 
 type CalculatorForm = {
@@ -141,10 +141,6 @@ export function TradeCalculator() {
     setCopied(true);
   };
 
-  const shareWhatsApp = () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(quoteText)}`, "_blank", "noopener,noreferrer");
-  };
-
   return (
     <div className="mx-auto max-w-6xl pb-24">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -229,14 +225,10 @@ export function TradeCalculator() {
               <Result label="Final Billing Value" value={formatCurrency(result.finalBillingValue)} large />
               <Result label="Savings" value={`${formatCurrency(result.savings)} (${percent(result.savingsPercent)})`} />
             </div>
-            <div className="mt-5 grid grid-cols-2 gap-2">
+            <div className="mt-5">
               <button type="button" onClick={copyQuote} className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-bold text-slate-950">
                 <Clipboard className="h-4 w-4" />
                 {copied ? "Copied" : "Copy"}
-              </button>
-              <button type="button" onClick={shareWhatsApp} className="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-sm font-bold text-white">
-                <MessageCircle className="h-4 w-4" />
-                WhatsApp
               </button>
             </div>
           </section>

@@ -71,19 +71,6 @@ export default function CustomersPage() {
     });
   };
 
-  const bulkWhatsApp = async () => {
-    if (selected.size === 0) return;
-    const res = await fetch("/api/bulk/whatsapp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ customerIds: Array.from(selected) }),
-    });
-    const data = await res.json();
-    for (const link of data.links ?? []) {
-      window.open(link.url, "_blank");
-    }
-  };
-
   const exportExcel = () => {
     window.location.href = "/api/reports/outstanding?format=xlsx";
   };
@@ -212,15 +199,6 @@ export default function CustomersPage() {
           <option value="nextFollowup-asc">Follow-up: Soonest</option>
           <option value="nextFollowup-desc">Follow-up: Latest</option>
         </select>
-        {selected.size > 0 && (
-          <button
-            type="button"
-            onClick={bulkWhatsApp}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white"
-          >
-            Bulk WhatsApp ({selected.size})
-          </button>
-        )}
       </div>
 
       <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
