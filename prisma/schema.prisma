@@ -111,6 +111,22 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum WhatsAppConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  LOGGED_OUT
+  ERROR
+}
+
+enum WhatsAppNotificationStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -147,6 +163,9 @@ model Shop {
   orders             Order[]
   userRoleAssignments UserRoleAssignment[]
   orderActivities    OrderActivity[]
+  whatsappOrderSetting WhatsAppOrderNotificationSetting?
+  whatsappNotificationJobs WhatsAppNotificationJob[]
+  whatsappSessionSecrets WhatsAppSessionSecret[]
   qrVCard            QRVCard?
 
   @@index([subscriptionStatus])
@@ -490,6 +509,66 @@ model OrderActivity {
   @@index([shopId, createdAt])
   @@index([orderId, createdAt])
   @@index([userId, createdAt])
+}
+
+model WhatsAppOrderNotificationSetting {
+  id                String                   @id @default(cuid())
+  shopId            String                   @unique
+  shop              Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  enabled           Boolean                  @default(false)
+  groupJid          String?
+  groupName         String?
+  selectedEvents    String[]                 @default(["ORDER_CREATED", "ORDER_EDITED", "ORDER_DISPATCHED", "ORDER_DELIVERED", "ORDER_CANCELLED"])
+  templates         Json?
+  connectionStatus  WhatsAppConnectionStatus @default(DISCONNECTED)
+  lastQrCode        String?
+  lastConnectedAt   DateTime?
+  lastDisconnectedAt DateTime?
+  lastTestSentAt    DateTime?
+  lastError         String?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@index([shopId, enabled])
+  @@index([connectionStatus])
+}
+
+model WhatsAppNotificationJob {
+  id              String                     @id @default(cuid())
+  shopId          String
+  shop            Shop                       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderId         String?
+  event           String
+  targetGroupJid  String
+  targetGroupName String?
+  message         String
+  payload         Json
+  status          WhatsAppNotificationStatus @default(PENDING)
+  retryCount      Int                        @default(0)
+  maxRetries      Int                        @default(5)
+  nextAttemptAt   DateTime                   @default(now())
+  lockedAt        DateTime?
+  sentAt          DateTime?
+  lastError       String?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  @@index([shopId, status, nextAttemptAt])
+  @@index([shopId, event, createdAt])
+  @@index([orderId])
+}
+
+model WhatsAppSessionSecret {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  key         String
+  value       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shopId, key])
+  @@index([shopId])
 }
 
 model VisitPhoto {

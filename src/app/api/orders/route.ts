@@ -7,6 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
+import { enqueueOrderWhatsAppNotification, eventForOrderAction } from "@/lib/whatsapp-order-notifications";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -395,6 +396,10 @@ export async function POST(request: Request) {
           sourceModule: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "NEW_CUSTOMER_ORDER" : "ORDER_DESK",
           visitSource: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "New Customer Order" : "Order Desk",
         },
+        include: {
+          customer: { select: { partyName: true, contactNumber: true } },
+          createdBy: { select: { name: true } },
+        },
       });
       await tx.activityLog.create({
         data: {
@@ -416,6 +421,13 @@ export async function POST(request: Request) {
       action: "CREATED",
       newStatus: order.status,
       notes: order.sourceModule === "NEW_CUSTOMER_ORDER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
+    });
+    await enqueueOrderWhatsAppNotification({
+      requestId,
+      shopId,
+      order,
+      event: "ORDER_CREATED",
+      actorName: session.name,
     });
     return NextResponse.json({ order }, { status: 201 });
   } catch (error) {
@@ -527,6 +539,13 @@ export async function PATCH(request: Request) {
       previousStatus: previousStatusForActivity,
       newStatus: order.status,
       notes: action === "EDIT" ? "Order details edited" : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
+    });
+    await enqueueOrderWhatsAppNotification({
+      requestId,
+      shopId,
+      order,
+      event: eventForOrderAction(action, order.status),
+      actorName: session.name,
     });
     logger.info("order_update_success", {
       requestId,
