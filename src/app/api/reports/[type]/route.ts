@@ -31,6 +31,46 @@ function safeDateOnly(value: Date | null | undefined) {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
 }
 
+function normalizeCustomerSearch(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function customerTextContains(field: "partyName" | "geoAddress", value: string): Prisma.CustomerWhereInput {
+  return { [field]: { contains: value, mode: "insensitive" } };
+}
+
+function customerSearchWhere(search: string): Prisma.CustomerWhereInput {
+  const phoneSearch = search.replace(/\D/g, "");
+  const terms = search.split(" ").filter(Boolean);
+  return {
+    OR: [
+      customerTextContains("partyName", search),
+      customerTextContains("geoAddress", search),
+      ...(terms.length > 1
+        ? [
+            { AND: terms.map((term) => customerTextContains("partyName", term)) },
+            { AND: terms.map((term) => customerTextContains("geoAddress", term)) },
+          ]
+        : []),
+      ...(phoneSearch ? [{ contactNumber: { contains: phoneSearch } }] : []),
+      { batchTag: { contains: search, mode: "insensitive" } },
+    ],
+  };
+}
+
+function customerViewWhere(view: string): Prisma.CustomerWhereInput {
+  if (view === "active" || view === "pending") return { outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } };
+  if (view === "inactive") {
+    return {
+      OR: [
+        { outstandingBalance: { lte: 0 } },
+        { status: "CLEARED" },
+      ],
+    };
+  }
+  return {};
+}
+
 function printableReportHtml(input: {
   title: string;
   shopName: string;
@@ -71,7 +111,17 @@ export async function GET(
   const from = safeDate(searchParams.get("from"));
   const to = safeDate(searchParams.get("to"), true);
   const batchTag = searchParams.get("batchTag")?.trim();
-  const includeArchived = searchParams.get("includeArchived") === "true";
+  const view = searchParams.get("view") ?? "active";
+  const includeArchived = searchParams.get("includeArchived") === "true" || view === "all_with_archived";
+  const customerSearch = normalizeCustomerSearch(searchParams.get("search") ?? "");
+  const selectedCustomerIds = (searchParams.get("ids") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const customerStatus = searchParams.get("status");
+  const customerSort = searchParams.get("sort") ?? "balance";
+  const customerOrder = searchParams.get("order") === "asc" ? "asc" : "desc";
+  const customerExportMode = searchParams.get("mode") === "customers";
   const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
   const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } });
@@ -98,6 +148,18 @@ export async function GET(
 
   if (type === "outstanding") {
     const rawWhere: Prisma.CustomerWhereInput = { shopId, ...(includeArchived ? {} : { isArchived: false }) };
+    const customerExportWhere: Prisma.CustomerWhereInput = {
+      shopId,
+      ...(selectedCustomerIds.length
+        ? { id: { in: selectedCustomerIds } }
+        : {
+            ...(view === "archived" ? { isArchived: true } : includeArchived ? {} : { isArchived: false }),
+            ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+            ...(customerStatus ? { status: customerStatus as Prisma.EnumCustomerStatusFilter["equals"] } : {}),
+            ...(customerSearch ? customerSearchWhere(customerSearch) : {}),
+            ...customerViewWhere(view),
+          }),
+    };
     const where: Prisma.CustomerWhereInput = {
       shopId,
       ...(includeArchived ? {} : { isArchived: false }),
@@ -107,7 +169,12 @@ export async function GET(
         NOT: { status: "CLEARED" },
       }),
     };
-    const customers = await prisma.customer.findMany({ where, orderBy: { outstandingBalance: "desc" } });
+    const orderBy: Prisma.CustomerOrderByWithRelationInput =
+      customerSort === "nextFollowup"
+        ? { nextFollowupDate: customerOrder }
+        : { outstandingBalance: customerOrder };
+    const effectiveWhere = customerExportMode || selectedCustomerIds.length ? customerExportWhere : where;
+    const customers = await prisma.customer.findMany({ where: effectiveWhere, orderBy });
     const rawCount = debugMode ? await prisma.customer.count({ where: rawWhere }) : undefined;
     const runtimeDebug = debugMode
       ? {
@@ -123,21 +190,21 @@ export async function GET(
             outstandingBalance: { gt: 0 },
             NOT: { status: "CLEARED" },
           },
-          effectiveWhereClause: where,
+          effectiveWhereClause: effectiveWhere,
           rawCount,
           rowCount: customers.length,
           rowsDisappearAfterFilters: typeof rawCount === "number" ? rawCount > 0 && customers.length === 0 && !isolateMode : null,
         }
       : undefined;
-    console.info("generic_report_result", { type, shopId, where, rowCount: customers.length, debug: runtimeDebug });
+    console.info("generic_report_result", { type, shopId, where: effectiveWhere, rowCount: customers.length, debug: runtimeDebug });
     if (debugMode && format === "json") return NextResponse.json({ success: true, type, rows: customers.slice(0, 100), debug: runtimeDebug });
 
     if (format === "xlsx") {
-      const buffer = await customersToExcel(customers, "Outstanding");
+      const buffer = await customersToExcel(customers, selectedCustomerIds.length ? "Selected Customers" : customerExportMode ? "Customers" : "Outstanding");
       return new NextResponse(buffer, {
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "Content-Disposition": 'attachment; filename="outstanding-report.xlsx"',
+          "Content-Disposition": `attachment; filename="${selectedCustomerIds.length ? "selected-customers" : customerExportMode ? "customers" : "outstanding-report"}.xlsx"`,
         },
       });
     }

@@ -17,6 +17,11 @@ const createSchema = z.object({
   status: z.enum(["ACTIVE", "PENDING", "HIGH_RISK", "CLEARED"]).optional(),
 });
 
+const bulkArchiveSchema = z.object({
+  action: z.enum(["archive", "restore"]),
+  ids: z.array(z.string().min(1)).min(1).max(500),
+});
+
 function normalizeSearch(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -54,8 +59,8 @@ export async function GET(request: Request) {
   const search = normalizeSearch(searchParams.get("search") ?? "");
   const status = searchParams.get("status");
   const batchTag = searchParams.get("batchTag")?.trim();
-  const view = searchParams.get("view") ?? "active";
-  const includeArchived = searchParams.get("includeArchived") === "true";
+  const view = searchParams.get("view") ?? "all";
+  const includeArchived = searchParams.get("includeArchived") === "true" || view === "all_with_archived";
   const sort = searchParams.get("sort") ?? "balance";
   const order = searchParams.get("order") === "asc" ? "asc" : "desc";
   const page = Math.max(1, Number(searchParams.get("page") ?? 1));
@@ -142,6 +147,37 @@ export async function POST(request: Request) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       return NextResponse.json({ error: "Contact number already exists" }, { status: 409 });
     }
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canManageCustomers(session.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  try {
+    const body = bulkArchiveSchema.parse(await request.json());
+    const shopId = requireShopId(request, session);
+    const result = await prisma.customer.updateMany({
+      where: { id: { in: body.ids }, shopId },
+      data:
+        body.action === "archive"
+          ? { isArchived: true, archivedAt: new Date(), archivedById: session.id, nextFollowupDate: null }
+          : { isArchived: false, archivedAt: null, archivedById: null },
+    });
+
+    await logActivity({
+      action: body.action === "archive" ? "customers_bulk_archived" : "customers_bulk_restored",
+      userId: session.id,
+      shopId,
+      details: `${result.count} customer${result.count === 1 ? "" : "s"}`,
+    });
+
+    return NextResponse.json({ ok: true, action: body.action, count: result.count });
+  } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 }

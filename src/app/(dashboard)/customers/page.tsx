@@ -10,7 +10,7 @@ import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
-type CustomerView = "active" | "inactive" | "all" | "pending" | "archived";
+type CustomerView = "active" | "inactive" | "all" | "pending" | "archived" | "all_with_archived";
 type CustomerWithBatch = Customer & { batchTag?: string | null; isArchived?: boolean; archivedAt?: string | Date | null; archivedById?: string | null };
 
 export default function CustomersPage() {
@@ -18,7 +18,7 @@ export default function CustomersPage() {
   const [search, setSearch] = useState("");
   const [batchTag, setBatchTag] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState<CustomerView>("active");
+  const [view, setView] = useState<CustomerView>("all");
   const [sort, setSort] = useState("balance");
   const [order, setOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -27,8 +27,13 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [followUpId, setFollowUpId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
   const [role, setRole] = useState("");
   const isReadOnlySales = isSalesRole(role) && !isAccountsRole(role) && !isShopAdminRole(role);
+  const selectableVisibleIds = items.filter((customer) => !customer.isArchived).map((customer) => customer.id);
+  const selectedCount = selected.size;
+  const allVisibleSelected =
+    selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,8 +76,61 @@ export default function CustomersPage() {
     });
   };
 
+  const selectAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const shouldClearVisible = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => next.has(id));
+      selectableVisibleIds.forEach((id) => {
+        if (shouldClearVisible) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+  };
+
+  const cancelSelection = () => {
+    setSelected(new Set());
+    setSelectionMode(false);
+  };
+
+  const exportUrl = () => {
+    const params = new URLSearchParams({ format: "xlsx", mode: "customers" });
+    if (selectedCount > 0) {
+      params.set("ids", Array.from(selected).join(","));
+    } else {
+      params.set("search", search);
+      params.set("sort", sort);
+      params.set("order", order);
+      params.set("view", view);
+      if (status) params.set("status", status);
+      if (batchTag.trim()) params.set("batchTag", batchTag.trim());
+    }
+    return `/api/reports/outstanding?${params.toString()}`;
+  };
+
   const exportExcel = () => {
-    window.location.href = "/api/reports/outstanding?format=xlsx";
+    window.location.href = exportUrl();
+  };
+
+  const bulkArchive = async () => {
+    if (selectedCount === 0) return;
+    const confirmed = window.confirm(
+      `Archive ${selectedCount} customer${selectedCount === 1 ? "" : "s"}?\n\nArchived customers will disappear from active customer lists, follow-ups, Order Desk, cheque workflows, and recovery workflows. Customer history will remain preserved.`
+    );
+    if (!confirmed) return;
+
+    const res = await fetch("/api/customers", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "archive", ids: Array.from(selected) }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      window.alert(data.error ?? "Could not archive selected customers.");
+      return;
+    }
+    cancelSelection();
+    load();
   };
 
   const setArchiveState = async (customerId: string, action: "archive" | "restore") => {
@@ -105,33 +163,58 @@ export default function CustomersPage() {
           <p className="text-slate-500">
             {loading ? "Loading…" : `${total} customer${total === 1 ? "" : "s"} shown`}
             {view === "active"
-              ? " (active dues)"
+              ? " (outstanding customers)"
               : view === "inactive"
                 ? " (inactive / zero balance)"
+                : view === "all"
+                  ? " (active customers)"
                 : view === "pending"
                   ? " (with outstanding balance)"
                   : view === "archived"
                     ? " (archived customers)"
+                    : view === "all_with_archived"
+                      ? " (active + archived)"
                     : ""}
           </p>
         </div>
-        {!isReadOnlySales && (
-          <Link
-            href="/customers/new"
-            className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700"
-          >
-            Add Customer
-          </Link>
-        )}
-        {!isReadOnlySales && (
-          <button
-            type="button"
-            onClick={exportExcel}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800"
-          >
-            Export Excel
-          </button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {!isReadOnlySales && (
+            <Link
+              href="/customers/new"
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700"
+            >
+              Add Customer
+            </Link>
+          )}
+          {!isReadOnlySales && (
+            <button
+              type="button"
+              onClick={() => setSelectionMode(true)}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800 md:hidden"
+            >
+              Select Customers
+            </button>
+          )}
+          {!isReadOnlySales && (
+            <button
+              type="button"
+              onClick={exportExcel}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800"
+            >
+              Export Excel
+            </button>
+          )}
+          {!isReadOnlySales && (
+            <button
+              type="button"
+              disabled={selectedCount === 0}
+              onClick={bulkArchive}
+              className="hidden rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/40 md:inline-flex"
+            >
+              Archive Customers
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -143,11 +226,12 @@ export default function CustomersPage() {
           }}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         >
-          <option value="active">Active Customers</option>
-          <option value="inactive">Inactive / Zero Balance Customers</option>
-          <option value="all">Show All</option>
-          <option value="pending">Pending payments only</option>
+          <option value="all">Active Customers</option>
           <option value="archived">Archived Customers</option>
+          <option value="all_with_archived">All Customers</option>
+          <option value="active">Outstanding Customers</option>
+          <option value="inactive">Inactive / Zero Balance Customers</option>
+          <option value="pending">Pending payments only</option>
         </select>
         <input
           placeholder="Search name, phone, or location..."
@@ -201,6 +285,46 @@ export default function CustomersPage() {
         </select>
       </div>
 
+      {!isReadOnlySales && (selectionMode || selectedCount > 0) && (
+        <div className="sticky bottom-3 z-20 mt-4 rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900 md:top-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-auto text-sm font-semibold">
+              Selected: {selectedCount} Customer{selectedCount === 1 ? "" : "s"}
+            </span>
+            <button
+              type="button"
+              onClick={selectAllVisible}
+              disabled={selectableVisibleIds.length === 0}
+              className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm disabled:opacity-50 dark:border-slate-600"
+            >
+              {allVisibleSelected ? "Clear Visible" : "Select All"}
+            </button>
+            <button
+              type="button"
+              onClick={exportExcel}
+              className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-600"
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              onClick={bulkArchive}
+              disabled={selectedCount === 0}
+              className="min-h-10 rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Archive
+            </button>
+            <button
+              type="button"
+              onClick={cancelSelection}
+              className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm dark:border-slate-600"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mt-4 space-y-3 md:hidden">
         {loading ? (
           <div className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500 dark:border-slate-700">Loading...</div>
@@ -230,7 +354,9 @@ export default function CustomersPage() {
                       {archived && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">Archived</span>}
                     </div>
                   </div>
-                  <input type="checkbox" checked={selected.has(c.id)} disabled={archived} onChange={() => toggleSelect(c.id)} className="mt-1 h-5 w-5 shrink-0" />
+                  {selectionMode && (
+                    <input type="checkbox" checked={selected.has(c.id)} disabled={archived} onChange={() => toggleSelect(c.id)} className="mt-1 h-5 w-5 shrink-0" />
+                  )}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
                   <span>Mobile: <strong className="text-slate-700 dark:text-slate-200">{c.contactNumber}</strong></span>
@@ -261,7 +387,15 @@ export default function CustomersPage() {
         <table className="w-full min-w-[800px] text-left text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800">
             <tr>
-              <th className="p-3 w-8" />
+              <th className="p-3 w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible customers"
+                  checked={allVisibleSelected}
+                  disabled={selectableVisibleIds.length === 0}
+                  onChange={selectAllVisible}
+                />
+              </th>
               <th className="p-3">Party Name</th>
               <th className="p-3">Contact</th>
               <th className="p-3">Balance</th>
