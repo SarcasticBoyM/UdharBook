@@ -10,6 +10,7 @@ import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
 import { canViewReports } from "@/lib/permissions";
 import { isSalesRole } from "@/lib/operational-roles";
+import { notifyChequeEvent } from "@/lib/notifications";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
@@ -974,6 +975,17 @@ export async function POST(request: Request) {
       shopId,
       customerId: body.customerId,
       details: `${body.chequeNumber} ${body.bankName} ${body.amount}`,
+    });
+
+    await notifyChequeEvent({
+      shopId,
+      chequeId: cheque.id,
+      type: "CHEQUE_COLLECTED",
+      title: "Cheque Collected",
+      customerName: cheque.customer.partyName,
+      chequeNumber: cheque.chequeNumber,
+      amount: cheque.amount,
+      actorName: session.name,
     });
 
     return NextResponse.json(cheque, { status: 201 });

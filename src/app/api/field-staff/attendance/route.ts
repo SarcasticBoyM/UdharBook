@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { endOfDay, isFieldWorker, startOfDay, visibleStaffId, workDate } from "@/lib/field-tracking";
+import { notifyAttendanceEvent } from "@/lib/notifications";
 
 const attendanceSchema = z.object({
   action: z.enum(["START", "STOP"]),
@@ -67,12 +68,26 @@ export async function POST(request: Request) {
         create: { shopId, staffId: session.id, workDate: today, startedAt: new Date(), status: "ACTIVE" },
         update: { status: "ACTIVE", endedAt: null },
       });
+      await notifyAttendanceEvent({
+        shopId,
+        attendanceId: attendance.id,
+        type: "STAFF_CHECK_IN",
+        title: "Staff Check-In",
+        staffName: session.name,
+      });
       return NextResponse.json({ success: true, attendance });
     }
 
     const attendance = await prisma.attendance.update({
       where: { staffId_workDate: { staffId: session.id, workDate: today } },
       data: { status: "COMPLETED", endedAt: new Date() },
+    });
+    await notifyAttendanceEvent({
+      shopId,
+      attendanceId: attendance.id,
+      type: "STAFF_CHECK_OUT",
+      title: "Staff Check-Out",
+      staffName: session.name,
     });
 
     return NextResponse.json({ success: true, attendance });

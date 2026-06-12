@@ -7,6 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity, type FollowUpSourceModule } from "@/lib/follow-up-service";
 import { canUseFollowUps } from "@/lib/permissions";
+import { notifyFollowUpCompleted } from "@/lib/notifications";
 
 const schema = z.object({
   customerId: z.string(),
@@ -95,6 +96,16 @@ export async function POST(request: Request) {
       customerId: body.customerId,
       details: `${body.status} ${result.followUp.nextFollowupDate?.toISOString() ?? ""}`.trim(),
     });
+
+    if (body.status === "COMPLETED") {
+      await notifyFollowUpCompleted({
+        shopId,
+        followUpId: result.followUp.id,
+        customerId: body.customerId,
+        customerName: customer.partyName,
+        completedByName: session.name,
+      });
+    }
 
     return NextResponse.json(result, { status: 201 });
   } catch {

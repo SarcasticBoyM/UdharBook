@@ -7,6 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
+import { notifyOrderCreated } from "@/lib/notifications";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -420,6 +421,12 @@ export async function POST(request: Request) {
       action: "CREATED",
       newStatus: order.status,
       notes: order.sourceModule === "NEW_CUSTOMER_ORDER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
+    });
+    await notifyOrderCreated({
+      shopId,
+      orderId: order.id,
+      customerName: order.customer.partyName,
+      createdByName: order.createdBy.name,
     });
     return NextResponse.json({ order }, { status: 201 });
   } catch (error) {

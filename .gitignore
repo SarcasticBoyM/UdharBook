@@ -3,6 +3,7 @@ node_modules
 .npm-cache
 .cache
 .vercel-cli
+.vercel-cli-home
 .env
 *.db
 *.db-journal

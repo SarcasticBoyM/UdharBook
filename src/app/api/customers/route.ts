@@ -7,6 +7,7 @@ import { canDelete, canManageCustomers } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/phone";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
+import { notifyCustomerAdded } from "@/lib/notifications";
 
 const createSchema = z.object({
   partyName: z.string().min(1),
@@ -140,6 +141,13 @@ export async function POST(request: Request) {
       shopId,
       customerId: customer.id,
       details: customer.partyName,
+    });
+
+    await notifyCustomerAdded({
+      shopId,
+      customerId: customer.id,
+      customerName: customer.partyName,
+      createdByName: session.name,
     });
 
     return NextResponse.json(customer, { status: 201 });

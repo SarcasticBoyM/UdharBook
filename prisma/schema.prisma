@@ -127,6 +127,12 @@ enum WhatsAppNotificationStatus {
   CANCELLED
 }
 
+enum NotificationTargetType {
+  SHOP
+  ROLE
+  USER
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -168,6 +174,7 @@ model Shop {
   whatsappSessionSecrets WhatsAppSessionSecret[]
   productPresets     ProductPreset[]
   qrVCard            QRVCard?
+  notifications      Notification[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -313,9 +320,37 @@ model User {
   orderActivities OrderActivity[]
   roleAssignments UserRoleAssignment[] @relation("UserRoleAssignments")
   roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
+  notifications Notification[] @relation("NotificationTargetUser")
 
   @@index([shopId])
   @@index([role])
+}
+
+model Notification {
+  id               String                 @id @default(cuid())
+  shopId           String
+  shop             Shop                   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId           String?
+  user             User?                  @relation("NotificationTargetUser", fields: [userId], references: [id], onDelete: Cascade)
+  roleTarget       String?
+  targetType       NotificationTargetType @default(SHOP)
+  type             String
+  title            String
+  message          String
+  entityType       String?
+  entityId         String?
+  actionUrl        String?
+  metadata         Json?
+  isRead           Boolean                @default(false)
+  readByUserIds    String[]               @default([])
+  deletedByUserIds String[]               @default([])
+  createdAt        DateTime               @default(now())
+
+  @@unique([shopId, type, entityType, entityId])
+  @@index([shopId, createdAt])
+  @@index([shopId, targetType, roleTarget, createdAt])
+  @@index([shopId, userId, createdAt])
+  @@index([shopId, isRead, createdAt])
 }
 
 model UserRoleAssignment {

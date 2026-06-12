@@ -7,6 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
 import { canUseCheques } from "@/lib/permissions";
+import { notifyChequeEvent } from "@/lib/notifications";
 
 const updateSchema = z.object({
   status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]),
@@ -313,6 +314,29 @@ export async function PATCH(
     customerId: existing.customerId,
     details: `${existing.chequeNumber}: ${existing.status} -> ${body.status}`,
   });
+
+  if (body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY") {
+    await notifyChequeEvent({
+      shopId,
+      chequeId: updated.id,
+      type:
+        body.status === "DEPOSITED"
+          ? "CHEQUE_DEPOSITED"
+          : body.status === "BOUNCED"
+            ? "CHEQUE_BOUNCED"
+            : "CHEQUE_RETURNED",
+      title:
+        body.status === "DEPOSITED"
+          ? "Cheque Deposited"
+          : body.status === "BOUNCED"
+            ? "Cheque Bounced"
+            : "Cheque Returned",
+      customerName: updated.customer.partyName,
+      chequeNumber: updated.chequeNumber,
+      amount: updated.amount,
+      actorName: session.name,
+    });
+  }
 
   return NextResponse.json(updated);
 }

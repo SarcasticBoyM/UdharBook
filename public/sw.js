@@ -43,7 +43,7 @@ self.addEventListener("message", (event) => {
     icon: "/icon.svg",
     badge: "/icon.svg",
     requireInteraction: true,
-    data: { url: "/follow-ups" },
+    data: { url: event.data.url || "/follow-ups" },
   });
 });
 
