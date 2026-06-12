@@ -993,10 +993,7 @@ export default function ChequeCollectionsPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           {currentRole === "SHOP_ADMIN" && (
-            <>
-              <AssignTaskButton seed={{ taskType: "CHEQUE_COLLECTION", title: "Cheque Collection" }} />
-              <AssignTaskButton seed={{ taskType: "CHEQUE_DEPOSIT", title: "Cheque Deposit" }} />
-            </>
+            <AssignTaskButton seed={{ taskType: "CHEQUE_DEPOSIT", title: "Cheque Deposit" }} />
           )}
           <button
             type="button"
