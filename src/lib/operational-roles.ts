@@ -51,13 +51,13 @@ export function canAccessModule(role: AppRole, href: string) {
   if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff" || href === "/trade-calculator";
   if (normalized === "SHOP_ADMIN") return true;
   if (normalized === "SALES_PERSON") {
-    return ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
+    return ["/orders", "/tasks", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
   }
   if (normalized === "ACCOUNT_STAFF") {
-    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/reports", "/qrvcard"].includes(href);
+    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/tasks", "/cheques", "/reports", "/qrvcard"].includes(href);
   }
   if (normalized === "SALES_PERSON_CUM_ACCOUNTS") {
-    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/field-staff", "/daily-visits", "/reports", "/qrvcard"].includes(href);
+    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/tasks", "/cheques", "/field-staff", "/daily-visits", "/reports", "/qrvcard"].includes(href);
   }
   return false;
 }

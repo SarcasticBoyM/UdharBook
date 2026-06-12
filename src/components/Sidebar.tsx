@@ -14,6 +14,7 @@ import {
   MapPinned,
   QrCode,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   Menu,
   Moon,
@@ -47,6 +48,7 @@ const links: SidebarLink[] = [
   { href: "/upload", label: "Upload Excel", icon: Upload, section: "Operations" },
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2, section: "Operations" },
   { href: "/orders", label: "Order Desk", icon: ClipboardList, section: "Operations" },
+  { href: "/tasks", label: "My Tasks", icon: ListTodo, section: "Operations" },
   { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
   { href: "/field-staff", label: "Sales Person", icon: UserRoundCheck, section: "Team" },
   { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
@@ -132,7 +134,9 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
         </div>
       </div>
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 pb-4">
-        {navLinks.map(({ href, label, icon: Icon, section }, index) => (
+        {navLinks.map(({ href, label, icon: Icon, section }, index) => {
+          const displayLabel = href === "/tasks" && isAdmin ? "All Tasks" : label;
+          return (
           <div key={href}>
             {section && section !== "Main" && section !== navLinks[index - 1]?.section && (
               <p className={cn("px-3 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wide text-slate-400", mobile ? "block" : "hidden md:block")}>
@@ -141,7 +145,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
             )}
             <Link
               href={href}
-              title={label}
+              title={displayLabel}
               onClick={() => {
                 if (mobile) setMobileOpen(false);
               }}
@@ -154,10 +158,11 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
               )}
             >
               <Icon className="h-5 w-5 shrink-0" />
-              <span className={cn(mobile ? "inline" : "hidden md:inline")}>{label}</span>
+              <span className={cn(mobile ? "inline" : "hidden md:inline")}>{displayLabel}</span>
             </Link>
           </div>
-        ))}
+          );
+        })}
       </nav>
       <div className="shrink-0 space-y-1 border-t border-slate-200 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-slate-700">
         <button

@@ -28,6 +28,8 @@ import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/c
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
 import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
+import { isShopAdminRole } from "@/lib/operational-roles";
+import { AssignTaskButton } from "@/components/AssignTaskDialog";
 
 type QueueStatus =
   | "CALLBACK"
@@ -504,8 +506,16 @@ export default function TodayFollowUpsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [currentRole, setCurrentRole] = useState("");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const notifiedIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setCurrentRole(data?.user?.role ?? ""))
+      .catch(() => setCurrentRole(""));
+  }, []);
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
     if (reset || data.scheduled.length > 0) setScheduled(data.scheduled);
@@ -928,6 +938,7 @@ export default function TodayFollowUpsPage() {
 
         <ActionPanel
           customer={selected}
+          canAssignTask={isShopAdminRole(currentRole)}
           onClose={() => setSelectedId(null)}
           onOptimistic={applyOptimisticAction}
           onSaved={() => {
@@ -1591,11 +1602,13 @@ function priorityClass(priority: FollowUpPriority) {
 
 function ActionPanel({
   customer,
+  canAssignTask,
   onClose,
   onOptimistic,
   onSaved,
 }: {
   customer: QueueCustomer | null;
+  canAssignTask: boolean;
   onClose: () => void;
   onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number) => void;
   onSaved: () => void;
@@ -1769,9 +1782,28 @@ function ActionPanel({
             <h2 className="mt-1 text-xl font-bold">{customer.partyName}</h2>
             <p className="text-sm text-slate-500">{formatCurrency(customer.outstandingBalance)} outstanding</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {canAssignTask && (
+              <AssignTaskButton
+                label="Assign To Staff"
+                seed={{
+                  customerId: customer.id,
+                  customerName: customer.partyName,
+                  taskType: "FOLLOW_UP_VISIT",
+                  notes: `Follow up with ${customer.partyName}\nOutstanding: ${formatCurrency(customer.outstandingBalance)}\n${latest?.notes ?? customer.notes ?? ""}`.trim(),
+                  priority: derivedPriority(customer),
+                  dueDate: reminderInputFromDate(customer.nextFollowupDate) || undefined,
+                  sourceEntityType: "FOLLOW_UP",
+                  sourceEntityId: latest?.id,
+                  referenceUrl: `/customers/${customer.id}`,
+                }}
+                className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"
+              />
+            )}
+            <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">

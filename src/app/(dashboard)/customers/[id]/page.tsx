@@ -7,6 +7,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { statusBadgeClass, formatStatus } from "@/lib/status-colors";
 import { CallActions } from "@/components/CallActions";
 import { FollowUpModal } from "@/components/FollowUpModal";
+import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
 
@@ -234,6 +235,18 @@ export default function CustomerDetailPage() {
               >
                 Quick Follow-up
               </button>
+            )}
+            {isShopAdminRole(role) && !customer.isArchived && (
+              <AssignTaskButton
+                seed={{
+                  customerId: customer.id,
+                  customerName: customer.partyName,
+                  taskType: "PAYMENT_COLLECTION",
+                  notes: `Collect payment from ${customer.partyName}\nOutstanding: ${formatCurrency(customer.outstandingBalance)}`,
+                  priority: customer.outstandingBalance >= 50000 ? "HIGH" : "MEDIUM",
+                  referenceUrl: `/customers/${customer.id}`,
+                }}
+              />
             )}
             <button
               type="button"

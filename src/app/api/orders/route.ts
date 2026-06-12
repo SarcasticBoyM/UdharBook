@@ -221,7 +221,7 @@ export async function GET(request: Request) {
     if (filter === "upcoming") where.preferredDeliveryDate = { gte: now, lte: upcoming };
 
     const baseInclude = {
-      customer: { select: { partyName: true, contactNumber: true, batchTag: true } },
+      customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
       createdBy: { select: { name: true } },
     } satisfies Prisma.OrderInclude;
     const fullInclude = {

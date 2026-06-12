@@ -47,6 +47,10 @@ export function attendanceUrl() {
   return "/daily-visits";
 }
 
+export function taskUrl(id: string) {
+  return `/tasks?task=${encodeURIComponent(id)}`;
+}
+
 function targetData(target: NotificationTarget) {
   if (target.type === "ROLE") {
     return {
@@ -218,3 +222,63 @@ export async function notifyAttendanceEvent(input: {
   });
 }
 
+export async function notifyTaskAssigned(input: {
+  shopId: string;
+  taskId: string;
+  assignedToId: string;
+  taskTypeLabel: string;
+  customerName?: string | null;
+  dueDate: Date;
+  assignedByName: string;
+}) {
+  return createNotification({
+    shopId: input.shopId,
+    target: { type: "USER", userId: input.assignedToId },
+    type: "TASK_ASSIGNED",
+    title: "Task Assigned To You",
+    message: [
+      input.taskTypeLabel,
+      input.customerName ? `Customer: ${input.customerName}` : "",
+      `Due: ${input.dueDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
+      `Assigned by: ${input.assignedByName}`,
+    ].filter(Boolean).join("\n"),
+    entityType: "TASK",
+    entityId: input.taskId,
+    actionUrl: taskUrl(input.taskId),
+    metadata: {
+      taskTypeLabel: input.taskTypeLabel,
+      customerName: input.customerName ?? null,
+      dueDate: input.dueDate.toISOString(),
+      assignedByName: input.assignedByName,
+    },
+  });
+}
+
+export async function notifyTaskCompleted(input: {
+  shopId: string;
+  taskId: string;
+  assignedById: string;
+  taskTypeLabel: string;
+  customerName?: string | null;
+  completedByName: string;
+}) {
+  return createNotification({
+    shopId: input.shopId,
+    target: { type: "USER", userId: input.assignedById },
+    type: "TASK_COMPLETED",
+    title: "Task Completed",
+    message: [
+      input.taskTypeLabel,
+      input.customerName ? `Customer: ${input.customerName}` : "",
+      `Completed by: ${input.completedByName}`,
+    ].filter(Boolean).join("\n"),
+    entityType: "TASK",
+    entityId: input.taskId,
+    actionUrl: taskUrl(input.taskId),
+    metadata: {
+      taskTypeLabel: input.taskTypeLabel,
+      customerName: input.customerName ?? null,
+      completedByName: input.completedByName,
+    },
+  });
+}

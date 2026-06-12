@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { assignableFixedRoles, fixedRoleLabels, normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
+import { AssignTaskButton } from "@/components/AssignTaskDialog";
 
 type Shop = {
   id: string;
@@ -265,6 +266,17 @@ export default function StaffManagementPage() {
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{roleLabel(userRole)}</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
+                {!user.disabledAt && userRole !== "SHOP_ADMIN" && (
+                  <AssignTaskButton
+                    seed={{
+                      assignedToId: user.id,
+                      taskType: "GENERAL_TASK",
+                      title: `Task for ${user.name}`,
+                      shopId: isSuperAdmin ? user.shopId : undefined,
+                    }}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"
+                  />
+                )}
                 {!isCurrentAccount && (
                   <button type="button" onClick={() => startEdit(user)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold dark:border-slate-700">
                     <Pencil className="h-4 w-4" />

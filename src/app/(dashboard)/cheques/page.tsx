@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { ChequeStatus } from "@prisma/client";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { AssignTaskButton } from "@/components/AssignTaskDialog";
 
 type CustomerOption = {
   id: string;
@@ -990,7 +991,13 @@ export default function ChequeCollectionsPage() {
             Track each cheque from field collection to deposit, clearance, bounce recovery, and reports.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {currentRole === "SHOP_ADMIN" && (
+            <>
+              <AssignTaskButton seed={{ taskType: "CHEQUE_COLLECTION", title: "Cheque Collection" }} />
+              <AssignTaskButton seed={{ taskType: "CHEQUE_DEPOSIT", title: "Cheque Deposit" }} />
+            </>
+          )}
           <button
             type="button"
             onClick={enableAlerts}
@@ -1355,6 +1362,21 @@ export default function ChequeCollectionsPage() {
                   {cheque.collectionNotes && <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{cheque.collectionNotes}</p>}
 
                   <div className="mt-4 flex flex-wrap gap-2">
+                    {currentRole === "SHOP_ADMIN" && (
+                      <AssignTaskButton
+                        label={normalizedChequeStatus(cheque.status) === "COLLECTED" ? "Assign Deposit" : "Assign Cheque Task"}
+                        seed={{
+                          customerId: cheque.customer.id,
+                          customerName: cheque.customer.partyName,
+                          taskType: normalizedChequeStatus(cheque.status) === "COLLECTED" ? "CHEQUE_DEPOSIT" : "CHEQUE_COLLECTION",
+                          notes: `Cheque ${cheque.chequeNumber} | ${cheque.bankName}\nAmount: ${formatCurrency(cheque.amount)}`,
+                          priority: cheque.status === "BOUNCED" ? "URGENT" : cheque.amount >= 50000 ? "HIGH" : "MEDIUM",
+                          sourceEntityType: "CHEQUE",
+                          sourceEntityId: cheque.id,
+                          referenceUrl: `/customers/${cheque.customer.id}`,
+                        }}
+                      />
+                    )}
                     {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
                       <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
                         Mark Deposited

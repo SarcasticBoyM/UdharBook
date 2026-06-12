@@ -24,7 +24,7 @@ type NotificationResponse = {
 };
 
 const mutationMethods = new Set(["POST", "PATCH", "PUT", "DELETE"]);
-const businessApiPattern = /^\/api\/(orders|cheques|customers|follow-ups|field-staff\/attendance)\b/;
+const businessApiPattern = /^\/api\/(orders|tasks|cheques|customers|follow-ups|field-staff\/attendance)\b/;
 
 function isStandalonePwa() {
   if (typeof window === "undefined") return false;

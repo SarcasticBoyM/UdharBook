@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
 import { canUseOrders } from "@/lib/permissions";
+import { isShopAdminRole } from "@/lib/operational-roles";
+import { AssignTaskButton } from "@/components/AssignTaskDialog";
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
@@ -18,7 +20,7 @@ type OrderRow = {
   createdAt: string;
   deliveredAt: string | null;
   cancelledAt?: string | null;
-  customer: { partyName: string; contactNumber: string; batchTag?: string | null };
+  customer: { id: string; partyName: string; contactNumber: string; batchTag?: string | null };
   createdBy: { name: string; role?: string };
   activities?: { action: string; createdAt: string; user: { name: string; role?: string } }[];
 };
@@ -148,6 +150,7 @@ export default function OrderDeskPage() {
   const [priority, setPriority] = useState("Normal");
   const canManageOrders = canUseOrders(role);
   const canCreateOrders = canManageOrders;
+  const canAssignTasks = isShopAdminRole(role);
 
   async function load() {
     setLoading(true);
@@ -373,6 +376,24 @@ export default function OrderDeskPage() {
             </div>
             {canManageOrders && (
               <div className="mt-3 flex flex-wrap gap-2">
+                {canAssignTasks && (
+                  <AssignTaskButton
+                    label="Assign Follow-up"
+                    seed={{
+                      customerId: order.customer.id,
+                      customerName: order.customer.partyName,
+                      taskType: "ORDER_FOLLOW_UP",
+                      title: "Order Follow-up",
+                      notes: order.orderDetails,
+                      priority: order.priority === "Urgent" ? "URGENT" : order.priority === "High" ? "HIGH" : "MEDIUM",
+                      dueDate: order.preferredDeliveryDate ? `${toInputDate(order.preferredDeliveryDate)}T10:00` : undefined,
+                      sourceEntityType: "ORDER",
+                      sourceEntityId: order.id,
+                      referenceUrl: `/customers/${order.customer.id}`,
+                    }}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"
+                  />
+                )}
                 {canEdit(order) && (
                   <button type="button" onClick={() => openEdit(order)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold dark:border-slate-700">
                     Edit Order

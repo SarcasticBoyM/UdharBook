@@ -175,6 +175,7 @@ model Shop {
   productPresets     ProductPreset[]
   qrVCard            QRVCard?
   notifications      Notification[]
+  tasks              Task[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -321,6 +322,8 @@ model User {
   roleAssignments UserRoleAssignment[] @relation("UserRoleAssignments")
   roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
   notifications Notification[] @relation("NotificationTargetUser")
+  assignedTasks Task[] @relation("TaskAssignedTo")
+  createdTasks Task[] @relation("TaskAssignedBy")
 
   @@index([shopId])
   @@index([role])
@@ -351,6 +354,37 @@ model Notification {
   @@index([shopId, targetType, roleTarget, createdAt])
   @@index([shopId, userId, createdAt])
   @@index([shopId, isRead, createdAt])
+}
+
+model Task {
+  id               String    @id @default(cuid())
+  shopId           String
+  shop             Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  assignedToId     String
+  assignedTo       User      @relation("TaskAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  assignedById     String
+  assignedBy       User      @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  taskType         String
+  title            String
+  notes            String?
+  progressNotes    String?
+  priority         String    @default("MEDIUM")
+  status           String    @default("PENDING")
+  dueDate          DateTime
+  completedAt      DateTime?
+  sourceEntityType String?
+  sourceEntityId   String?
+  referenceUrl     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([shopId, assignedToId, status, dueDate])
+  @@index([shopId, status, dueDate])
+  @@index([shopId, assignedById, createdAt])
+  @@index([shopId, customerId, createdAt])
+  @@index([shopId, sourceEntityType, sourceEntityId])
 }
 
 model UserRoleAssignment {
@@ -399,6 +433,7 @@ model Customer {
   geoAddress         String?
   staffVisits        StaffVisit[]
   orders             Order[]
+  tasks              Task[]
 
   @@index([nextFollowupDate])
   @@index([status])
