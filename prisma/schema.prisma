@@ -133,6 +133,12 @@ enum NotificationTargetType {
   USER
 }
 
+enum NotificationPriority {
+  CRITICAL
+  IMPORTANT
+  NORMAL
+}
+
 enum NotificationRetryStatus {
   PENDING
   PROCESSING
@@ -354,6 +360,7 @@ model Notification {
   actionUrl        String?
   metadata         Json?
   idempotencyKey   String?                @unique
+  priority         NotificationPriority   @default(NORMAL)
   isRead           Boolean                @default(false)
   readByUserIds    String[]               @default([])
   deletedByUserIds String[]               @default([])
@@ -364,6 +371,7 @@ model Notification {
   @@index([shopId, targetType, roleTarget, createdAt])
   @@index([shopId, userId, createdAt])
   @@index([shopId, isRead, createdAt])
+  @@index([shopId, priority, createdAt])
 }
 
 model NotificationRetry {

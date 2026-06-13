@@ -1,13 +1,17 @@
-import { Prisma, type NotificationTargetType } from "@prisma/client";
+import { Prisma, type NotificationPriority, type NotificationTargetType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { normalizeFixedRole } from "@/lib/operational-roles";
 import { logger } from "@/lib/logger";
+import { notificationPriority } from "@/lib/notification-priority";
+import { taskTypeLabels } from "@/lib/tasks";
 
 const RETRY_DELAYS_MINUTES = [1, 5, 30, 120] as const;
 const DEFAULT_MAX_RETRIES = RETRY_DELAYS_MINUTES.length;
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
 const RETRY_SWEEP_THROTTLE_MS = 30 * 1000;
 const retrySweepAfterByShop = new Map<string, number>();
+const OVERDUE_SWEEP_THROTTLE_MS = 60 * 1000;
+const overdueSweepAfterByShop = new Map<string, number>();
 
 export type NotificationTarget =
   | { type: "SHOP" }
@@ -32,6 +36,15 @@ export type NotificationDeliveryResult = {
   retryQueued: boolean;
   notificationId?: string;
 };
+
+function mergeDeliveryResults(results: NotificationDeliveryResult[]): NotificationDeliveryResult {
+  return {
+    success: results.every((result) => result.success),
+    queued: results.every((result) => result.queued),
+    retryQueued: results.some((result) => result.retryQueued),
+    notificationId: results.find((result) => result.notificationId)?.notificationId,
+  };
+}
 
 export type NotificationActor = {
   id: string;
@@ -167,10 +180,10 @@ function parseRetryPayload(payload: Prisma.JsonValue): CreateNotificationInput {
   };
 }
 
-async function entityBelongsToShop(input: CreateNotificationInput) {
-  if (!input.entityType || !input.entityId) return true;
-  const where = { id: input.entityId, shopId: input.shopId };
-  switch (input.entityType) {
+export async function notificationEntityAvailable(shopId: string, entityType?: string | null, entityId?: string | null) {
+  if (!entityType || !entityId) return true;
+  const where = { id: entityId, shopId };
+  switch (entityType) {
     case "ORDER":
       return (await prisma.order.count({ where })) > 0;
     case "TASK":
@@ -210,7 +223,7 @@ async function validateNotification(input: CreateNotificationInput) {
     throw new NotificationValidationError("Notification target role is invalid");
   }
 
-  if (!(await entityBelongsToShop(input))) {
+  if (!(await notificationEntityAvailable(input.shopId, input.entityType, input.entityId))) {
     throw new NotificationValidationError("Notification entity is outside the shop or no longer exists");
   }
 }
@@ -235,6 +248,7 @@ async function insertNotification(input: CreateNotificationInput) {
         actionUrl: input.actionUrl,
         metadata: input.metadata,
         idempotencyKey,
+        priority: notificationPriority(input.type) as NotificationPriority,
       },
     });
   } catch (error) {
@@ -433,14 +447,133 @@ export async function processNotificationRetries(options: { shopId: string; limi
   }
 }
 
+function taskDueText(value: Date) {
+  return value.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+export async function generateTaskOverdueNotifications(shopId: string) {
+  const now = new Date();
+  const nextSweepAt = overdueSweepAfterByShop.get(shopId) ?? 0;
+  if (nextSweepAt > now.getTime()) return { checked: 0, generated: 0 };
+  overdueSweepAfterByShop.set(shopId, now.getTime() + OVERDUE_SWEEP_THROTTLE_MS);
+
+  try {
+    const tasks = await prisma.task.findMany({
+      where: {
+        shopId,
+        dueDate: { lt: now },
+        status: { notIn: ["COMPLETED", "CANCELLED"] },
+      },
+      select: {
+        id: true,
+        taskType: true,
+        title: true,
+        dueDate: true,
+        assignedToId: true,
+        assignedById: true,
+        customer: { select: { partyName: true } },
+        assignedBy: { select: { role: true } },
+      },
+      orderBy: { dueDate: "asc" },
+      take: 100,
+    });
+
+    const candidates = tasks.flatMap((task) => {
+      const targets = [task.assignedToId];
+      if (
+        task.assignedById !== task.assignedToId &&
+        String(normalizeFixedRole(task.assignedBy.role)) === "SHOP_ADMIN"
+      ) {
+        targets.push(task.assignedById);
+      }
+      return targets.map((userId) => ({
+        task,
+        userId,
+        idempotencyKey: notificationIdempotencyKey({
+          shopId,
+          target: { type: "USER", userId },
+          type: "TASK_OVERDUE",
+          title: "Task Overdue",
+          message: "Task overdue",
+          entityType: "TASK",
+          entityId: task.id,
+        }),
+      }));
+    });
+
+    const keys = candidates.map((candidate) => candidate.idempotencyKey);
+    const [existingNotifications, existingRetries] = keys.length > 0
+      ? await Promise.all([
+          prisma.notification.findMany({
+            where: { idempotencyKey: { in: keys } },
+            select: { idempotencyKey: true },
+          }),
+          prisma.notificationRetry.findMany({
+            where: { idempotencyKey: { in: keys }, status: { in: ["PENDING", "PROCESSING", "SENT"] } },
+            select: { idempotencyKey: true },
+          }),
+        ])
+      : [[], []];
+    const existingKeys = new Set([
+      ...existingNotifications.map((item) => item.idempotencyKey),
+      ...existingRetries.map((item) => item.idempotencyKey),
+    ]);
+
+    let generated = 0;
+    for (const candidate of candidates) {
+      if (existingKeys.has(candidate.idempotencyKey)) continue;
+      const taskLabel = taskTypeLabels[candidate.task.taskType as keyof typeof taskTypeLabels] ?? candidate.task.title;
+      const result = await safeCreateNotification({
+        shopId,
+        target: { type: "USER", userId: candidate.userId },
+        type: "TASK_OVERDUE",
+        title: "Task Overdue",
+        message: [
+          taskLabel,
+          candidate.task.customer?.partyName ? `Customer: ${candidate.task.customer.partyName}` : "",
+          `Due: ${taskDueText(candidate.task.dueDate)}`,
+          "Immediate action required.",
+        ].filter(Boolean).join("\n"),
+        entityType: "TASK",
+        entityId: candidate.task.id,
+        actionUrl: taskUrl(candidate.task.id),
+        metadata: {
+          taskTypeLabel: taskLabel,
+          customerName: candidate.task.customer?.partyName ?? null,
+          dueDate: candidate.task.dueDate.toISOString(),
+        },
+      });
+      if (result.success || result.retryQueued) generated += 1;
+    }
+    return { checked: tasks.length, generated };
+  } catch (error) {
+    logger.error("task_overdue_notification_sweep_failed", {
+      event: "task_overdue_notification_sweep_failed",
+      shopId,
+      error: errorMessage(error),
+    });
+    return { checked: 0, generated: 0 };
+  }
+}
+
 export async function notifyOrderCreated(input: {
   shopId: string;
   orderId: string;
   customerName: string;
+  createdById?: string;
+  createdByRole?: string;
   createdByName: string;
   amountText?: string | null;
 }) {
-  return safeCreateNotification({
+  const shopNotification = await safeCreateNotification({
     shopId: input.shopId,
     target: { type: "SHOP" },
     type: "ORDER_CREATED",
@@ -451,6 +584,24 @@ export async function notifyOrderCreated(input: {
     actionUrl: orderUrl(input.orderId),
     metadata: { customerName: input.customerName, createdByName: input.createdByName, amountText: input.amountText ?? null },
   });
+  if (
+    !input.createdById ||
+    String(normalizeFixedRole(input.createdByRole ?? "")) !== "SALES_PERSON"
+  ) {
+    return shopNotification;
+  }
+  const creatorNotification = await safeCreateNotification({
+    shopId: input.shopId,
+    target: { type: "USER", userId: input.createdById },
+    type: "ORDER_CREATED",
+    title: "New Order Received",
+    message: `${input.customerName}\nCreated by: ${input.createdByName}${input.amountText ? `\n${input.amountText}` : ""}`,
+    entityType: "ORDER",
+    entityId: input.orderId,
+    actionUrl: orderUrl(input.orderId),
+    metadata: { customerName: input.customerName, createdByName: input.createdByName, amountText: input.amountText ?? null },
+  });
+  return mergeDeliveryResults([shopNotification, creatorNotification]);
 }
 
 export async function notifyOrderStatusChanged(input: {
@@ -482,17 +633,19 @@ export async function notifyChequeEvent(input: {
   chequeNumber: string;
   amount: number;
   actorName: string;
+  target?: NotificationTarget;
 }) {
+  const bounced = input.type === "CHEQUE_BOUNCED";
   return safeCreateNotification({
     shopId: input.shopId,
-    target: { type: "SHOP" },
+    target: input.target ?? { type: "SHOP" },
     type: input.type,
     title: input.title,
-    message: `${input.customerName}\nCheque: ${input.chequeNumber}\nAmount: ${new Intl.NumberFormat("en-IN", {
+    message: `${input.customerName}\nCheque: ${input.chequeNumber}\n${bounced ? "Cheque Amount" : "Amount"}: ${new Intl.NumberFormat("en-IN", {
       style: "currency",
       currency: "INR",
       maximumFractionDigits: 0,
-    }).format(input.amount)}\nBy: ${input.actorName}`,
+    }).format(input.amount)}\nBy: ${input.actorName}${bounced ? "\nImmediate action required." : ""}`,
     entityType: "CHEQUE",
     entityId: input.chequeId,
     actionUrl: chequeUrl(input.chequeId),

@@ -8,6 +8,7 @@ import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
 import { canUseCheques } from "@/lib/permissions";
 import { notifyChequeEvent } from "@/lib/notifications";
+import { normalizeFixedRole } from "@/lib/operational-roles";
 
 const updateSchema = z.object({
   status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]),
@@ -57,7 +58,10 @@ export async function PATCH(
   const body = updateSchema.parse(await request.json());
   const existing = await prisma.cheque.findFirst({
     where: { id, shopId },
-    include: { customer: true },
+    include: {
+      customer: true,
+      collectedBy: { select: { role: true } },
+    },
   });
   if (!existing) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
   if (!isValidTransition(existing.status, body.status)) {
@@ -315,8 +319,9 @@ export async function PATCH(
     details: `${existing.chequeNumber}: ${existing.status} -> ${body.status}`,
   });
 
-  const notification =
-    body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY"
+  const shopNotification =
+    existing.status !== body.status &&
+    (body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY")
       ? await notifyChequeEvent({
       shopId,
       chequeId: updated.id,
@@ -338,6 +343,29 @@ export async function PATCH(
       actorName: session.name,
       })
       : undefined;
+  const assignedUserNotification =
+    body.status === "BOUNCED" &&
+    existing.status !== body.status &&
+    String(normalizeFixedRole(existing.collectedBy.role)) === "SALES_PERSON"
+      ? await notifyChequeEvent({
+          shopId,
+          chequeId: updated.id,
+          type: "CHEQUE_BOUNCED",
+          title: "Cheque Bounced",
+          customerName: updated.customer.partyName,
+          chequeNumber: updated.chequeNumber,
+          amount: updated.amount,
+          actorName: session.name,
+          target: { type: "USER", userId: existing.collectedById },
+        })
+      : undefined;
+  const notification = shopNotification && assignedUserNotification
+    ? {
+        success: shopNotification.success && assignedUserNotification.success,
+        queued: shopNotification.queued && assignedUserNotification.queued,
+        retryQueued: shopNotification.retryQueued || assignedUserNotification.retryQueued,
+      }
+    : shopNotification ?? assignedUserNotification;
 
   return NextResponse.json({
     ...updated,

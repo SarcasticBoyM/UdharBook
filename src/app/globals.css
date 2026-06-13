@@ -18,6 +18,20 @@ body {
   overflow-x: hidden;
 }
 
+@keyframes critical-bell-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+.critical-bell-pulse {
+  animation: critical-bell-pulse 700ms ease-in-out 1;
+}
+
 @layer utilities {
   .card {
     @apply rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900;

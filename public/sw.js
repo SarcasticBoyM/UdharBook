@@ -53,9 +53,10 @@ self.addEventListener("message", (event) => {
   const body = event.data.body || "A follow-up is due.";
   self.registration.showNotification(title, {
     body,
-    icon: "/icon.svg",
-    badge: "/icon.svg",
-    requireInteraction: true,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    requireInteraction: event.data.requireInteraction ?? true,
+    tag: event.data.tag,
     data: { url: event.data.url || "/follow-ups" },
   });
 });
