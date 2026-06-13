@@ -13,6 +13,7 @@ import {
   Landmark,
   Loader2,
   PhoneCall,
+  RefreshCw,
   ShieldAlert,
   TrendingUp,
   Users,
@@ -61,12 +62,16 @@ type ReportRow = {
 };
 
 type ReportResponse = {
+  success: boolean;
+  code?: string;
+  error?: string;
   rows: ReportRow[];
   users: { id: string; name: string; role: string }[];
   summary: {
     dailyFollowUps: number;
     recoveryToday: number;
     pendingAmount: number;
+    pendingCases?: number;
     pendingCustomers: number;
     promises: number;
     notResponding: number;
@@ -83,7 +88,12 @@ type ReportResponse = {
     promisesCollected: number;
     averageFollowUpTime: string;
   }[];
+  collectionTrend?: { date: string; amount: number }[];
   trend: { date: string; amount: number }[];
+  filters?: {
+    staff: { id: string; name: string; role: string }[];
+    batchTags: string[];
+  };
   pagination: { page: number; limit: number; total: number; pages: number };
 };
 
@@ -170,6 +180,7 @@ const initialSummary: ReportResponse["summary"] = {
 };
 
 const emptyReportData: ReportResponse = {
+  success: true,
   rows: [],
   users: [],
   summary: initialSummary,
@@ -254,12 +265,28 @@ export default function FollowUpReportsPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/follow-up-reports?${params.toString()}`);
-      if (!res.ok) throw new Error("Could not load reports");
-      setData((await res.json()) as ReportResponse);
-    } catch {
+      const res = await fetch(`/api/follow-up-reports?${params.toString()}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await res.json().catch(() => null) as ReportResponse | null;
+      if (!res.ok || !payload || payload.success === false) {
+        throw new Error(payload?.error || "Follow-up report data could not be loaded.");
+      }
+      if (
+        !Array.isArray(payload.rows) ||
+        !Array.isArray(payload.users) ||
+        !Array.isArray(payload.staffPerformance) ||
+        !Array.isArray(payload.trend) ||
+        !payload.summary ||
+        !payload.pagination
+      ) {
+        throw new Error("Follow-up report returned an invalid response.");
+      }
+      setData(payload);
+    } catch (loadError) {
       setData(emptyReportData);
-      setError("Follow-up reports could not be loaded. The selected shop may no longer exist or may not have any report data yet.");
+      setError(loadError instanceof Error ? loadError.message : "Follow-up report data could not be loaded.");
     } finally {
       setLoading(false);
     }
@@ -363,22 +390,36 @@ export default function FollowUpReportsPage() {
         <Metric label="Completed" value={summary.completed} icon={BarChart3} tone="green" />
       </section>
 
-      {(error || chequeError) && (
-        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-          {error || chequeError}
+      {error && (
+        <div className="mt-5 flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100 sm:flex-row sm:items-center sm:justify-between">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-red-300 px-3 font-semibold disabled:opacity-60 dark:border-red-800"
+          >
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            Retry
+          </button>
         </div>
       )}
 
-      {!loading && !chequeLoading && !error && !chequeError && reportData.rows.length === 0 && chequeReportData.items.length === 0 && (
-        <div className="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-          No report data is available yet. Create or select a business shop and add customers, follow-ups, or cheques to populate this page.
+      {chequeError && (
+        <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          {chequeError}
         </div>
       )}
 
       <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex items-center gap-2">
           <Filter className="h-4 w-4 text-slate-500" />
-          <h2 className="font-semibold">Advanced Filters</h2>
+          <div>
+            <h2 className="font-semibold">Advanced Filters</h2>
+            <p className="text-xs text-slate-500">
+              {filters.from || filters.to ? "Using the selected date range" : "Showing all available follow-up activity"}
+            </p>
+          </div>
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Input label="From" type="date" value={filters.from} onChange={(value) => updateFilter("from", value)} />
@@ -752,7 +793,11 @@ export default function FollowUpReportsPage() {
             ))
           ) : (
             <div className="p-8 text-center text-sm text-slate-500">
-              No report rows match the selected filters.
+              {loading
+                ? "Loading follow-up report data..."
+                : error
+                  ? "Report data is unavailable. Use Retry above."
+                  : "No follow-up report data found for the selected filters."}
             </div>
           )}
         </div>

@@ -1,14 +1,31 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import type { ChequeStatus, FollowUpStatus, Prisma } from "@prisma/client";
+import { Prisma, type ChequeStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { canViewReports } from "@/lib/permissions";
-import { requireShopId } from "@/lib/tenant";
+import { normalizeFixedRole } from "@/lib/operational-roles";
+import { resolveOperationalShopId } from "@/lib/tenant";
+import { logger } from "@/lib/logger";
 import { reportToCsv } from "@/lib/excel/export";
 
 const PAGE_SIZE_MAX = 100;
 const ACTIVITY_LIMIT = 2000;
+const REPORT_TIME_ZONE = "Asia/Kolkata";
+const VALID_FOLLOW_UP_STATUSES = new Set([
+  "PENDING",
+  "CALLBACK",
+  "FOLLOW_UP_REQUIRED",
+  "CONTACTED",
+  "PAYMENT_PROMISED",
+  "PARTIAL_PAID",
+  "PAID",
+  "NOT_REACHABLE",
+  "WRONG_NUMBER",
+  "COMPLETED",
+  "MISSED",
+  "RESCHEDULED",
+]);
 
 type StatusTone = "green" | "yellow" | "red" | "blue" | "slate";
 
@@ -56,25 +73,74 @@ type ReportRow = {
   timeline: TimelineItem[];
 };
 
-function startOfToday() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+function istDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: REPORT_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function endOfToday() {
-  const date = new Date();
-  date.setHours(23, 59, 59, 999);
-  return date;
+function businessDayBoundary(dateOnly: string, end = false) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOnly);
+  if (!match) return undefined;
+  const [, year, month, day] = match;
+  const boundary = new Date(`${year}-${month}-${day}T00:00:00+05:30`);
+  if (Number.isNaN(boundary.getTime())) return undefined;
+  if (end) return new Date(boundary.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return boundary;
 }
 
 function asDate(value: string | null, end = false) {
   if (!value) return undefined;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  if (end) date.setHours(23, 59, 59, 999);
-  else date.setHours(0, 0, 0, 0);
-  return date;
+  const dateOnly = value.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  return dateOnly ? businessDayBoundary(dateOnly, end) : undefined;
+}
+
+function finiteNumber(value: string | null) {
+  if (!value?.trim()) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function positiveInteger(value: string | null, fallback: number) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function normalizeStatusFilter(value: string | null) {
+  const normalized = value?.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return undefined;
+  if (normalized === "PROMISE_TO_PAY") return "PAYMENT_PROMISED";
+  if (normalized === "FOLLOW_UP_LATER") return "RESCHEDULED";
+  return VALID_FOLLOW_UP_STATUSES.has(normalized) ? normalized : null;
+}
+
+function normalizedRoleLabel(role: string | null | undefined) {
+  return humanStatus(String(normalizeFixedRole(role ?? "ACCOUNT_STAFF")));
+}
+
+async function optionalReportQuery<T>(
+  label: string,
+  query: Promise<T>,
+  fallback: T,
+  context: { shopId: string; sessionUserId: string },
+) {
+  try {
+    return await query;
+  } catch (error) {
+    logger.error("follow_up_report_optional_query_failed", {
+      event: "follow_up_report_optional_query_failed",
+      query: label,
+      ...context,
+      prismaCode: error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallback;
+  }
 }
 
 function formatDateTime(date: Date | null | undefined) {
@@ -155,7 +221,7 @@ function paymentStatusFor(balance: number, recovered: number) {
 }
 
 function followUpSummary(input: {
-  status: FollowUpStatus;
+  status: string;
   actor: string;
   notes: string;
   response: string;
@@ -329,36 +395,73 @@ body{font-family:Arial,sans-serif;padding:24px;color:#111827}table{width:100%;bo
 
 export async function GET(request: Request) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canViewReports(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!session) return NextResponse.json({ success: false, code: "UNAUTHORIZED", error: "Unauthorized" }, { status: 401 });
+  const normalizedSessionRole = String(normalizeFixedRole(session.role));
+  if (!canViewReports(session.role) && normalizedSessionRole !== "SUPER_ADMIN") {
+    return NextResponse.json({ success: false, code: "FORBIDDEN", error: "You do not have access to follow-up reports." }, { status: 403 });
+  }
 
-  const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
-  const page = Math.max(1, Number(searchParams.get("page") ?? 1));
-  const limit = Math.min(PAGE_SIZE_MAX, Math.max(1, Number(searchParams.get("limit") ?? 25)));
+  const requestedShopId = searchParams.get("shopId")?.trim() || request.headers.get("x-shop-id")?.trim() || null;
+  if (normalizedSessionRole !== "SUPER_ADMIN" && requestedShopId && requestedShopId !== session.shopId) {
+    return NextResponse.json({ success: false, code: "SHOP_FORBIDDEN", error: "You do not have access to the requested shop." }, { status: 403 });
+  }
+
+  let resolvedShopId: string | null = null;
+  try {
+  const shopId = normalizedSessionRole === "SUPER_ADMIN"
+    ? await resolveOperationalShopId(request, session)
+    : session.shopId;
+  resolvedShopId = shopId;
+  const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true } });
+  if (!shop) {
+    return NextResponse.json({
+      success: false,
+      code: "SHOP_NOT_FOUND",
+      error: "The selected shop was not found.",
+    }, { status: 404 });
+  }
+
+  const page = positiveInteger(searchParams.get("page"), 1);
+  const limit = Math.min(PAGE_SIZE_MAX, positiveInteger(searchParams.get("limit"), 25));
   const format = searchParams.get("format");
   const from = asDate(searchParams.get("from"));
   const to = asDate(searchParams.get("to"), true);
-  const staffId = searchParams.get("staffId") || undefined;
-  const customer = searchParams.get("customer")?.trim();
-  const batchTag = searchParams.get("batchTag")?.trim();
+  const staffId = searchParams.get("staffId")?.trim() || undefined;
+  const customer = searchParams.get("customer")?.trim() || undefined;
+  const batchTag = searchParams.get("batchTag")?.trim() || undefined;
   const includeArchived = searchParams.get("includeArchived") === "true";
-  const status = searchParams.get("status") || undefined;
-  const outcome = searchParams.get("outcome")?.trim();
-  const minAmount = Number(searchParams.get("minAmount") || "");
-  const maxAmount = Number(searchParams.get("maxAmount") || "");
+  const status = normalizeStatusFilter(searchParams.get("status"));
+  if (status === null) {
+    return NextResponse.json({
+      success: false,
+      code: "INVALID_FILTER",
+      error: "The selected follow-up status is not valid.",
+    }, { status: 400 });
+  }
+  const outcome = searchParams.get("outcome")?.trim() || undefined;
+  const minAmount = finiteNumber(searchParams.get("minAmount"));
+  const maxAmount = finiteNumber(searchParams.get("maxAmount"));
+  if (minAmount !== undefined && maxAmount !== undefined && minAmount > maxAmount) {
+    return NextResponse.json({
+      success: false,
+      code: "INVALID_FILTER",
+      error: "Minimum amount cannot be greater than maximum amount.",
+    }, { status: 400 });
+  }
   const overdueOnly = searchParams.get("overdueOnly") === "true";
   const todayOnly = searchParams.get("todayOnly") === "true";
   const promiseOnly = searchParams.get("promiseOnly") === "true";
   const completedOnly = searchParams.get("completedOnly") === "true";
   const pendingOnly = searchParams.get("pendingOnly") === "true";
-  const todayStart = startOfToday();
-  const todayEnd = endOfToday();
+  const todayDate = istDateParts();
+  const todayStart = businessDayBoundary(todayDate)!;
+  const todayEnd = businessDayBoundary(todayDate, true)!;
   const now = new Date();
   const activityFrom = todayOnly ? todayStart : from;
   const activityTo = todayOnly ? todayEnd : to;
 
-  const customerWhere: Prisma.CustomerWhereInput = {
+  const activeCustomerWhere: Prisma.CustomerWhereInput = {
     shopId,
     ...(includeArchived ? {} : { isArchived: false }),
     ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
@@ -366,13 +469,28 @@ export async function GET(request: Request) {
       ? {
           OR: [
             { partyName: { contains: customer, mode: "insensitive" } },
-            { contactNumber: { contains: customer.replace(/\D/g, "") } },
+            ...(customer.replace(/\D/g, "") ? [{ contactNumber: { contains: customer.replace(/\D/g, "") } }] : []),
           ],
         }
       : {}),
-    ...(Number.isFinite(minAmount) ? { outstandingBalance: { gte: minAmount } } : {}),
-    ...(Number.isFinite(maxAmount)
-      ? { outstandingBalance: { ...(Number.isFinite(minAmount) ? { gte: minAmount } : {}), lte: maxAmount } }
+    ...(minAmount !== undefined || maxAmount !== undefined
+      ? { outstandingBalance: { ...(minAmount !== undefined ? { gte: minAmount } : {}), ...(maxAmount !== undefined ? { lte: maxAmount } : {}) } }
+      : {}),
+  };
+
+  const customerWhere: Prisma.CustomerWhereInput = {
+    shopId,
+    ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
+    ...(customer
+      ? {
+          OR: [
+            { partyName: { contains: customer, mode: "insensitive" } },
+            ...(customer.replace(/\D/g, "") ? [{ contactNumber: { contains: customer.replace(/\D/g, "") } }] : []),
+          ],
+        }
+      : {}),
+    ...(minAmount !== undefined || maxAmount !== undefined
+      ? { outstandingBalance: { ...(minAmount !== undefined ? { gte: minAmount } : {}), ...(maxAmount !== undefined ? { lte: maxAmount } : {}) } }
       : {}),
   };
 
@@ -386,8 +504,21 @@ export async function GET(request: Request) {
     ...(status ? { status: status as Prisma.EnumFollowUpStatusFilter["equals"] } : {}),
     ...(promiseOnly ? { status: "PAYMENT_PROMISED" } : {}),
     ...(completedOnly ? { status: { in: ["PAID", "COMPLETED"] } } : {}),
-    ...(pendingOnly ? { status: { in: ["PENDING", "RESCHEDULED", "NOT_REACHABLE", "PAYMENT_PROMISED"] } } : {}),
-    ...(overdueOnly ? { nextFollowupDate: { lt: now } } : {}),
+    ...(pendingOnly ? { status: { in: ["PENDING", "CALLBACK", "FOLLOW_UP_REQUIRED", "RESCHEDULED", "NOT_REACHABLE", "PAYMENT_PROMISED"] } } : {}),
+    ...(overdueOnly
+      ? {
+          AND: [
+            { status: { notIn: ["PAID", "COMPLETED", "WRONG_NUMBER"] } },
+            {
+              OR: [
+                { nextFollowUpDateTime: { lt: now } },
+                { nextFollowupDate: { lt: now } },
+                { scheduledAt: { lt: now } },
+              ],
+            },
+          ],
+        }
+      : {}),
     customer: customerWhere,
   };
 
@@ -430,13 +561,98 @@ export async function GET(request: Request) {
     AND: [{ OR: [{ staffVisitId: null }, { staffVisit: { status: "COMPLETED" } }] }],
   };
 
-  const [followUps, completedVisits, payments, cheques, users, paymentsToday, outstanding, allToday, staffGroups, trendRows] =
-    await prisma.$transaction([
+  if (staffId) {
+    const staffExists = await prisma.user.count({ where: { id: staffId, shopId } });
+    if (!staffExists) {
+      return NextResponse.json({
+        success: false,
+        code: "INVALID_FILTER",
+        error: "The selected staff member does not belong to this shop.",
+      }, { status: 400 });
+    }
+  }
+
+  const debugMode = ["SHOP_ADMIN", "SUPER_ADMIN"].includes(normalizedSessionRole) && searchParams.get("debug") === "runtime";
+  const isolateMode = debugMode && searchParams.get("isolate") === "1";
+  const rawFollowUpCount = await prisma.followUp.count({ where: { shopId } });
+  const filteredFollowUpCount = isolateMode ? rawFollowUpCount : await prisma.followUp.count({ where: followUpWhere });
+  const incomingFilters = {
+    from: searchParams.get("from") || null,
+    to: searchParams.get("to") || null,
+    staffId: staffId ?? null,
+    customer: customer ?? null,
+    batchTag: batchTag ?? null,
+    status: searchParams.get("status") || null,
+    outcome: outcome ?? null,
+    minAmount: searchParams.get("minAmount") || null,
+    maxAmount: searchParams.get("maxAmount") || null,
+    overdueOnly,
+    todayOnly,
+    promiseOnly,
+    completedOnly,
+    pendingOnly,
+    includeArchived,
+  };
+
+  logger.info("follow_up_report_query_started", {
+    event: "follow_up_report_query_started",
+    sessionUserId: session.id,
+    sessionRole: normalizedSessionRole,
+    sessionShopId: session.shopId,
+    requestedShopId,
+    resolvedShopId: shopId,
+    incomingFilters,
+    generatedWhereClause: followUpWhere,
+    rawFollowUpCount,
+    filteredFollowUpCount,
+  });
+
+  if (isolateMode) {
+    const sampleRecords = await prisma.followUp.findMany({
+      where: { shopId },
+      orderBy: { followupDate: "desc" },
+      take: 10,
+      select: { id: true },
+    });
+    return NextResponse.json({
+      success: true,
+      summary: {
+        dailyFollowUps: 0,
+        recoveryToday: 0,
+        pendingAmount: 0,
+        pendingCases: 0,
+        pendingCustomers: 0,
+        promises: 0,
+        notResponding: 0,
+        overdue: 0,
+        completed: 0,
+      },
+      rows: [],
+      users: [],
+      staffPerformance: [],
+      collectionTrend: [],
+      trend: [],
+      filters: { staff: [], batchTags: [] },
+      pagination: { page: 1, limit, total: 0, pages: 1 },
+      debug: {
+        sessionShopId: session.shopId,
+        requestedShopId,
+        resolvedShopId: shopId,
+        rawFollowUpCount,
+        filteredFollowUpCount,
+        generatedWhereClause: isolateMode ? { shopId } : followUpWhere,
+        sampleRecordIds: sampleRecords.map((record) => record.id),
+        errorCode: null,
+      },
+    });
+  }
+
+  const [followUps, completedVisits, payments, cheques, users, batchTagRows] = await prisma.$transaction([
       prisma.followUp.findMany({
         where: followUpWhere,
         include: {
           customer: { include: { payments: { orderBy: { paidAt: "desc" }, take: 3 } } },
-          createdBy: { select: { id: true, name: true, role: true } },
+          createdBy: { select: { id: true, name: true } },
         },
         orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }],
         take: ACTIVITY_LIMIT,
@@ -445,7 +661,7 @@ export async function GET(request: Request) {
         where: visitWhere,
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
-          staff: { select: { id: true, name: true, role: true } },
+          staff: { select: { id: true, name: true } },
           photos: { orderBy: { createdAt: "desc" }, take: 6 },
           cheques: { orderBy: { createdAt: "desc" }, take: 3, include: { depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } } } },
         },
@@ -456,7 +672,7 @@ export async function GET(request: Request) {
         where: paymentWhere,
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
-          createdBy: { select: { id: true, name: true, role: true } },
+          createdBy: { select: { id: true, name: true } },
         },
         orderBy: { paidAt: "desc" },
         take: ACTIVITY_LIMIT,
@@ -465,43 +681,57 @@ export async function GET(request: Request) {
         where: chequeWhere,
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true, nextFollowupDate: true } },
-          collectedBy: { select: { id: true, name: true, role: true } },
+          collectedBy: { select: { id: true, name: true } },
           depositedAccount: { select: { bankName: true, accountName: true, lastFourDigits: true } },
         },
         orderBy: [{ collectionDateTime: "desc" }, { createdAt: "desc" }],
         take: ACTIVITY_LIMIT,
       }),
-      prisma.user.findMany({ where: { shopId }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
-      prisma.paymentEntry.aggregate({
-        where: { shopId, paidAt: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
-        _sum: { amount: true },
-      }),
-      prisma.customer.aggregate({
-        where: {
-          shopId,
-          ...(includeArchived ? {} : { isArchived: false }),
-          ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
-          outstandingBalance: { gt: 0 },
-          NOT: { status: "CLEARED" },
-        },
-        _sum: { outstandingBalance: true },
-        _count: { id: true },
-      }),
-      prisma.followUp.count({ where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) } }),
-      prisma.followUp.groupBy({
-        by: ["createdById"],
-        where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
-        orderBy: { createdById: "asc" },
-        _count: { _all: true },
-      }),
-      prisma.paymentEntry.findMany({
-        where: { shopId, ...(batchTag ? { customer: customerWhere } : {}) },
-        orderBy: { paidAt: "asc" },
-        take: 180,
-        select: { amount: true, paidAt: true },
+      prisma.$queryRaw<Array<{ id: string; name: string; role: string }>>(Prisma.sql`
+        SELECT "id", "name", "role"::text AS "role"
+        FROM "User"
+        WHERE "shopId" = ${shopId}
+        ORDER BY "name" ASC
+      `),
+      prisma.customer.findMany({
+        where: { shopId, batchTag: { not: null } },
+        distinct: ["batchTag"],
+        select: { batchTag: true },
+        orderBy: { batchTag: "asc" },
       }),
     ]);
 
+  const queryContext = { shopId, sessionUserId: session.id };
+  const paymentsToday = await optionalReportQuery("payments_today", prisma.paymentEntry.aggregate({
+    where: { shopId, paidAt: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: activeCustomerWhere } : {}) },
+    _sum: { amount: true },
+  }), { _sum: { amount: null } }, queryContext);
+  const outstanding = await optionalReportQuery("outstanding_summary", prisma.customer.aggregate({
+    where: {
+      ...activeCustomerWhere,
+      outstandingBalance: { gt: 0 },
+      NOT: { status: "CLEARED" },
+    },
+    _sum: { outstandingBalance: true },
+    _count: { id: true },
+  }), { _sum: { outstandingBalance: null }, _count: { id: 0 } }, queryContext);
+  const allToday = await optionalReportQuery("today_follow_up_count", prisma.followUp.count({
+    where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
+  }), 0, queryContext);
+  const staffGroups = await optionalReportQuery("staff_performance", prisma.followUp.groupBy({
+    by: ["createdById"],
+    where: { shopId, followupDate: { gte: todayStart, lte: todayEnd }, ...(batchTag ? { customer: customerWhere } : {}) },
+    orderBy: { createdById: "asc" },
+    _count: { _all: true },
+  }), [], queryContext);
+  const trendRows = await optionalReportQuery("collection_trend", prisma.paymentEntry.findMany({
+    where: { shopId, ...(batchTag ? { customer: customerWhere } : {}) },
+    orderBy: { paidAt: "asc" },
+    take: 180,
+    select: { amount: true, paidAt: true },
+  }), [], queryContext);
+
+  const userRoleMap = new Map(users.map((user) => [user.id, user.role]));
   const notReachableCounts = new Map<string, number>();
   followUps.forEach((followUp) => {
     if (followUp.status === "NOT_REACHABLE") {
@@ -557,7 +787,7 @@ export async function GET(request: Request) {
       status: statusLabel,
       statusTone: toneForStatus(statusLabel),
       createdBy: actor,
-      userRole: humanStatus(followUp.createdBy.role),
+      userRole: normalizedRoleLabel(userRoleMap.get(followUp.createdById)),
       staffId: followUp.createdById,
       visitStatus: followUp.visitId ? "Completed" : "-",
       chequeStatus: cleanText(followUp.chequeStatus) || "-",
@@ -567,7 +797,9 @@ export async function GET(request: Request) {
       lastUpdatedAt: latestActivityAt,
       latestActivityAt,
       relativeActivityTime: relativeTime(latestActivityAt),
-      isOverdue: Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate) && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate)! < now),
+      isOverdue: !["PAID", "COMPLETED", "WRONG_NUMBER"].includes(followUp.status)
+        && Boolean((followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt)
+          && (followUp.nextFollowUpDateTime ?? followUp.nextFollowupDate ?? followUp.scheduledAt)! < now),
       isPromise: followUp.status === "PAYMENT_PROMISED" || Boolean(followUp.promiseDate),
       notes,
       timeline: [{ at: latestActivityAt, type: humanStatus(followUp.sourceModule), summary, by: actor, status: statusLabel, notes }],
@@ -636,7 +868,7 @@ export async function GET(request: Request) {
       status: cheque || visit.paymentMode === "Cheque Collected" ? "Cheque Collected" : orderReceived ? "Order Received" : statusLabel,
       statusTone: cheque ? "blue" : toneForStatus(statusLabel),
       createdBy: actor,
-      userRole: humanStatus(visit.staff.role),
+      userRole: normalizedRoleLabel(userRoleMap.get(visit.staffId)),
       staffId: visit.staffId,
       visitStatus: humanStatus(visit.status),
       chequeStatus: cheque ? humanStatus(cheque.status) : "-",
@@ -676,7 +908,7 @@ export async function GET(request: Request) {
       status: "Recovered",
       statusTone: "green",
       createdBy: actor,
-      userRole: humanStatus(payment.createdBy.role),
+      userRole: normalizedRoleLabel(userRoleMap.get(payment.createdById)),
       staffId: payment.createdById,
       visitStatus: "-",
       chequeStatus: "-",
@@ -735,7 +967,7 @@ export async function GET(request: Request) {
       status: statusLabel,
       statusTone: toneForStatus(statusLabel),
       createdBy: actor,
-      userRole: humanStatus(cheque.collectedBy.role),
+      userRole: normalizedRoleLabel(userRoleMap.get(cheque.collectedById)),
       staffId: cheque.collectedById,
       visitStatus: cheque.staffVisitId ? "Completed" : "-",
       chequeStatus: statusLabel,
@@ -819,22 +1051,95 @@ export async function GET(request: Request) {
     const key = payment.paidAt.toISOString().slice(0, 10);
     trendMap.set(key, (trendMap.get(key) ?? 0) + payment.amount);
   }
+  const collectionTrend = Array.from(trendMap.entries()).map(([date, amount]) => ({ date, amount }));
+  const normalizedUsers = users.map((user) => ({
+    ...user,
+    role: String(normalizeFixedRole(user.role)),
+  }));
+  const summary = {
+    dailyFollowUps: allToday,
+    recoveryToday: paymentsToday._sum.amount ?? 0,
+    pendingAmount: outstanding._sum.outstandingBalance ?? 0,
+    pendingCases: outstanding._count.id,
+    pendingCustomers: outstanding._count.id,
+    promises: mergedRows.filter((row) => row.isPromise).length,
+    notResponding: mergedRows.filter((row) => row.status === "Not Reachable").length,
+    overdue: mergedRows.filter((row) => row.isOverdue).length,
+    completed: mergedRows.filter((row) => row.statusTone === "green").length,
+  };
+
+  logger.info("follow_up_report_query_completed", {
+    event: "follow_up_report_query_completed",
+    sessionUserId: session.id,
+    sessionRole: normalizedSessionRole,
+    sessionShopId: session.shopId,
+    requestedShopId,
+    resolvedShopId: shopId,
+    rawFollowUpCount,
+    filteredFollowUpCount,
+    activityResultCount: mergedRows.length,
+    returnedRowCount: rows.length,
+  });
 
   return NextResponse.json({
+    success: true,
     rows,
-    users,
-    summary: {
-      dailyFollowUps: allToday,
-      recoveryToday: paymentsToday._sum.amount ?? 0,
-      pendingAmount: outstanding._sum.outstandingBalance ?? 0,
-      pendingCustomers: outstanding._count.id,
-      promises: mergedRows.filter((row) => row.isPromise).length,
-      notResponding: mergedRows.filter((row) => row.status === "Not Reachable").length,
-      overdue: mergedRows.filter((row) => row.isOverdue).length,
-      completed: mergedRows.filter((row) => row.statusTone === "green").length,
-    },
+    users: normalizedUsers,
+    summary,
     staffPerformance,
-    trend: Array.from(trendMap.entries()).map(([date, amount]) => ({ date, amount })),
+    collectionTrend,
+    trend: collectionTrend,
+    filters: {
+      staff: normalizedUsers,
+      batchTags: batchTagRows.map((item) => item.batchTag).filter((value): value is string => Boolean(value)),
+    },
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+    ...(debugMode
+      ? {
+          debug: {
+            sessionShopId: session.shopId,
+            requestedShopId,
+            resolvedShopId: shopId,
+            rawFollowUpCount,
+            filteredFollowUpCount,
+            generatedWhereClause: followUpWhere,
+            sampleRecordIds: followUps.slice(0, 10).map((record) => record.id),
+            errorCode: null,
+          },
+        }
+      : {}),
   });
+  } catch (error) {
+    const prismaCode = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null;
+    logger.error("follow_up_report_query_failed", {
+      event: "follow_up_report_query_failed",
+      sessionUserId: session.id,
+      sessionRole: normalizedSessionRole,
+      sessionShopId: session.shopId,
+      requestedShopId,
+      resolvedShopId,
+      incomingFilters: Object.fromEntries(searchParams.entries()),
+      prismaCode,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json({
+      success: false,
+      code: "REPORT_QUERY_FAILED",
+      error: "Follow-up report data could not be loaded. Please retry.",
+      ...(normalizedSessionRole === "SHOP_ADMIN" || normalizedSessionRole === "SUPER_ADMIN"
+        ? {
+            debug: {
+              sessionShopId: session.shopId,
+              requestedShopId,
+              resolvedShopId,
+              rawFollowUpCount: null,
+              filteredFollowUpCount: null,
+              generatedWhereClause: null,
+              sampleRecordIds: [],
+              errorCode: prismaCode ?? "REPORT_QUERY_FAILED",
+            },
+          }
+        : {}),
+    }, { status: 500 });
+  }
 }
