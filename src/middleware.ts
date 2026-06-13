@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { canAccessTasks, normalizeFixedRole } from "@/lib/operational-roles";
 
 const COOKIE_NAME = "udharbook_session";
 const PUBLIC = [
@@ -49,12 +50,7 @@ const SUPER_ADMIN_BLOCKED_APIS = [
 const SALES_HOME = "/field-staff";
 
 function normalizeRole(role?: string) {
-  if (!role) return role;
-  if (role === "SALES_PERSON_CUM_ACCOUNTS" || (role.includes("SALES") && (role.includes("ACCOUNT") || role.includes("ACCOUNTING")))) return "SALES_PERSON_CUM_ACCOUNTS";
-  if (role === "SALES_PERSON" || role === "SALES" || role.includes("FIELD")) return "SALES_PERSON";
-  if (role === "ACCOUNT_STAFF" || role === "STAFF" || role === "ACCOUNTING" || role === "ACCOUNTS" || role.includes("ACCOUNTING")) return "ACCOUNT_STAFF";
-  if (role === "SHOP_OWNER_ADMIN" || role === "ADMIN") return "SHOP_ADMIN";
-  return role;
+  return role ? String(normalizeFixedRole(role)) : role;
 }
 
 function pathStarts(pathname: string, prefixes: string[]) {
@@ -63,6 +59,7 @@ function pathStarts(pathname: string, prefixes: string[]) {
 
 function canAccessPage(role: string, pathname: string) {
   const normalized = normalizeRole(role);
+  if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return canAccessTasks(normalized ?? "");
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/shops");
   if (normalized === "SALES_PERSON") {
@@ -81,6 +78,8 @@ function canAccessPage(role: string, pathname: string) {
 
 function canAccessApi(role: string, pathname: string) {
   const normalized = normalizeRole(role);
+  if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) return canAccessTasks(normalized ?? "");
+  if (pathname === "/api/notifications" || pathname.startsWith("/api/notifications/")) return canAccessTasks(normalized ?? "");
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/api/shops") && !pathname.startsWith("/api/onboarding");
   if (normalized === "SALES_PERSON") {

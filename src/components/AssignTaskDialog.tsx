@@ -166,7 +166,7 @@ export function AssignTaskDialog({
     const data = await response.json().catch(() => ({}));
     setSaving(false);
     if (!response.ok) {
-      setError(data.error ?? "Could not assign task.");
+      setError([data.error, ...(data.details ?? [])].filter(Boolean).join(" ") || "Could not assign task.");
       return;
     }
     onAssigned?.();

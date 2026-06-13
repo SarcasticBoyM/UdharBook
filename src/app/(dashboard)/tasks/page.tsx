@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Circle, ExternalLink, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
 import { taskStatuses, taskTypeLabels } from "@/lib/tasks";
-import { isShopAdminRole } from "@/lib/operational-roles";
+import { canAssignTasks, isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { cn, formatCurrency } from "@/lib/utils";
 
@@ -50,45 +50,82 @@ function statusTone(status: string) {
 
 export default function TasksPage() {
   const searchParams = useSearchParams();
-  const highlightedId = searchParams.get("task");
+  const highlightedId = searchParams.get("taskId");
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [role, setRole] = useState("");
   const [status, setStatus] = useState("ALL");
+  const [adminView, setAdminView] = useState<"all" | "assigned-by-me">("all");
+  const [counts, setCounts] = useState({ pending: 0, inProgress: 0, completed: 0, cancelled: 0 });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [taskLinkMessage, setTaskLinkMessage] = useState("");
   const [notesByTask, setNotesByTask] = useState<Record<string, string>>({});
   const admin = isShopAdminRole(role);
+  const canAssign = canAssignTasks(role);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [meResponse, tasksResponse] = await Promise.all([
-      fetch("/api/auth/me"),
-      fetch(`/api/tasks${status === "ALL" ? "" : `?status=${status}`}`),
-    ]);
-    const [me, taskData] = await Promise.all([
-      meResponse.json().catch(() => ({})),
-      tasksResponse.json().catch(() => ({})),
-    ]);
-    setRole(me?.user?.role ?? "");
-    setTasks(taskData.tasks ?? []);
-    setNotesByTask((current) => {
-      const next = { ...current };
-      for (const task of taskData.tasks ?? []) {
-        if (!(task.id in next)) next[task.id] = task.progressNotes ?? "";
+    setError("");
+    setTaskLinkMessage("");
+    try {
+      const query = new URLSearchParams();
+      if (status !== "ALL") query.set("status", status);
+      if (adminView === "assigned-by-me") query.set("view", "assigned-by-me");
+      const [meResponse, tasksResponse] = await Promise.all([
+        fetch("/api/auth/me", { cache: "no-store" }),
+        fetch(`/api/tasks${query.size ? `?${query.toString()}` : ""}`, { cache: "no-store" }),
+      ]);
+      const [me, taskData] = await Promise.all([
+        meResponse.json().catch(() => ({})),
+        tasksResponse.json().catch(() => ({})),
+      ]);
+      if (!meResponse.ok) throw new Error(me.error ?? "Your session could not be loaded.");
+      if (!tasksResponse.ok) throw new Error(taskData.error ?? "Tasks could not be loaded.");
+
+      setRole(me?.user?.role ?? "");
+      let loadedTasks: TaskRow[] = taskData.tasks ?? [];
+      setCounts(taskData.counts ?? { pending: 0, inProgress: 0, completed: 0, cancelled: 0 });
+
+      if (highlightedId && !loadedTasks.some((task) => task.id === highlightedId)) {
+        const detailResponse = await fetch(`/api/tasks/${encodeURIComponent(highlightedId)}`, { cache: "no-store" });
+        const detailData = await detailResponse.json().catch(() => ({}));
+        if (detailResponse.ok && detailData.task) {
+          loadedTasks = [detailData.task, ...loadedTasks];
+        } else {
+          setTaskLinkMessage(detailData.error ?? "This task no longer exists or is not assigned to you.");
+        }
       }
-      return next;
-    });
-    setLoading(false);
-  }, [status]);
+
+      setTasks(loadedTasks);
+      setNotesByTask((current) => {
+        const next = { ...current };
+        for (const task of loadedTasks) {
+          if (!(task.id in next)) next[task.id] = task.progressNotes ?? "";
+        }
+        return next;
+      });
+      if (highlightedId) {
+        window.setTimeout(() => document.getElementById(`task-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+      }
+    } catch (loadError) {
+      setTasks([]);
+      setError(loadError instanceof Error ? loadError.message : "Tasks could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [adminView, highlightedId, status]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const counts = useMemo(() => taskStatuses.reduce<Record<string, number>>((result, item) => {
-    result[item] = tasks.filter((task) => task.status === item).length;
-    return result;
-  }, {}), [tasks]);
+  const statusCounts = useMemo(() => ({
+    PENDING: counts.pending,
+    IN_PROGRESS: counts.inProgress,
+    COMPLETED: counts.completed,
+    CANCELLED: counts.cancelled,
+  }), [counts]);
 
   async function updateTask(task: TaskRow, nextStatus?: string) {
     setMessage("");
@@ -103,7 +140,7 @@ export default function TasksPage() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(data.error ?? "Could not update task.");
+      setMessage([data.error, ...(data.details ?? [])].filter(Boolean).join(" ") || "Could not update task.");
       return;
     }
     setMessage(nextStatus === "COMPLETED" ? "Task completed and the assigning admin was notified." : "Task updated.");
@@ -119,7 +156,7 @@ export default function TasksPage() {
           <p className="text-sm text-slate-500">{admin ? "Track operational work assigned across your shop." : "Start, update, and complete tasks assigned to you."}</p>
         </div>
         <div className="flex gap-2">
-          {admin && <AssignTaskButton onAssigned={load} />}
+          {canAssign && <AssignTaskButton onAssigned={load} />}
           <button type="button" onClick={load} aria-label="Refresh tasks" className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700">
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -127,26 +164,48 @@ export default function TasksPage() {
       </div>
 
       {message && <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{message}</div>}
+      {taskLinkMessage && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{taskLinkMessage}</div>}
+      {error && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <span>{error}</span>
+          <button type="button" onClick={load} className="min-h-10 rounded-lg border border-red-300 px-3 font-semibold">Retry</button>
+        </div>
+      )}
 
-      <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+      {admin && (
+        <div className="mt-5 inline-flex rounded-lg border border-slate-200 p-1 dark:border-slate-700">
+          <button type="button" onClick={() => setAdminView("all")} className={cn("min-h-10 rounded-md px-3 text-sm font-semibold", adminView === "all" ? "bg-brand-600 text-white" : "text-slate-600 dark:text-slate-300")}>
+            All Tasks
+          </button>
+          <button type="button" onClick={() => setAdminView("assigned-by-me")} className={cn("min-h-10 rounded-md px-3 text-sm font-semibold", adminView === "assigned-by-me" ? "bg-brand-600 text-white" : "text-slate-600 dark:text-slate-300")}>
+            Assigned By Me
+          </button>
+        </div>
+      )}
+
+      <div className={cn("flex gap-2 overflow-x-auto pb-1", admin ? "mt-3" : "mt-5")}>
         <button type="button" onClick={() => setStatus("ALL")} className={cn("shrink-0 rounded-full px-3 py-2 text-sm font-semibold", status === "ALL" ? "bg-brand-600 text-white" : "bg-slate-100 dark:bg-slate-800")}>
           All
         </button>
         {taskStatuses.map((item) => (
           <button key={item} type="button" onClick={() => setStatus(item)} className={cn("shrink-0 rounded-full px-3 py-2 text-sm font-semibold", status === item ? "bg-brand-600 text-white" : "bg-slate-100 dark:bg-slate-800")}>
-            {display(item)} {status === "ALL" ? counts[item] ?? 0 : ""}
+            {display(item)} {statusCounts[item] ?? 0}
           </button>
         ))}
       </div>
 
       <div className="mt-5 space-y-3">
         {loading && <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed"><Loader2 className="h-6 w-6 animate-spin text-brand-600" /></div>}
-        {!loading && tasks.length === 0 && <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">No tasks in this view.</div>}
+        {!loading && !error && tasks.length === 0 && (
+          <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
+            {admin ? "No tasks found in this view." : "No tasks assigned to you."}
+          </div>
+        )}
         {tasks.map((task) => {
           const overdue = !["COMPLETED", "CANCELLED"].includes(task.status) && new Date(task.dueDate) < new Date();
           const taskLabel = taskTypeLabels[task.taskType as keyof typeof taskTypeLabels] ?? task.title;
           return (
-            <article key={task.id} className={cn("rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900", highlightedId === task.id && "ring-2 ring-brand-500")}>
+            <article id={`task-${task.id}`} key={task.id} className={cn("rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900", highlightedId === task.id && "ring-2 ring-brand-500")}>
               <div className="flex items-start gap-3">
                 {task.status === "COMPLETED" ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" /> : task.status === "IN_PROGRESS" ? <Play className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" /> : <Circle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />}
                 <div className="min-w-0 flex-1">

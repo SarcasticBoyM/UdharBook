@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { requireShopId } from "@/lib/tenant";
-import { isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
+import { canAccessTasks, canAssignTasks, normalizeFixedRole } from "@/lib/operational-roles";
 import { notifyTaskAssigned, notifyTaskCompleted } from "@/lib/notifications";
 import { taskPriorities, taskReferenceUrl, taskStatuses, taskTypeLabels, taskTypes } from "@/lib/tasks";
 
@@ -34,10 +34,6 @@ const taskInclude = {
   assignedBy: { select: { id: true, name: true, role: true } },
 } satisfies Prisma.TaskInclude;
 
-function canAssign(role: string) {
-  return isShopAdminRole(role) || role === "SUPER_ADMIN";
-}
-
 function isAssignableRole(role: string) {
   const normalized = normalizeFixedRole(role);
   return ["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalized));
@@ -52,44 +48,68 @@ function shopIdForCreate(request: Request, session: Awaited<ReturnType<typeof ge
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canAccessTasks(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
   const view = searchParams.get("view");
 
   if (view === "staff") {
-    if (!canAssign(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    const staff = await prisma.user.findMany({
+    if (!canAssignTasks(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const users = await prisma.user.findMany({
       where: {
         shopId,
         disabledAt: null,
-        role: { in: ["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"] },
       },
       select: { id: true, name: true, role: true, jobTitle: true },
       orderBy: { name: "asc" },
     });
-    return NextResponse.json({ staff });
+    const staff = users.filter((user) => isAssignableRole(user.role));
+    return NextResponse.json({ success: true, staff });
   }
 
   const status = searchParams.get("status");
-  const where: Prisma.TaskWhereInput = {
+  const ownershipWhere: Prisma.TaskWhereInput = {
     shopId,
-    ...(!canAssign(session.role) ? { assignedToId: session.id } : {}),
+    ...(!canAssignTasks(session.role)
+      ? { assignedToId: session.id }
+      : view === "assigned-by-me"
+        ? { assignedById: session.id }
+        : {}),
+  };
+  const where: Prisma.TaskWhereInput = {
+    ...ownershipWhere,
     ...(status && taskStatuses.includes(status as (typeof taskStatuses)[number]) ? { status } : {}),
   };
-  const tasks = await prisma.task.findMany({
-    where,
-    include: taskInclude,
-    orderBy: [{ status: "asc" }, { dueDate: "asc" }, { createdAt: "desc" }],
-    take: 300,
+  const [tasks, pending, inProgress, completed, cancelled] = await prisma.$transaction([
+    prisma.task.findMany({
+      where,
+      include: taskInclude,
+      orderBy: [{ status: "asc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+      take: 300,
+    }),
+    prisma.task.count({ where: { ...ownershipWhere, status: "PENDING" } }),
+    prisma.task.count({ where: { ...ownershipWhere, status: "IN_PROGRESS" } }),
+    prisma.task.count({ where: { ...ownershipWhere, status: "COMPLETED" } }),
+    prisma.task.count({ where: { ...ownershipWhere, status: "CANCELLED" } }),
+  ]);
+  return NextResponse.json({
+    success: true,
+    tasks,
+    counts: {
+      pending,
+      inProgress,
+      completed,
+      cancelled,
+    },
+    view: canAssignTasks(session.role) ? (view === "assigned-by-me" ? "ASSIGNED_BY_ME" : "ALL") : "MINE",
   });
-  return NextResponse.json({ tasks, view: canAssign(session.role) ? "ALL" : "MINE" });
 }
 
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canAssign(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canAssignTasks(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const body = createSchema.parse(await request.json());
@@ -142,9 +162,17 @@ export async function POST(request: Request) {
       dueDate,
       assignedByName: session.name,
     });
-    return NextResponse.json({ task }, { status: 201 });
+    return NextResponse.json({ success: true, task }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof z.ZodError ? "Invalid task details." : "Could not assign task." }, { status: 400 });
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({
+        error: "Invalid task details.",
+        details: error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`),
+      }, { status: 400 });
+    }
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Could not assign task.",
+    }, { status: 500 });
   }
 }
 
@@ -161,7 +189,7 @@ export async function PATCH(request: Request) {
     });
     if (!existing) return NextResponse.json({ error: "Task not found." }, { status: 404 });
 
-    const admin = canAssign(session.role);
+    const admin = canAssignTasks(session.role);
     if (!admin && existing.assignedToId !== session.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     if (body.status === "CANCELLED" && !admin) return NextResponse.json({ error: "Only Shop Admin can cancel tasks." }, { status: 403 });
     if (!admin && body.status && !["IN_PROGRESS", "COMPLETED"].includes(body.status)) {
@@ -190,8 +218,14 @@ export async function PATCH(request: Request) {
         completedByName: session.name,
       });
     }
-    return NextResponse.json({ task });
+    return NextResponse.json({ success: true, task });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof z.ZodError ? "Invalid task update." : "Could not update task." }, { status: 400 });
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({
+        error: "Invalid task update.",
+        details: error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`),
+      }, { status: 400 });
+    }
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update task." }, { status: 500 });
   }
 }

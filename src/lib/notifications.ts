@@ -48,7 +48,7 @@ export function attendanceUrl() {
 }
 
 export function taskUrl(id: string) {
-  return `/tasks?task=${encodeURIComponent(id)}`;
+  return `/tasks?taskId=${encodeURIComponent(id)}`;
 }
 
 function targetData(target: NotificationTarget) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "udharbook-v2";
+const CACHE_NAME = "udharbook-v3";
 const APP_SHELL = ["/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -19,18 +19,25 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname === "/tasks" || url.pathname.startsWith("/tasks/")) return;
   if (url.pathname.startsWith("/_next/")) return;
-  if (request.mode === "navigate") return;
+  if (request.mode === "navigate" || request.destination === "document") return;
 
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => undefined);
+        }
         return response;
       })
-      .catch(() => caches.match(request).then((cached) => cached || caches.match("/login")))
+      .catch(async () => {
+        const cached = await caches.match(request);
+        return cached || new Response("Offline", { status: 503, statusText: "Offline" });
+      })
   );
 });
 
@@ -49,5 +56,14 @@ self.addEventListener("message", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(clients.openWindow(event.notification.data?.url || "/follow-ups"));
+  const targetUrl = event.notification.data?.url || "/follow-ups";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (windowClients) => {
+      for (const client of windowClients) {
+        if ("navigate" in client) await client.navigate(targetUrl);
+        if ("focus" in client) return client.focus();
+      }
+      return clients.openWindow(targetUrl);
+    })
+  );
 });

@@ -46,18 +46,29 @@ export function isAccountsRole(role: AppRole) {
   return normalized === "ACCOUNT_STAFF" || normalized === "SALES_PERSON_CUM_ACCOUNTS";
 }
 
+export function canAccessTasks(role: AppRole) {
+  const normalized = normalizeFixedRole(role);
+  return ["SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalized));
+}
+
+export function canAssignTasks(role: AppRole) {
+  const normalized = normalizeFixedRole(role);
+  return normalized === "SHOP_ADMIN" || normalized === "SUPER_ADMIN";
+}
+
 export function canAccessModule(role: AppRole, href: string) {
   const normalized = normalizeFixedRole(role);
+  if (href === "/tasks") return canAccessTasks(normalized);
   if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff" || href === "/trade-calculator";
   if (normalized === "SHOP_ADMIN") return true;
   if (normalized === "SALES_PERSON") {
-    return ["/orders", "/tasks", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
+    return ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
   }
   if (normalized === "ACCOUNT_STAFF") {
-    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/tasks", "/cheques", "/reports", "/qrvcard"].includes(href);
+    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/reports", "/qrvcard"].includes(href);
   }
   if (normalized === "SALES_PERSON_CUM_ACCOUNTS") {
-    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/tasks", "/cheques", "/field-staff", "/daily-visits", "/reports", "/qrvcard"].includes(href);
+    return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/field-staff", "/daily-visits", "/reports", "/qrvcard"].includes(href);
   }
   return false;
 }
