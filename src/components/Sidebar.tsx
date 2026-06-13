@@ -42,16 +42,23 @@ type SidebarLink = {
   superOnly?: boolean;
 };
 
+const taskLink: SidebarLink = {
+  href: "/tasks",
+  label: "My Tasks",
+  icon: ListTodo,
+  section: "Team",
+};
+
 const links: SidebarLink[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, section: "Main" },
   { href: "/customers", label: "Customers", icon: Users, section: "Operations" },
   { href: "/upload", label: "Upload Excel", icon: Upload, section: "Operations" },
   { href: "/today-follow-ups", label: "Today Follow-ups", icon: CalendarCheck2, section: "Operations" },
   { href: "/orders", label: "Order Desk", icon: ClipboardList, section: "Operations" },
-  { href: "/tasks", label: "My Tasks", icon: ListTodo, section: "Operations" },
   { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
   { href: "/field-staff", label: "Sales Person", icon: UserRoundCheck, section: "Team" },
   { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
+  taskLink,
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
   { href: "/reports", label: "All Reports", icon: FileBarChart, adminOnly: true, section: "Reports" },
@@ -65,6 +72,7 @@ const platformLinks: SidebarLink[] = [
   { href: "/", label: "Platform Dashboard", icon: LayoutDashboard },
   { href: "/shops", label: "Onboard Shop", icon: Store },
   { href: "/staff", label: "Staff Management", icon: ShieldCheck },
+  taskLink,
   { href: "/trade-calculator", label: "Quick Discount Calculator", icon: Calculator },
 ];
 
@@ -135,7 +143,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
       </div>
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 pb-4">
         {navLinks.map(({ href, label, icon: Icon, section }, index) => {
-          const displayLabel = href === "/tasks" && isAdmin ? "All Tasks" : label;
+          const displayLabel = href === "/tasks" && (isAdmin || isSuperAdmin) ? "All Tasks" : label;
           return (
           <div key={href}>
             {section && section !== "Main" && section !== navLinks[index - 1]?.section && (
