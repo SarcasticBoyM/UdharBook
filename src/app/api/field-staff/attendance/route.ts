@@ -68,21 +68,21 @@ export async function POST(request: Request) {
         create: { shopId, staffId: session.id, workDate: today, startedAt: new Date(), status: "ACTIVE" },
         update: { status: "ACTIVE", endedAt: null },
       });
-      await notifyAttendanceEvent({
+      const notification = await notifyAttendanceEvent({
         shopId,
         attendanceId: attendance.id,
         type: "STAFF_CHECK_IN",
         title: "Staff Check-In",
         staffName: session.name,
       });
-      return NextResponse.json({ success: true, attendance });
+      return NextResponse.json({ success: true, attendance, data: attendance, notification });
     }
 
     const attendance = await prisma.attendance.update({
       where: { staffId_workDate: { staffId: session.id, workDate: today } },
       data: { status: "COMPLETED", endedAt: new Date() },
     });
-    await notifyAttendanceEvent({
+    const notification = await notifyAttendanceEvent({
       shopId,
       attendanceId: attendance.id,
       type: "STAFF_CHECK_OUT",
@@ -90,7 +90,7 @@ export async function POST(request: Request) {
       staffName: session.name,
     });
 
-    return NextResponse.json({ success: true, attendance });
+    return NextResponse.json({ success: true, attendance, data: attendance, notification });
   } catch (error) {
     console.error("Attendance update failed", error);
     return NextResponse.json({ success: false, error: "Could not update attendance" }, { status: 400 });

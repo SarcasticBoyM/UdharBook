@@ -133,6 +133,13 @@ enum NotificationTargetType {
   USER
 }
 
+enum NotificationRetryStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
 model Shop {
   id                 String             @id @default(cuid())
   shopName           String             @map("name")
@@ -175,6 +182,7 @@ model Shop {
   productPresets     ProductPreset[]
   qrVCard            QRVCard?
   notifications      Notification[]
+  notificationRetries NotificationRetry[]
   tasks              Task[]
 
   @@index([subscriptionStatus])
@@ -322,6 +330,7 @@ model User {
   roleAssignments UserRoleAssignment[] @relation("UserRoleAssignments")
   roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
   notifications Notification[] @relation("NotificationTargetUser")
+  notificationRetries NotificationRetry[] @relation("NotificationRetryTargetUser")
   assignedTasks Task[] @relation("TaskAssignedTo")
   createdTasks Task[] @relation("TaskAssignedBy")
 
@@ -344,16 +353,42 @@ model Notification {
   entityId         String?
   actionUrl        String?
   metadata         Json?
+  idempotencyKey   String?                @unique
   isRead           Boolean                @default(false)
   readByUserIds    String[]               @default([])
   deletedByUserIds String[]               @default([])
   createdAt        DateTime               @default(now())
 
-  @@unique([shopId, type, entityType, entityId])
+  @@index([shopId, type, entityType, entityId])
   @@index([shopId, createdAt])
   @@index([shopId, targetType, roleTarget, createdAt])
   @@index([shopId, userId, createdAt])
   @@index([shopId, isRead, createdAt])
+}
+
+model NotificationRetry {
+  id             String                  @id @default(cuid())
+  shopId         String
+  shop           Shop                    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  eventType      String
+  entityType     String
+  entityId       String
+  targetUserId   String?
+  targetUser     User?                   @relation("NotificationRetryTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetRole     String?
+  idempotencyKey String                  @unique
+  payload        Json
+  retryCount     Int                     @default(0)
+  maxRetries     Int                     @default(4)
+  nextRetryAt    DateTime
+  lastError      String?
+  status         NotificationRetryStatus @default(PENDING)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([shopId, status, nextRetryAt])
+  @@index([status, nextRetryAt])
+  @@index([shopId, eventType, entityType, entityId])
 }
 
 model Task {

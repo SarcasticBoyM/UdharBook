@@ -977,7 +977,7 @@ export async function POST(request: Request) {
       details: `${body.chequeNumber} ${body.bankName} ${body.amount}`,
     });
 
-    await notifyChequeEvent({
+    const notification = await notifyChequeEvent({
       shopId,
       chequeId: cheque.id,
       type: "CHEQUE_COLLECTED",
@@ -988,7 +988,7 @@ export async function POST(request: Request) {
       actorName: session.name,
     });
 
-    return NextResponse.json(cheque, { status: 201 });
+    return NextResponse.json({ ...cheque, success: true, data: cheque, notification }, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid cheque details" }, { status: 400 });

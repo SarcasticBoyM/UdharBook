@@ -6,6 +6,7 @@ import { canDelete, canManageCustomers } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/phone";
 import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
+import { notifyCustomerArchived } from "@/lib/notifications";
 
 const updateSchema = z.object({
   action: z.enum(["archive", "restore"]).optional(),
@@ -105,7 +106,20 @@ export async function PATCH(
         customerId: id,
       });
       const updated = await prisma.customer.findFirst({ where: { id, shopId } });
-      return NextResponse.json(updated);
+      const notification = body.action === "archive" && updated
+        ? await notifyCustomerArchived({
+            shopId,
+            customerId: updated.id,
+            customerName: updated.partyName,
+            archivedByName: session.name,
+          })
+        : undefined;
+      return NextResponse.json({
+        ...updated,
+        success: true,
+        data: updated,
+        ...(notification ? { notification } : {}),
+      });
     }
     const customerUpdate = { ...body };
     delete customerUpdate.action;
@@ -158,11 +172,22 @@ export async function DELETE(
 
   const { id } = await params;
   const shopId = requireShopId(request, session);
+  const existing = await prisma.customer.findFirst({
+    where: { id, shopId },
+    select: { id: true, partyName: true },
+  });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const customer = await prisma.customer.updateMany({
     where: { id, shopId },
     data: { isArchived: true, archivedAt: new Date(), archivedById: session.id, nextFollowupDate: null },
   });
   if (!customer.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await logActivity({ action: "customer_archived", userId: session.id, shopId, customerId: id });
-  return NextResponse.json({ ok: true, action: "archived" });
+  const notification = await notifyCustomerArchived({
+    shopId,
+    customerId: existing.id,
+    customerName: existing.partyName,
+    archivedByName: session.name,
+  });
+  return NextResponse.json({ success: true, ok: true, action: "archived", notification });
 }

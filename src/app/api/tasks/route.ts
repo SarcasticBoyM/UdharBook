@@ -5,7 +5,7 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { requireShopId } from "@/lib/tenant";
 import { canAccessTasks, canAssignTasks, normalizeFixedRole } from "@/lib/operational-roles";
-import { notifyTaskAssigned, notifyTaskCompleted } from "@/lib/notifications";
+import { notifyTaskAssigned, notifyTaskCompleted, notifyTaskReassigned } from "@/lib/notifications";
 import { taskPriorities, taskReferenceUrl, taskStatuses, taskTypeLabels, taskTypes } from "@/lib/tasks";
 
 const createSchema = z.object({
@@ -24,6 +24,7 @@ const createSchema = z.object({
 
 const patchSchema = z.object({
   id: z.string().min(1),
+  assignedToId: z.string().min(1).optional(),
   status: z.enum(taskStatuses).optional(),
   progressNotes: z.string().trim().max(2000).optional().nullable(),
 });
@@ -153,7 +154,7 @@ export async function POST(request: Request) {
       include: taskInclude,
     });
 
-    await notifyTaskAssigned({
+    const notification = await notifyTaskAssigned({
       shopId,
       taskId: task.id,
       assignedToId: assignedTo.id,
@@ -162,7 +163,7 @@ export async function POST(request: Request) {
       dueDate,
       assignedByName: session.name,
     });
-    return NextResponse.json({ success: true, task }, { status: 201 });
+    return NextResponse.json({ success: true, task, data: task, notification }, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({
@@ -191,16 +192,29 @@ export async function PATCH(request: Request) {
 
     const admin = canAssignTasks(session.role);
     if (!admin && existing.assignedToId !== session.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (body.assignedToId && !admin) return NextResponse.json({ error: "Only Shop Admin can reassign tasks." }, { status: 403 });
     if (body.status === "CANCELLED" && !admin) return NextResponse.json({ error: "Only Shop Admin can cancel tasks." }, { status: 403 });
     if (!admin && body.status && !["IN_PROGRESS", "COMPLETED"].includes(body.status)) {
       return NextResponse.json({ error: "Staff can start or complete assigned tasks." }, { status: 400 });
     }
 
+    const reassignedTo = body.assignedToId && body.assignedToId !== existing.assignedToId
+      ? await prisma.user.findFirst({
+          where: { id: body.assignedToId, shopId, disabledAt: null },
+          select: { id: true, role: true },
+        })
+      : null;
+    if (body.assignedToId && body.assignedToId !== existing.assignedToId && (!reassignedTo || !isAssignableRole(reassignedTo.role))) {
+      return NextResponse.json({ error: "Select an active operational staff member from this shop." }, { status: 400 });
+    }
+
     const completedNow = body.status === "COMPLETED" && existing.status !== "COMPLETED";
+    const reassignedNow = Boolean(reassignedTo);
     const task = await prisma.task.update({
       where: { id: existing.id },
       data: {
         ...(body.status ? { status: body.status } : {}),
+        ...(reassignedTo ? { assignedToId: reassignedTo.id } : {}),
         ...(body.progressNotes !== undefined ? { progressNotes: body.progressNotes || null } : {}),
         ...(completedNow ? { completedAt: new Date() } : {}),
         ...(body.status && body.status !== "COMPLETED" ? { completedAt: null } : {}),
@@ -208,17 +222,25 @@ export async function PATCH(request: Request) {
       include: taskInclude,
     });
 
-    if (completedNow) {
-      await notifyTaskCompleted({
+    const notification = completedNow
+      ? await notifyTaskCompleted({
         shopId,
         taskId: task.id,
         assignedById: task.assignedById,
         taskTypeLabel: taskTypeLabels[task.taskType as keyof typeof taskTypeLabels] ?? task.title,
         customerName: task.customer?.partyName,
         completedByName: session.name,
-      });
-    }
-    return NextResponse.json({ success: true, task });
+      })
+      : reassignedNow
+        ? await notifyTaskReassigned({
+            shopId,
+            taskId: task.id,
+            assignedToId: task.assignedToId,
+            taskTypeLabel: taskTypeLabels[task.taskType as keyof typeof taskTypeLabels] ?? task.title,
+            reassignedByName: session.name,
+          })
+        : undefined;
+    return NextResponse.json({ success: true, task, data: task, ...(notification ? { notification } : {}) });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({

@@ -315,8 +315,9 @@ export async function PATCH(
     details: `${existing.chequeNumber}: ${existing.status} -> ${body.status}`,
   });
 
-  if (body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY") {
-    await notifyChequeEvent({
+  const notification =
+    body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY"
+      ? await notifyChequeEvent({
       shopId,
       chequeId: updated.id,
       type:
@@ -335,8 +336,13 @@ export async function PATCH(
       chequeNumber: updated.chequeNumber,
       amount: updated.amount,
       actorName: session.name,
-    });
-  }
+      })
+      : undefined;
 
-  return NextResponse.json(updated);
+  return NextResponse.json({
+    ...updated,
+    success: true,
+    data: updated,
+    ...(notification ? { notification } : {}),
+  });
 }

@@ -7,12 +7,14 @@ import { logActivity } from "@/lib/activity";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { normalizeBatchTag } from "@/lib/batch-tags";
+import { notifyExcelUploadCompleted } from "@/lib/notifications";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
+  const importId = crypto.randomUUID();
   try {
     logger.info("customer_import_upload_request_start", {
       contentLength: request.headers.get("content-length"),
@@ -103,7 +105,16 @@ export async function POST(request: Request) {
       errors: summary.errors.length,
       durationMs: Date.now() - startedAt,
     });
-    return NextResponse.json(summary);
+    const notification = await notifyExcelUploadCompleted({
+      shopId,
+      importId,
+      uploadedById: session.id,
+      uploadedByName: session.name,
+      created: summary.created,
+      updated: summary.updated,
+      skipped: summary.skipped,
+    });
+    return NextResponse.json({ ...summary, success: true, data: summary, notification });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Import failed on the server";

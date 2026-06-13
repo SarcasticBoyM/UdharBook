@@ -7,6 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { distanceMeters, endOfDay, isFieldWorker, startOfDay, visibleStaffId } from "@/lib/field-tracking";
 import { logger } from "@/lib/logger";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
+import { notifyCustomerAdded, notifyFollowUpCompleted, notifyOrderCreated } from "@/lib/notifications";
 
 const visitSchema = z.object({
   customerId: z.string().optional(),
@@ -189,7 +190,9 @@ export async function POST(request: Request) {
       visitType: body.visitType,
       outcome: body.outcome,
     });
-    const createdOrdersForAudit: { id: string; status: OrderStatus }[] = [];
+    const createdOrdersForAudit: { id: string; status: OrderStatus; customerName: string }[] = [];
+    const createdCustomersForNotification: { id: string; name: string }[] = [];
+    const completedFollowUpsForNotification: { id: string; customerId: string; customerName: string }[] = [];
     const visit = await prisma.$transaction(async (tx) => {
       let customer = body.customerId
         ? await tx.customer.findFirst({
@@ -238,6 +241,9 @@ export async function POST(request: Request) {
           },
               select: { id: true, latitude: true, longitude: true },
             });
+        if (!existingLead) {
+          createdCustomersForNotification.push({ id: createdCustomer.id, name });
+        }
         customer = createdCustomer;
       }
 
@@ -358,7 +364,7 @@ export async function POST(request: Request) {
               : "COMPLETED";
 
       if (shouldCreateFollowUp) {
-        await recordFollowUpActivity(tx, {
+        const followUpResult = await recordFollowUpActivity(tx, {
           shopId,
           customerId: customer.id,
           createdById: session.id,
@@ -390,6 +396,13 @@ export async function POST(request: Request) {
           recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
           paymentMethod: "FIELD_VISIT",
         });
+        if (status === "COMPLETED") {
+          completedFollowUpsForNotification.push({
+            id: followUpResult.followUp.id,
+            customerId: created.customer.id,
+            customerName: created.customer.partyName,
+          });
+        }
       }
 
       if (hasOrder) {
@@ -408,7 +421,11 @@ export async function POST(request: Request) {
             visitSource: visitType,
           },
         });
-        createdOrdersForAudit.push({ id: order.id, status: order.status });
+        createdOrdersForAudit.push({
+          id: order.id,
+          status: order.status,
+          customerName: created.customer.partyName,
+        });
         await tx.activityLog.create({
           data: {
             shopId,
@@ -459,7 +476,37 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ success: true, visit });
+    const notificationResults = [];
+    for (const createdCustomer of createdCustomersForNotification) {
+      notificationResults.push(await notifyCustomerAdded({
+        shopId,
+        customerId: createdCustomer.id,
+        customerName: createdCustomer.name,
+        createdByName: session.name,
+      }));
+    }
+    for (const createdOrder of createdOrdersForAudit) {
+      notificationResults.push(await notifyOrderCreated({
+        shopId,
+        orderId: createdOrder.id,
+        customerName: createdOrder.customerName,
+        createdByName: session.name,
+      }));
+    }
+    for (const completedFollowUp of completedFollowUpsForNotification) {
+      notificationResults.push(await notifyFollowUpCompleted({
+        shopId,
+        followUpId: completedFollowUp.id,
+        customerId: completedFollowUp.customerId,
+        customerName: completedFollowUp.customerName,
+        completedByName: session.name,
+      }));
+    }
+    const notification = {
+      queued: notificationResults.every((result) => result.queued),
+      retryQueued: notificationResults.some((result) => result.retryQueued),
+    };
+    return NextResponse.json({ success: true, visit, data: visit, notification });
   } catch (error) {
     logger.error("field_visit_start_failed", {
       error: error instanceof Error ? error.message : String(error),

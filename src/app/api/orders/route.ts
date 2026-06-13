@@ -7,7 +7,7 @@ import { requireShopId } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
-import { notifyOrderCreated } from "@/lib/notifications";
+import { notifyCustomerAdded, notifyOrderCreated, notifyOrderStatusChanged } from "@/lib/notifications";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -422,13 +422,27 @@ export async function POST(request: Request) {
       newStatus: order.status,
       notes: order.sourceModule === "NEW_CUSTOMER_ORDER" ? "Order created from Order Desk for new customer" : "Order created from Order Desk",
     });
-    await notifyOrderCreated({
+    const orderNotification = await notifyOrderCreated({
       shopId,
       orderId: order.id,
       customerName: order.customer.partyName,
       createdByName: order.createdBy.name,
     });
-    return NextResponse.json({ order }, { status: 201 });
+    const customerNotification = order.sourceModule === "NEW_CUSTOMER_ORDER"
+      ? await notifyCustomerAdded({
+          shopId,
+          customerId: order.customerId,
+          customerName: order.customer.partyName,
+          createdByName: order.createdBy.name,
+        })
+      : undefined;
+    const notification = customerNotification
+      ? {
+          queued: orderNotification.queued && customerNotification.queued,
+          retryQueued: orderNotification.retryQueued || customerNotification.retryQueued,
+        }
+      : orderNotification;
+    return NextResponse.json({ success: true, order, data: order, notification }, { status: 201 });
   } catch (error) {
     logger.error("order_create_failed", {
       requestId,
@@ -549,7 +563,17 @@ export async function PATCH(request: Request) {
       previousStatus: previousStatusForActivity,
       newStatus: order.status,
     });
-    return NextResponse.json({ order });
+    const notification =
+      action === "DISPATCH" || action === "DELIVER"
+        ? await notifyOrderStatusChanged({
+            shopId,
+            orderId: order.id,
+            type: action === "DISPATCH" ? "ORDER_DISPATCHED" : "ORDER_DELIVERED",
+            customerName: order.customer.partyName,
+            actorName: session.name,
+          })
+        : undefined;
+    return NextResponse.json({ success: true, order, data: order, ...(notification ? { notification } : {}) });
   } catch (error) {
     logger.error("order_update_failed", {
       requestId,

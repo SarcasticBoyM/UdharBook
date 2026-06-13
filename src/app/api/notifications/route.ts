@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { requireShopId } from "@/lib/tenant";
 import { normalizeFixedRole } from "@/lib/operational-roles";
+import { processNotificationRetries } from "@/lib/notifications";
 
 const patchSchema = z.object({
   action: z.enum(["MARK_READ", "MARK_ALL_READ", "DELETE"]),
@@ -39,6 +40,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? 20)));
   const visible = visibleWhere(shopId, session.id, session.role);
+
+  await processNotificationRetries({ shopId, limit: 5 });
 
   const [notifications, unreadCount] = await prisma.$transaction([
     prisma.notification.findMany({

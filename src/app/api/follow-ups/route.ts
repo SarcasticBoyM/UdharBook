@@ -97,17 +97,22 @@ export async function POST(request: Request) {
       details: `${body.status} ${result.followUp.nextFollowupDate?.toISOString() ?? ""}`.trim(),
     });
 
-    if (body.status === "COMPLETED") {
-      await notifyFollowUpCompleted({
+    const notification = body.status === "COMPLETED"
+      ? await notifyFollowUpCompleted({
         shopId,
         followUpId: result.followUp.id,
         customerId: body.customerId,
         customerName: customer.partyName,
         completedByName: session.name,
-      });
-    }
+      })
+      : undefined;
 
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json({
+      ...result,
+      success: true,
+      data: result,
+      ...(notification ? { notification } : {}),
+    }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
