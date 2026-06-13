@@ -2,7 +2,11 @@ import { Prisma, type NotificationPriority, type NotificationTargetType } from "
 import { prisma } from "@/lib/db";
 import { normalizeFixedRole } from "@/lib/operational-roles";
 import { logger } from "@/lib/logger";
-import { notificationPriority } from "@/lib/notification-priority";
+import {
+  notificationPolicy,
+  notificationPriority,
+  OPERATIONAL_NOTIFICATION_ROLES,
+} from "@/lib/notification-priority";
 import { taskTypeLabels } from "@/lib/tasks";
 
 const RETRY_DELAYS_MINUTES = [1, 5, 30, 120] as const;
@@ -20,6 +24,7 @@ export type NotificationTarget =
 
 export type CreateNotificationInput = {
   shopId: string;
+  actorUserId?: string;
   target: NotificationTarget;
   type: string;
   title: string;
@@ -36,15 +41,6 @@ export type NotificationDeliveryResult = {
   retryQueued: boolean;
   notificationId?: string;
 };
-
-function mergeDeliveryResults(results: NotificationDeliveryResult[]): NotificationDeliveryResult {
-  return {
-    success: results.every((result) => result.success),
-    queued: results.every((result) => result.queued),
-    retryQueued: results.some((result) => result.retryQueued),
-    notificationId: results.find((result) => result.notificationId)?.notificationId,
-  };
-}
 
 export type NotificationActor = {
   id: string;
@@ -119,6 +115,22 @@ export function notificationIdempotencyKey(input: CreateNotificationInput) {
 
 function errorMessage(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
+async function resolveNotificationRecipients(input: CreateNotificationInput) {
+  const users = await prisma.user.findMany({
+    where: { shopId: input.shopId, disabledAt: null },
+    select: { id: true, role: true },
+  });
+  const allowedShopRoles = notificationPolicy(input.type).shopRoles ?? OPERATIONAL_NOTIFICATION_ROLES;
+  return users
+    .filter((user) => {
+      const role = String(normalizeFixedRole(user.role));
+      if (input.target.type === "USER") return user.id === input.target.userId;
+      if (input.target.type === "ROLE") return role === String(normalizeFixedRole(input.target.role));
+      return (allowedShopRoles as readonly string[]).includes(role);
+    })
+    .map((user) => user.id);
 }
 
 function retryPayload(input: CreateNotificationInput): Prisma.InputJsonObject {
@@ -253,14 +265,7 @@ async function insertNotification(input: CreateNotificationInput) {
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const existing = await prisma.notification.findFirst({
-        where: {
-          shopId: input.shopId,
-          type: input.type,
-          entityType: input.entityType ?? "",
-          entityId: input.entityId ?? "",
-        },
-      });
+      const existing = await prisma.notification.findUnique({ where: { idempotencyKey } });
       if (existing) return existing;
     }
     throw error;
@@ -329,10 +334,27 @@ async function queueNotificationRetry(input: CreateNotificationInput, error: unk
 }
 
 export async function safeCreateNotification(input: CreateNotificationInput): Promise<NotificationDeliveryResult> {
+  let resolvedRecipients: string[] = [];
   try {
     const idempotencyKey = notificationIdempotencyKey(input);
+    resolvedRecipients = await resolveNotificationRecipients(input);
+    if (resolvedRecipients.length === 0) {
+      throw new NotificationValidationError("Notification event resolved no active same-shop recipients");
+    }
     const notification = await insertNotification(input);
     await markRetrySent(idempotencyKey);
+    logger.info("notification_created", {
+      event: "notification_created",
+      eventType: input.type,
+      entityType: input.entityType ?? null,
+      entityId: input.entityId ?? null,
+      shopId: input.shopId,
+      actorUserId: input.actorUserId ?? null,
+      resolvedRecipients,
+      notificationInsertResult: notification.id,
+      retryQueued: false,
+      idempotencyKey,
+    });
     return {
       success: true,
       queued: true,
@@ -341,17 +363,21 @@ export async function safeCreateNotification(input: CreateNotificationInput): Pr
     };
   } catch (error) {
     const validationFailure = error instanceof NotificationValidationError;
+    const retryQueued = validationFailure ? false : await queueNotificationRetry(input, error);
     logger.error("notification_creation_failed", {
       event: "notification_creation_failed",
       eventType: input.type,
-      shopId: input.shopId,
-      targetUserId: input.target.type === "USER" ? input.target.userId : null,
-      targetRole: input.target.type === "ROLE" ? String(normalizeFixedRole(input.target.role)) : null,
       entityType: input.entityType ?? null,
       entityId: input.entityId ?? null,
-      error: errorMessage(error),
+      shopId: input.shopId,
+      actorUserId: input.actorUserId ?? null,
+      targetUserId: input.target.type === "USER" ? input.target.userId : null,
+      targetRole: input.target.type === "ROLE" ? String(normalizeFixedRole(input.target.role)) : null,
+      resolvedRecipients,
+      notificationInsertResult: null,
+      retryQueued,
+      failureReason: errorMessage(error),
     });
-    const retryQueued = validationFailure ? false : await queueNotificationRetry(input, error);
     return { success: false, queued: false, retryQueued };
   }
 }
@@ -569,12 +595,12 @@ export async function notifyOrderCreated(input: {
   orderId: string;
   customerName: string;
   createdById?: string;
-  createdByRole?: string;
   createdByName: string;
   amountText?: string | null;
 }) {
   const shopNotification = await safeCreateNotification({
     shopId: input.shopId,
+    actorUserId: input.createdById,
     target: { type: "SHOP" },
     type: "ORDER_CREATED",
     title: "New Order Received",
@@ -584,24 +610,7 @@ export async function notifyOrderCreated(input: {
     actionUrl: orderUrl(input.orderId),
     metadata: { customerName: input.customerName, createdByName: input.createdByName, amountText: input.amountText ?? null },
   });
-  if (
-    !input.createdById ||
-    String(normalizeFixedRole(input.createdByRole ?? "")) !== "SALES_PERSON"
-  ) {
-    return shopNotification;
-  }
-  const creatorNotification = await safeCreateNotification({
-    shopId: input.shopId,
-    target: { type: "USER", userId: input.createdById },
-    type: "ORDER_CREATED",
-    title: "New Order Received",
-    message: `${input.customerName}\nCreated by: ${input.createdByName}${input.amountText ? `\n${input.amountText}` : ""}`,
-    entityType: "ORDER",
-    entityId: input.orderId,
-    actionUrl: orderUrl(input.orderId),
-    metadata: { customerName: input.customerName, createdByName: input.createdByName, amountText: input.amountText ?? null },
-  });
-  return mergeDeliveryResults([shopNotification, creatorNotification]);
+  return shopNotification;
 }
 
 export async function notifyOrderStatusChanged(input: {
@@ -627,6 +636,7 @@ export async function notifyOrderStatusChanged(input: {
 export async function notifyChequeEvent(input: {
   shopId: string;
   chequeId: string;
+  actorUserId?: string;
   type: "CHEQUE_COLLECTED" | "CHEQUE_DEPOSITED" | "CHEQUE_BOUNCED" | "CHEQUE_RETURNED";
   title: string;
   customerName: string;
@@ -638,6 +648,7 @@ export async function notifyChequeEvent(input: {
   const bounced = input.type === "CHEQUE_BOUNCED";
   return safeCreateNotification({
     shopId: input.shopId,
+    actorUserId: input.actorUserId,
     target: input.target ?? { type: "SHOP" },
     type: input.type,
     title: input.title,
@@ -759,6 +770,7 @@ export async function notifyTaskAssigned(input: {
   shopId: string;
   taskId: string;
   assignedToId: string;
+  assignedById?: string;
   taskTypeLabel: string;
   customerName?: string | null;
   dueDate: Date;
@@ -766,6 +778,7 @@ export async function notifyTaskAssigned(input: {
 }) {
   return safeCreateNotification({
     shopId: input.shopId,
+    actorUserId: input.assignedById,
     target: { type: "USER", userId: input.assignedToId },
     type: "TASK_ASSIGNED",
     title: "Task Assigned To You",

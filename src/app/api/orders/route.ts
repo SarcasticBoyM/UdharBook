@@ -427,7 +427,6 @@ export async function POST(request: Request) {
       orderId: order.id,
       customerName: order.customer.partyName,
       createdById: session.id,
-      createdByRole: session.role,
       createdByName: order.createdBy.name,
     });
     const customerNotification = order.sourceModule === "NEW_CUSTOMER_ORDER"

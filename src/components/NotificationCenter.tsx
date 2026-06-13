@@ -8,6 +8,7 @@ import {
   Check,
   CheckCheck,
   ExternalLink,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -35,9 +36,11 @@ type AppNotification = {
 };
 
 type NotificationResponse = {
+  success: boolean;
   unreadCount: number;
   criticalUnreadCount: number;
   notifications: AppNotification[];
+  error?: string;
 };
 
 type NotificationFilter =
@@ -135,10 +138,13 @@ export function NotificationCenter() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [toast, setToast] = useState<AppNotification | null>(null);
   const [actionError, setActionError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
   const [dismissedCriticalIds, setDismissedCriticalIds] = useState<Set<string>>(new Set());
   const knownIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
   const refreshTimer = useRef<number | null>(null);
+  const refreshInFlight = useRef(false);
 
   const unreadLabel = useMemo(() => (unreadCount > 99 ? "99+" : String(unreadCount)), [unreadCount]);
   const unreadCritical = useMemo(
@@ -179,10 +185,17 @@ export function NotificationCenter() {
   }, []);
 
   const loadNotifications = useCallback(async (showNew = true) => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setLoadingNotifications(true);
     try {
       const response = await fetch("/api/notifications?limit=50", { credentials: "same-origin", cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as NotificationResponse;
+      const data = await response.json().catch(() => ({})) as Partial<NotificationResponse>;
+      if (!response.ok || data.success === false) {
+        setLoadError(data.error ?? "Notifications could not be loaded. Please retry.");
+        return;
+      }
+      setLoadError("");
       setUnreadCount(data.unreadCount ?? 0);
       setCriticalUnreadCount(data.criticalUnreadCount ?? 0);
       setNotifications(data.notifications ?? []);
@@ -211,42 +224,69 @@ export function NotificationCenter() {
         );
       }
     } catch {
-      // Notification refresh remains best effort.
+      setLoadError("Notifications could not be loaded. Check your connection and retry.");
+    } finally {
+      refreshInFlight.current = false;
+      setLoadingNotifications(false);
     }
   }, [showPwaNotification]);
 
   const mutateNotification = useCallback(async (body: { action: "MARK_READ" | "MARK_ALL_READ" | "DELETE"; id?: string }) => {
     setActionError("");
-    const response = await fetch("/api/notifications", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setActionError(data.error ?? "Notification could not be updated.");
+    try {
+      const response = await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setActionError(data.error ?? "Notification could not be updated.");
+        return false;
+      }
+      if (typeof data.unreadCount === "number") setUnreadCount(data.unreadCount);
+      if (typeof data.criticalUnreadCount === "number") setCriticalUnreadCount(data.criticalUnreadCount);
+      setNotifications((current) => {
+        if (body.action === "MARK_ALL_READ") {
+          return current.map((notification) => ({ ...notification, isRead: true }));
+        }
+        if (!body.id) return current;
+        if (body.action === "DELETE") {
+          return current.filter((notification) => notification.id !== body.id);
+        }
+        return current.map((notification) =>
+          notification.id === body.id ? { ...notification, isRead: true } : notification,
+        );
+      });
+      await loadNotifications(false);
+      return true;
+    } catch {
+      setActionError("Notification could not be updated. Check your connection and retry.");
       return false;
     }
-    await loadNotifications(false);
-    return true;
   }, [loadNotifications]);
 
   const openRecord = useCallback(async (notification: AppNotification) => {
     setActionError("");
-    const response = await fetch(`/api/notifications?resolveId=${encodeURIComponent(notification.id)}`, {
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.actionUrl) {
-      setActionError(data.error ?? "This record is no longer available.");
+    try {
+      const response = await fetch(`/api/notifications?resolveId=${encodeURIComponent(notification.id)}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.actionUrl) {
+        setActionError(data.error ?? "This record is no longer available.");
+        setOpen(true);
+        return;
+      }
+      await mutateNotification({ action: "MARK_READ", id: notification.id });
+      setOpen(false);
+      router.push(data.actionUrl);
+    } catch {
+      setActionError("This record could not be opened. Check your connection and retry.");
       setOpen(true);
-      return;
     }
-    await mutateNotification({ action: "MARK_READ", id: notification.id });
-    setOpen(false);
-    router.push(data.actionUrl);
   }, [mutateNotification, router]);
 
   useEffect(() => {
@@ -259,7 +299,6 @@ export function NotificationCenter() {
   }, []);
 
   useEffect(() => {
-    void loadNotifications(false);
     const interval = window.setInterval(() => void loadNotifications(true), 60000);
     const onFocus = () => void loadNotifications(true);
     const onVisible = () => {
@@ -308,15 +347,18 @@ export function NotificationCenter() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Open notifications"
+        aria-label={loadError ? "Open notifications, notification service unavailable" : "Open notifications"}
         className={cn(
           "fixed right-3 top-2 z-50 inline-flex h-10 min-w-10 items-center justify-center gap-1 rounded-lg border bg-white px-2 shadow-sm transition hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-100 md:right-5 md:top-5",
           criticalUnreadCount > 0
             ? "border-red-300 text-red-700 dark:border-red-900"
+            : loadError
+              ? "border-amber-400 text-amber-700 dark:border-amber-800"
             : "border-slate-200 text-slate-700 dark:border-slate-700",
         )}
       >
         <Bell className={cn("h-5 w-5", criticalUnreadCount > 0 && "critical-bell-pulse")} />
+        {loadError && unreadCount === 0 && <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />}
         {unreadCount > 0 && (
           <span className={cn(
             "min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold leading-5 text-white",
@@ -398,9 +440,26 @@ export function NotificationCenter() {
                   <span>{actionError}</span>
                 </div>
               )}
+              {loadError && (
+                <div className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1">{loadError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadNotifications(false)}
+                    disabled={loadingNotifications}
+                    className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-md bg-red-700 px-3 font-semibold text-white disabled:opacity-60"
+                  >
+                    <RefreshCw className={cn("h-4 w-4", loadingNotifications && "animate-spin")} />
+                    Retry
+                  </button>
+                </div>
+              )}
               {filteredNotifications.length === 0 ? (
                 <div className="flex h-full min-h-40 items-center justify-center text-sm text-slate-500">
-                  No notifications in this view
+                  {loadingNotifications ? "Loading notifications..." : "No notifications in this view"}
                 </div>
               ) : (
                 <div className="space-y-2">

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
 import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
@@ -128,6 +129,8 @@ function canCancel(order: OrderRow) {
 }
 
 export default function OrderDeskPage() {
+  const searchParams = useSearchParams();
+  const highlightedId = searchParams.get("highlight");
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [summary, setSummary] = useState<Summary>(emptySummary);
   const [filter, setFilter] = useState("all");
@@ -171,6 +174,13 @@ export default function OrderDeskPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  useEffect(() => {
+    if (!highlightedId || !orders.some((order) => order.id === highlightedId)) return;
+    window.setTimeout(() => {
+      document.getElementById(`order-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  }, [highlightedId, orders]);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -349,7 +359,11 @@ export default function OrderDeskPage() {
         {loading && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">Loading orders...</div>}
         {!loading && filteredOrders.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No orders found.</div>}
         {filteredOrders.map((order) => (
-          <article key={order.id} className={`rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status)) ? "opacity-70" : ""}`}>
+          <article
+            id={`order-${order.id}`}
+            key={order.id}
+            className={`rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status)) ? "opacity-70" : ""} ${highlightedId === order.id ? "ring-2 ring-brand-500" : ""}`}
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">

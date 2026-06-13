@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Banknote,
@@ -379,6 +380,8 @@ function StatCard({
 }
 
 export default function ChequeCollectionsPage() {
+  const searchParams = useSearchParams();
+  const highlightedId = searchParams.get("highlight");
   const [quick, setQuick] = useState("all");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
@@ -452,9 +455,10 @@ export default function ChequeCollectionsPage() {
     if (to) search.set("to", to);
     if (minAmount) search.set("minAmount", minAmount);
     if (maxAmount) search.set("maxAmount", maxAmount);
+    if (highlightedId) search.set("highlight", highlightedId);
     search.set("limit", "40");
     return search;
-  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, maxAmount, minAmount, quick, staffId, to]);
+  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, highlightedId, maxAmount, minAmount, quick, staffId, to]);
 
   const loadCheques = useCallback(async () => {
     const sequence = loadSequence.current + 1;
@@ -469,14 +473,25 @@ export default function ChequeCollectionsPage() {
         setData(payload);
         setSelectedCheque((current) => {
           if (!payload.items.length) return null;
+          if (highlightedId) return payload.items.find((item) => item.id === highlightedId) ?? null;
           return current ? payload.items.find((item) => item.id === current.id) ?? payload.items[0] : payload.items[0];
         });
-        setExpandedId((current) => (current && payload.items.some((item) => item.id === current) ? current : null));
+        setExpandedId((current) => {
+          if (highlightedId && payload.items.some((item) => item.id === highlightedId)) return highlightedId;
+          return current && payload.items.some((item) => item.id === current) ? current : null;
+        });
       }
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [params]);
+  }, [highlightedId, params]);
+
+  useEffect(() => {
+    if (!highlightedId || !data?.items.some((item) => item.id === highlightedId)) return;
+    window.setTimeout(() => {
+      document.getElementById(`cheque-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  }, [data?.items, highlightedId]);
 
   useEffect(() => {
     loadCheques();
@@ -1290,6 +1305,7 @@ export default function ChequeCollectionsPage() {
             <div className="mt-4 space-y-3">
               {data?.items.map((cheque) => (
                 <article
+                  id={`cheque-${cheque.id}`}
                   key={cheque.id}
                   onClick={() => setSelectedCheque(cheque)}
                   onTouchStart={(event) => {
@@ -1309,7 +1325,8 @@ export default function ChequeCollectionsPage() {
                       ? "border-red-200"
                       : cheque.status === "CLEARED"
                         ? "border-emerald-200"
-                        : "border-slate-200 dark:border-slate-700"
+                        : "border-slate-200 dark:border-slate-700",
+                    highlightedId === cheque.id && "ring-2 ring-brand-500",
                   )}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">

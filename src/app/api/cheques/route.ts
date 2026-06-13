@@ -381,6 +381,7 @@ export async function GET(request: Request) {
   const format = searchParams.get("format");
   const report = searchParams.get("report");
   const includeArchived = searchParams.get("includeArchived") === "true";
+  const highlightedId = searchParams.get("highlight")?.trim();
   const debugMode = canUseRuntimeDebug(session.role) && searchParams.get("debug") === "runtime";
   const isolateMode = debugMode && searchParams.get("isolate") === "1";
   const isTrackerReport = report === "tracker";
@@ -427,6 +428,7 @@ export async function GET(request: Request) {
   }
 
   const conditions: Prisma.ChequeWhereInput[] = [{ shopId }];
+  if (highlightedId) conditions.push({ id: highlightedId });
   if ((report || format) && !includeArchived) {
     conditions.push({ customer: { is: { isArchived: false } } });
   }
@@ -980,6 +982,7 @@ export async function POST(request: Request) {
     const notification = await notifyChequeEvent({
       shopId,
       chequeId: cheque.id,
+      actorUserId: session.id,
       type: "CHEQUE_COLLECTED",
       title: "Cheque Collected",
       customerName: cheque.customer.partyName,

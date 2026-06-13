@@ -158,6 +158,7 @@ export async function POST(request: Request) {
       shopId,
       taskId: task.id,
       assignedToId: assignedTo.id,
+      assignedById: session.id,
       taskTypeLabel: taskTypeLabels[body.taskType],
       customerName: customer?.partyName,
       dueDate,

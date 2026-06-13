@@ -325,6 +325,7 @@ export async function PATCH(
       ? await notifyChequeEvent({
       shopId,
       chequeId: updated.id,
+      actorUserId: session.id,
       type:
         body.status === "DEPOSITED"
           ? "CHEQUE_DEPOSITED"
@@ -350,6 +351,7 @@ export async function PATCH(
       ? await notifyChequeEvent({
           shopId,
           chequeId: updated.id,
+          actorUserId: session.id,
           type: "CHEQUE_BOUNCED",
           title: "Cheque Bounced",
           customerName: updated.customer.partyName,

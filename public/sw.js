@@ -1,4 +1,4 @@
-const CACHE_NAME = "udharbook-v4";
+const CACHE_NAME = "udharbook-v5";
 const APP_SHELL = [
   "/manifest.webmanifest",
   "/icon.svg",
@@ -51,19 +51,41 @@ self.addEventListener("message", (event) => {
   if (event.data?.type !== "UDHARBOOK_NOTIFY") return;
   const title = event.data.title || "UdharBook reminder";
   const body = event.data.body || "A follow-up is due.";
-  self.registration.showNotification(title, {
-    body,
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    requireInteraction: event.data.requireInteraction ?? true,
-    tag: event.data.tag,
-    data: { url: event.data.url || "/follow-ups" },
-  });
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      requireInteraction: event.data.requireInteraction ?? true,
+      tag: event.data.tag,
+      data: { url: event.data.url || "/follow-ups" },
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data?.json() || {};
+  } catch {
+    data = { body: event.data?.text() || "You have a new UdharBook notification." };
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || "UdharBook", {
+      body: data.body || "You have a new notification.",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      requireInteraction: Boolean(data.requireInteraction),
+      tag: data.tag,
+      data: { url: typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/" },
+    })
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/follow-ups";
+  const requestedUrl = event.notification.data?.url;
+  const targetUrl = typeof requestedUrl === "string" && requestedUrl.startsWith("/") ? requestedUrl : "/";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (windowClients) => {
       for (const client of windowClients) {

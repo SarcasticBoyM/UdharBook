@@ -17,6 +17,13 @@ const ACCOUNTS_ROLES = [
   "SALES_PERSON_CUM_ACCOUNTS",
 ] as const;
 
+export const OPERATIONAL_NOTIFICATION_ROLES = [
+  "SHOP_ADMIN",
+  "SALES_PERSON",
+  "ACCOUNT_STAFF",
+  "SALES_PERSON_CUM_ACCOUNTS",
+] as const;
+
 const NORMAL_POLICY: NotificationEventPolicy = {
   priority: "NORMAL",
   toast: false,
@@ -47,7 +54,7 @@ export const notificationEventPolicies = {
     push: true,
     persistent: false,
     bypassQuietHours: false,
-    shopRoles: ACCOUNTS_ROLES,
+    shopRoles: OPERATIONAL_NOTIFICATION_ROLES,
   },
   TASK_ASSIGNED: {
     priority: "IMPORTANT",

@@ -491,7 +491,6 @@ export async function POST(request: Request) {
         orderId: createdOrder.id,
         customerName: createdOrder.customerName,
         createdById: session.id,
-        createdByRole: session.role,
         createdByName: session.name,
       }));
     }
