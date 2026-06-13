@@ -17,6 +17,9 @@ const PUBLIC = [
   "/manifest.webmanifest",
   "/sw.js",
   "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
 ];
 
 const SUPER_ADMIN_BLOCKED_PAGES = [
