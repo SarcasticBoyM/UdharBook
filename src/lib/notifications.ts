@@ -33,6 +33,7 @@ export type CreateNotificationInput = {
   entityId?: string;
   actionUrl?: string;
   metadata?: Prisma.InputJsonValue;
+  idempotencyKey?: string;
 };
 
 export type NotificationDeliveryResult = {
@@ -104,6 +105,7 @@ function targetKey(target: NotificationTarget) {
 }
 
 export function notificationIdempotencyKey(input: CreateNotificationInput) {
+  if (input.idempotencyKey) return input.idempotencyKey;
   return [
     input.shopId,
     input.type,
@@ -118,10 +120,11 @@ function errorMessage(error: unknown) {
 }
 
 async function resolveNotificationRecipients(input: CreateNotificationInput) {
-  const users = await prisma.user.findMany({
-    where: { shopId: input.shopId, disabledAt: null },
-    select: { id: true, role: true },
-  });
+  const users = await prisma.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
+    SELECT "id", "role"::text AS "role"
+    FROM "User"
+    WHERE "shopId" = ${input.shopId} AND "disabledAt" IS NULL
+  `);
   const allowedShopRoles = notificationPolicy(input.type).shopRoles ?? OPERATIONAL_NOTIFICATION_ROLES;
   return users
     .filter((user) => {
@@ -144,6 +147,7 @@ function retryPayload(input: CreateNotificationInput): Prisma.InputJsonObject {
     entityId: input.entityId ?? null,
     actionUrl: input.actionUrl ?? null,
     metadata: input.metadata ?? null,
+    idempotencyKey: input.idempotencyKey ?? null,
   };
 }
 
@@ -189,6 +193,7 @@ function parseRetryPayload(payload: Prisma.JsonValue): CreateNotificationInput {
     metadata: value.metadata === null || value.metadata === undefined
       ? undefined
       : value.metadata as Prisma.InputJsonValue,
+    idempotencyKey: typeof value.idempotencyKey === "string" ? value.idempotencyKey : undefined,
   };
 }
 
@@ -826,6 +831,52 @@ export async function notifyTaskCompleted(input: {
       customerName: input.customerName ?? null,
       completedByName: input.completedByName,
     },
+  });
+}
+
+export async function notifyOrderFollowUpDue(input: {
+  shopId: string;
+  followUpId: string;
+  recipientUserId: string;
+  customerName: string;
+  reminderAt: Date;
+  notes?: string | null;
+}) {
+  const reminderLabel = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(input.reminderAt);
+  const occurrence = input.reminderAt.toISOString();
+  return safeCreateNotification({
+    shopId: input.shopId,
+    target: { type: "USER", userId: input.recipientUserId },
+    type: "ORDER_FOLLOW_UP_DUE",
+    title: "Order Follow-up Due",
+    message: [
+      `Call ${input.customerName} for an order follow-up.`,
+      `Reminder: ${reminderLabel}`,
+      input.notes ? `Note: ${input.notes}` : "",
+    ].filter(Boolean).join("\n"),
+    entityType: "FOLLOW_UP",
+    entityId: input.followUpId,
+    actionUrl: `/today-follow-ups?followUpId=${encodeURIComponent(input.followUpId)}`,
+    metadata: {
+      customerName: input.customerName,
+      reminderAt: occurrence,
+      notes: input.notes ?? null,
+    },
+    idempotencyKey: [
+      input.shopId,
+      "ORDER_FOLLOW_UP_DUE",
+      input.followUpId,
+      occurrence,
+      input.recipientUserId,
+    ].join(":"),
   });
 }
 

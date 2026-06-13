@@ -1,55 +1,48 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
+import { processDueOrderFollowUpReminders } from "@/lib/order-follow-up-reminders";
 
-export async function GET(request: Request) {
+function hasCronAuthorization(request: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return request.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+async function processRequest(request: Request) {
+  if (hasCronAuthorization(request)) {
+    const result = await processDueOrderFollowUpReminders({ limit: 100 });
+    return NextResponse.json({
+      success: true,
+      processed: result.scanned,
+      queued: result.queued,
+      failed: result.failed,
+      checkedAt: result.checkedAt.toISOString(),
+    });
+  }
+
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const shopId = requireShopId(request, session);
-  const now = new Date();
-
-  const reminders = await prisma.$transaction(async (tx) => {
-    const due = await tx.followUp.findMany({
-      where: {
-        shopId,
-        createdById: session.id,
-        manualReminder: true,
-        reminderEnabled: true,
-        reminderSentAt: null,
-        status: { in: ["CALLBACK", "FOLLOW_UP_REQUIRED"] },
-        nextFollowUpDateTime: { lte: now },
-        customer: { isArchived: false, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
-      },
-      include: {
-        customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
-      },
-      orderBy: { nextFollowUpDateTime: "asc" },
-      take: 20,
-    });
-
-    if (due.length > 0) {
-      await tx.followUp.updateMany({
-        where: { id: { in: due.map((item) => item.id) } },
-        data: { reminderSentAt: now, remindedAt: now },
-      });
-    }
-
-    return due;
+  const result = await processDueOrderFollowUpReminders({
+    shopId,
+    recipientUserId: session.id,
+    limit: 20,
   });
+  return NextResponse.json({
+    success: true,
+    reminders: result.reminders,
+    checkedAt: result.checkedAt.toISOString(),
+  });
+}
 
-  const payload = reminders.map((item) => ({
-    id: item.id,
-    customerId: item.customerId,
-    partyName: item.customer.partyName,
-    amount: item.customer.outstandingBalance,
-    scheduledAt: item.nextFollowUpDateTime,
-    dueTime: item.nextFollowUpDateTime,
-    callbackNote: item.reminderNotes ?? item.notes,
-    priority: item.priority,
-    missed: item.nextFollowUpDateTime ? item.nextFollowUpDateTime < now : false,
-  }));
+export async function GET(request: Request) {
+  return processRequest(request);
+}
 
-  return NextResponse.json({ reminders: payload, checkedAt: now.toISOString() });
+export async function POST(request: Request) {
+  if (!hasCronAuthorization(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return processRequest(request);
 }

@@ -62,7 +62,7 @@ export function canAccessModule(role: AppRole, href: string) {
   if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff" || href === "/trade-calculator";
   if (normalized === "SHOP_ADMIN") return true;
   if (normalized === "SALES_PERSON") {
-    return ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
+    return ["/orders", "/cheques", "/customers", "/today-follow-ups", "/field-staff", "/daily-visits", "/qrvcard"].includes(href);
   }
   if (normalized === "ACCOUNT_STAFF") {
     return ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/reports", "/qrvcard"].includes(href);

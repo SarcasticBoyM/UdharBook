@@ -3,6 +3,7 @@ import type { FollowUpPriority, FollowUpStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
+import { isOrderFollowUp } from "@/lib/follow-up-types";
 
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 const LIGHTWEIGHT_THRESHOLD = Number(process.env.TODAY_FOLLOWUPS_LIGHTWEIGHT_THRESHOLD ?? 200);
@@ -95,7 +96,10 @@ function isExplicitlyScheduled(followUp: {
   nextFollowUpDateTime: Date | null;
   nextFollowupDate: Date | null;
   scheduledAt: Date | null;
+  supersededAt?: Date | null;
+  cancelledAt?: Date | null;
 }) {
+  if (followUp.supersededAt || followUp.cancelledAt) return false;
   if (!scheduledDateFor(followUp)) return false;
   if (CLOSED_STATUSES.includes(followUp.status)) return false;
   if (followUp.status === "PENDING" && followUp.notes === AUTO_QUEUE_NOTE) return false;
@@ -152,11 +156,12 @@ type ScheduledFollowUp = QueueCustomer & {
   scheduledFollowUp: {
     id: string;
     scheduledAt: Date;
-    followUpType: FollowUpStatus;
+    followUpType: string;
     notes: string | null;
     reminderNotes: string | null;
     customerResponse: string | null;
     assignedTo: string;
+    assignedToId: string | null;
     reminderEnabled: boolean;
     manualReminder: boolean;
     promiseToPay: boolean;
@@ -432,7 +437,9 @@ export async function GET(request: Request) {
     where: {
       shopId,
       status: { notIn: CLOSED_STATUSES },
-      customer: { isArchived: false, outstandingBalance: { gt: 0 }, NOT: { status: "CLEARED" } },
+      supersededAt: null,
+      cancelledAt: null,
+      customer: { isArchived: false },
       OR: [
         { manualReminder: true },
         { reminderEnabled: true },
@@ -443,17 +450,19 @@ export async function GET(request: Request) {
     },
     include: {
       createdBy: { select: { name: true } },
+      assignedTo: { select: { id: true, name: true } },
       customer: { include },
     },
     orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
     take: lightweightMode ? 100 : 300,
   }) : [];
 
-  const scheduledByCustomer = new Map<string, ScheduledFollowUp>();
+  const scheduledById = new Map<string, ScheduledFollowUp>();
   for (const row of scheduledRows) {
     if (!isExplicitlyScheduled(row)) continue;
-    if (latestFollowUpId(row.customer) !== row.id) continue;
-    if (isClosedForActiveQueue(row.customer)) continue;
+    const orderFollowUp = isOrderFollowUp(row.followUpType);
+    if (!orderFollowUp && latestFollowUpId(row.customer) !== row.id) continue;
+    if (!orderFollowUp && isClosedForActiveQueue(row.customer)) continue;
     const scheduledAt = scheduledDateFor(row);
     if (!scheduledAt) continue;
     const smart = smartPriority(row.customer);
@@ -466,11 +475,12 @@ export async function GET(request: Request) {
       scheduledFollowUp: {
         id: row.id,
         scheduledAt,
-        followUpType: row.status,
+        followUpType: row.followUpType ?? row.status,
         notes: row.notes,
         reminderNotes: row.reminderNotes,
         customerResponse: row.customerResponse,
-        assignedTo: row.createdBy.name,
+        assignedTo: row.assignedTo?.name ?? row.createdBy.name,
+        assignedToId: row.assignedTo?.id ?? null,
         reminderEnabled: row.reminderEnabled,
         manualReminder: row.manualReminder,
         promiseToPay: row.status === "PAYMENT_PROMISED",
@@ -478,10 +488,10 @@ export async function GET(request: Request) {
       },
     };
     candidate.queueScore = queueScore(candidate);
-    if (!scheduledByCustomer.has(row.customerId)) scheduledByCustomer.set(row.customerId, candidate);
+    scheduledById.set(row.id, candidate);
   }
 
-  const scheduled = Array.from(scheduledByCustomer.values()).sort((a, b) => {
+  const scheduled = Array.from(scheduledById.values()).sort((a, b) => {
     const now = Date.now();
     const aTime = a.scheduledFollowUp.scheduledAt.getTime();
     const bTime = b.scheduledFollowUp.scheduledAt.getTime();
@@ -490,7 +500,11 @@ export async function GET(request: Request) {
     if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
     return aTime - bTime;
   });
-  const scheduledIds = new Set(scheduled.map((customer) => customer.id));
+  const scheduledIds = new Set(
+    scheduled
+      .filter((customer) => !isOrderFollowUp(customer.scheduledFollowUp.followUpType))
+      .map((customer) => customer.id),
+  );
 
   const doneIds = new Set(doneCustomers.map((customer) => customer.id));
   const enriched = customers.map((customer) => {

@@ -314,7 +314,8 @@ model User {
   passwordResetRequired Boolean @default(false)
   tempPasswordExpiresAt DateTime?
   createdAt    DateTime   @default(now())
-  followUps    FollowUp[]
+  followUps    FollowUp[] @relation("FollowUpCreatedBy")
+  assignedFollowUps FollowUp[] @relation("FollowUpAssignedTo")
   statusHistory StatusHistory[]
   notes        CustomerNote[]
   payments     PaymentEntry[]
@@ -616,6 +617,7 @@ model Order {
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
   activities            OrderActivity[]
+  followUps              FollowUp[]
 
   @@unique([shopId, staffVisitId])
   @@index([shopId, status, priority])
@@ -774,10 +776,16 @@ model FollowUp {
   reminderEnabled  Boolean        @default(false)
   manualReminder   Boolean        @default(false)
   reminderSentAt   DateTime?
+  assignedToId     String?
+  assignedTo       User?          @relation("FollowUpAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  orderId          String?
+  order            Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  supersededAt     DateTime?
+  cancelledAt      DateTime?
   actionLoggedAt   DateTime       @default(now())
   queueRank        Int?
   createdById      String
-  createdBy        User           @relation(fields: [createdById], references: [id])
+  createdBy        User           @relation("FollowUpCreatedBy", fields: [createdById], references: [id])
   createdAt        DateTime       @default(now())
 
   @@index([customerId, followupDate])
@@ -786,6 +794,11 @@ model FollowUp {
   @@index([nextFollowUpDateTime])
   @@index([shopId, manualReminder, reminderEnabled, reminderSentAt])
   @@index([shopId, manualReminder, reminderEnabled, reminderSentAt, nextFollowUpDateTime], map: "FollowUp_manual_reminder_due_idx")
+  @@index([shopId, followUpType, reminderEnabled, reminderSentAt, nextFollowUpDateTime], map: "FollowUp_order_reminder_due_idx")
+  @@index([shopId, assignedToId, nextFollowUpDateTime])
+  @@index([orderId])
+  @@index([supersededAt])
+  @@index([cancelledAt])
   @@index([shopId, createdById, followupDate])
   @@index([shopId, customerId, followupDate])
   @@index([shopId, status, followupDate])

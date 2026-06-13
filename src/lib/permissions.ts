@@ -34,7 +34,7 @@ export function canUseCheques(role: UserRole | string): boolean {
 }
 
 export function canUseFollowUps(role: UserRole | string): boolean {
-  return isShopAdminRole(role) || isAccountsRole(role);
+  return isShopAdminRole(role) || isAccountsRole(role) || isSalesRole(role);
 }
 
 export function isSuperAdminRole(role: UserRole | string) {

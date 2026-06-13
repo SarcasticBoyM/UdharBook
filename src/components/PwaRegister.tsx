@@ -46,9 +46,14 @@ export function PwaRegister() {
               type: "UDHARBOOK_NOTIFY",
               title: `${label} follow-up reminder`,
               body,
+              url: `/today-follow-ups?followUpId=${encodeURIComponent(reminder.id)}`,
             });
           } else {
-            new Notification(`${label} follow-up reminder`, { body, icon: "/icon.svg" });
+            const notification = new Notification(`${label} follow-up reminder`, { body, icon: "/icon.svg" });
+            notification.onclick = () => {
+              window.focus();
+              window.location.assign(`/today-follow-ups?followUpId=${encodeURIComponent(reminder.id)}`);
+            };
           }
         }
       } catch {

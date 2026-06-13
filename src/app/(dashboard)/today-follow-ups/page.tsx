@@ -28,10 +28,12 @@ import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/c
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
 import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
-import { isShopAdminRole } from "@/lib/operational-roles";
+import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
+import { followUpTypeLabel, isOrderFollowUp, ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
 
 type QueueStatus =
+  | "PENDING"
   | "CALLBACK"
   | "FOLLOW_UP_REQUIRED"
   | "CONTACTED"
@@ -93,11 +95,12 @@ type ScheduledQueueCustomer = QueueCustomer & {
   scheduledFollowUp: {
     id: string;
     scheduledAt: string;
-    followUpType: FollowUpStatus;
+    followUpType: string;
     notes: string | null;
     reminderNotes: string | null;
     customerResponse: string | null;
     assignedTo: string;
+    assignedToId: string | null;
     reminderEnabled: boolean;
     manualReminder: boolean;
     promiseToPay: boolean;
@@ -209,14 +212,21 @@ const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
   { value: "COMPLETED", label: "Done", tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
 ];
 
-type PrimaryFollowUpAction = "PAYMENT_UPDATE" | "FOLLOW_UP_LATER" | "NO_RESPONSE" | "COMPLETED";
+type PrimaryFollowUpAction = "PAYMENT_UPDATE" | typeof ORDER_FOLLOW_UP | "FOLLOW_UP_LATER" | "NO_RESPONSE" | "COMPLETED";
 
 const PRIMARY_ACTIONS: { value: PrimaryFollowUpAction; label: string; description: string }[] = [
   { value: "PAYMENT_UPDATE", label: "Payment Update", description: "Promise, payment, or cheque" },
+  { value: ORDER_FOLLOW_UP, label: "Order Follow-up", description: "Schedule a call for a new order" },
   { value: "FOLLOW_UP_LATER", label: "Follow-up Later", description: "Reschedule with reminder" },
   { value: "NO_RESPONSE", label: "No Response", description: "Not reachable or busy" },
   { value: "COMPLETED", label: "Completed", description: "Close this follow-up" },
 ];
+
+type StaffOption = {
+  id: string;
+  name: string;
+  role: string;
+};
 
 const PAYMENT_OUTCOMES: { value: QueueStatus; label: string; notes: string; response?: string }[] = [
   { value: "PAYMENT_PROMISED", label: "Payment Promised", notes: "Customer promised payment.", response: "Payment promised" },
@@ -507,15 +517,41 @@ export default function TodayFollowUpsPage() {
   const [hasMore, setHasMore] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [currentRole, setCurrentRole] = useState("");
+  const [staffOptions, setStaffOptions] = useState<StaffOption[]>([]);
+  const [linkedFollowUpId, setLinkedFollowUpId] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const notifiedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    setLinkedFollowUpId(new URLSearchParams(window.location.search).get("followUpId"));
     fetch("/api/auth/me")
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => setCurrentRole(data?.user?.role ?? ""))
       .catch(() => setCurrentRole(""));
   }, []);
+
+  useEffect(() => {
+    if (!isShopAdminRole(currentRole)) {
+      setStaffOptions([]);
+      return;
+    }
+    fetch("/api/users")
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setStaffOptions((data?.users ?? []).filter((user: StaffOption) =>
+        ["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(user.role),
+      )))
+      .catch(() => setStaffOptions([]));
+  }, [currentRole]);
+
+  useEffect(() => {
+    if (!linkedFollowUpId || scheduled.length === 0) return;
+    const linked = scheduled.find((customer) => customer.scheduledFollowUp.id === linkedFollowUpId);
+    if (!linked) return;
+    setSelectedId(linked.id);
+    window.setTimeout(() => {
+      document.getElementById(`scheduled-follow-up-${linkedFollowUpId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
+  }, [linkedFollowUpId, scheduled]);
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
     if (reset || data.scheduled.length > 0) setScheduled(data.scheduled);
@@ -705,7 +741,7 @@ export default function TodayFollowUpsPage() {
     }));
   };
 
-  const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string) => {
+  const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => {
     const nextDate = status === "RESCHEDULED" ? reminderInputToIso(nextReminderDate(undefined, 10)) : customer.nextFollowupDate;
     const paidAmount = status === "PAID" ? customer.outstandingBalance : 0;
     applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
@@ -717,11 +753,23 @@ export default function TodayFollowUpsPage() {
         status,
         priority: derivedPriority(customer),
         notes,
+        supersedesFollowUpId,
         scheduledAt: nextDate,
         nextFollowupDate: nextDate,
         paidAmount,
       }),
     });
+  };
+
+  const cancelScheduled = async (followUpId: string) => {
+    const response = await fetch("/api/follow-ups", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: followUpId, action: "CANCEL" }),
+    });
+    if (!response.ok) throw new Error("Could not cancel follow-up");
+    setScheduled((current) => current.filter((customer) => customer.scheduledFollowUp.id !== followUpId));
+    await loadPage(0, true);
   };
 
   return (
@@ -842,6 +890,7 @@ export default function TodayFollowUpsPage() {
             onToggle={() => setScheduledCollapsed((value) => !value)}
             onSelect={setSelectedId}
             onQuickSave={quickSave}
+            onCancel={cancelScheduled}
           />
 
           {loading ? (
@@ -939,6 +988,8 @@ export default function TodayFollowUpsPage() {
         <ActionPanel
           customer={selected}
           canAssignTask={isShopAdminRole(currentRole)}
+          canAssignFollowUp={isShopAdminRole(currentRole)}
+          staffOptions={staffOptions}
           onClose={() => setSelectedId(null)}
           onOptimistic={applyOptimisticAction}
           onSaved={() => {
@@ -990,6 +1041,7 @@ function ScheduledQueueSection({
   onToggle,
   onSelect,
   onQuickSave,
+  onCancel,
 }: {
   customers: ScheduledQueueCustomer[];
   total: number;
@@ -1000,7 +1052,8 @@ function ScheduledQueueSection({
   onFilterChange: (filter: ScheduledFilterKey) => void;
   onToggle: () => void;
   onSelect: (id: string) => void;
-  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
+  onCancel: (followUpId: string) => Promise<void>;
 }) {
   const grouped = {
     overdue: customers.filter((customer) => scheduledGroupFor(customer) === "overdue"),
@@ -1019,7 +1072,7 @@ function ScheduledQueueSection({
             <div className="min-w-0">
               <h2 className="truncate whitespace-nowrap text-xl font-bold leading-tight text-slate-950 dark:text-white">Scheduled Follow-ups</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {total} scheduled recovery reminders, sorted by what needs attention next.
+                {total} scheduled reminders, sorted by what needs attention next.
               </p>
             </div>
           </div>
@@ -1082,6 +1135,7 @@ function ScheduledQueueSection({
                 selectedId={selectedId}
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
+                onCancel={onCancel}
               />
               <ScheduledGroup
                 title="Due Today"
@@ -1090,6 +1144,7 @@ function ScheduledQueueSection({
                 selectedId={selectedId}
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
+                onCancel={onCancel}
               />
               <ScheduledGroup
                 title="Upcoming"
@@ -1098,6 +1153,7 @@ function ScheduledQueueSection({
                 selectedId={selectedId}
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
+                onCancel={onCancel}
               />
             </div>
           )}
@@ -1128,13 +1184,15 @@ function ScheduledGroup({
   selectedId,
   onSelect,
   onQuickSave,
+  onCancel,
 }: {
   title: string;
   description: string;
   customers: ScheduledQueueCustomer[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
+  onCancel: (followUpId: string) => Promise<void>;
 }) {
   if (customers.length === 0) return null;
   return (
@@ -1154,6 +1212,7 @@ function ScheduledGroup({
             active={selectedId === customer.id}
             onOpen={() => onSelect(customer.id)}
             onQuickSave={onQuickSave}
+            onCancel={onCancel}
           />
         ))}
       </div>
@@ -1166,11 +1225,13 @@ function ScheduledFollowUpCard({
   active,
   onOpen,
   onQuickSave,
+  onCancel,
 }: {
   customer: ScheduledQueueCustomer;
   active: boolean;
   onOpen: () => void;
-  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
+  onCancel: (followUpId: string) => Promise<void>;
 }) {
   const scheduled = customer.scheduledFollowUp;
   const dueAt = new Date(scheduled.scheduledAt);
@@ -1191,6 +1252,7 @@ function ScheduledFollowUpCard({
 
   return (
     <article
+      id={`scheduled-follow-up-${scheduled.id}`}
       onClick={onOpen}
       className={cn(
         "min-w-0 cursor-pointer overflow-hidden rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
@@ -1213,7 +1275,7 @@ function ScheduledFollowUpCard({
           <div className="flex flex-wrap gap-2">
             {isPromise && <Badge tone="violet">Promise to pay</Badge>}
             {isReminder && <Badge tone="blue">Reminder set</Badge>}
-            <Badge tone="slate">{statusLabel(scheduled.followUpType)}</Badge>
+            <Badge tone={isOrderFollowUp(scheduled.followUpType) ? "amber" : "slate"}>{followUpTypeLabel(scheduled.followUpType)}</Badge>
           </div>
         </div>
 
@@ -1246,7 +1308,8 @@ function ScheduledFollowUpCard({
             {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
           <QuickButton label="Open Follow-up" onClick={onOpen} />
-          <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.")} />
+          <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.", scheduled.id)} />
+          {isOrderFollowUp(scheduled.followUpType) && <QuickButton label="Cancel" onClick={() => onCancel(scheduled.id)} />}
         </div>
       </div>
       <div className="mt-4 flex min-w-0 items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
@@ -1603,12 +1666,16 @@ function priorityClass(priority: FollowUpPriority) {
 function ActionPanel({
   customer,
   canAssignTask,
+  canAssignFollowUp,
+  staffOptions,
   onClose,
   onOptimistic,
   onSaved,
 }: {
   customer: QueueCustomer | null;
   canAssignTask: boolean;
+  canAssignFollowUp: boolean;
+  staffOptions: StaffOption[];
   onClose: () => void;
   onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number) => void;
   onSaved: () => void;
@@ -1620,6 +1687,7 @@ function ActionPanel({
   const [nextDate, setNextDate] = useState("");
   const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
   const [paidAmount, setPaidAmount] = useState("");
+  const [assignedToId, setAssignedToId] = useState("");
   const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -1629,14 +1697,19 @@ function ActionPanel({
 
   useEffect(() => {
     if (!customer) return;
-    setPrimaryAction("PAYMENT_UPDATE");
-    setStatus("PAYMENT_PROMISED");
+    const scheduledSource = "scheduledFollowUp" in customer
+      ? (customer as ScheduledQueueCustomer).scheduledFollowUp
+      : null;
+    const editingOrderFollowUp = isOrderFollowUp(scheduledSource?.followUpType);
+    setPrimaryAction(editingOrderFollowUp ? ORDER_FOLLOW_UP : "PAYMENT_UPDATE");
+    setStatus(editingOrderFollowUp ? "PENDING" : "PAYMENT_PROMISED");
     setNotes("");
     setCustomerResponse("");
     setPaidAmount("");
+    setAssignedToId(editingOrderFollowUp ? scheduledSource?.assignedToId ?? "" : "");
     setSetReminder(false);
     setPriority(derivedPriority(customer));
-    const existingDate = reminderInputFromDate(customer.nextFollowupDate);
+    const existingDate = reminderInputFromDate(editingOrderFollowUp ? scheduledSource?.scheduledAt : customer.nextFollowupDate);
     setNextDate(existingDate);
     setVisibleReminderMonth(monthStart(existingDate));
     setDatePickerOpen(false);
@@ -1653,8 +1726,12 @@ function ActionPanel({
   }
 
   const latest = latestFollowUp(customer);
+  const scheduledSource = "scheduledFollowUp" in customer
+    ? (customer as ScheduledQueueCustomer).scheduledFollowUp
+    : null;
   const selectedTone = STATUS_OPTIONS.find((option) => option.value === status)?.tone ?? "border-slate-200 bg-slate-50 text-slate-800";
-  const showScheduleFields = primaryAction === "FOLLOW_UP_LATER" || primaryAction === "NO_RESPONSE" || status === "PAYMENT_PROMISED";
+  const orderFollowUp = primaryAction === ORDER_FOLLOW_UP;
+  const showScheduleFields = orderFollowUp || primaryAction === "FOLLOW_UP_LATER" || primaryAction === "NO_RESPONSE" || status === "PAYMENT_PROMISED";
   const selectedReminderDate = reminderDatePart(nextDate);
   const selectedReminderTime = reminderTimePart(nextDate);
   const todayValue = todayReminderDateValue();
@@ -1707,6 +1784,12 @@ function ActionPanel({
       setSetReminder(true);
       if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
     }
+    if (action === ORDER_FOLLOW_UP) {
+      setStatus("PENDING");
+      setSetReminder(true);
+      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!notes) setNotes("Call customer for a new order.");
+    }
     if (action === "FOLLOW_UP_LATER") {
       setStatus("RESCHEDULED");
       setSetReminder(true);
@@ -1741,12 +1824,13 @@ function ActionPanel({
     const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
     const finalNotes =
       notes ||
+      (orderFollowUp && scheduledAt ? `Call customer for a new order on ${formatDateTime(scheduledAt)}.` : "") ||
       (status === "RESCHEDULED" && scheduledAt ? `Follow-up rescheduled to ${formatDateTime(scheduledAt)}.` : "") ||
       (status === "COMPLETED" ? "Follow-up completed." : "") ||
       (status === "PAYMENT_PROMISED" ? "Customer promised payment." : "") ||
       (status === "NOT_REACHABLE" ? "Customer was not reachable." : "") ||
       "Follow-up action recorded.";
-    onOptimistic(customer, status, finalNotes, scheduledAt, amount);
+    if (!orderFollowUp) onOptimistic(customer, status, finalNotes, scheduledAt, amount);
     try {
       const res = await fetch("/api/follow-ups", {
         method: "POST",
@@ -1756,7 +1840,11 @@ function ActionPanel({
           status,
           priority,
           notes: finalNotes,
-          reminderNotes: setReminder && nextDate ? `Callback reminder set for ${formatDateTime(scheduledAt)}` : undefined,
+          reminderNotes: setReminder && nextDate
+            ? orderFollowUp
+              ? customerResponse || finalNotes
+              : `Callback reminder set for ${formatDateTime(scheduledAt)}`
+            : undefined,
           customerResponse: customerResponse || undefined,
           manualReminder: setReminder,
           reminderEnabled: setReminder,
@@ -1764,6 +1852,12 @@ function ActionPanel({
           scheduledAt: setReminder ? scheduledAt : null,
           nextFollowupDate: scheduledAt,
           paidAmount: amount,
+          followUpType: orderFollowUp ? ORDER_FOLLOW_UP : undefined,
+          assignedToId: orderFollowUp && assignedToId ? assignedToId : undefined,
+          sourceModule: "TODAY_FOLLOWUPS",
+          summary: orderFollowUp ? "Order Follow-up" : undefined,
+          activitySource: orderFollowUp ? "scheduled-order-follow-up" : undefined,
+          supersedesFollowUpId: orderFollowUp ? scheduledSource?.id : undefined,
         }),
       });
       if (!res.ok) throw new Error("Could not save follow-up");
@@ -1828,7 +1922,7 @@ function ActionPanel({
             {whatsAppMessage && <p className="-mt-2 text-xs font-semibold text-amber-700">{whatsAppMessage}</p>}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
-              <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the recovery outcome</p>
+              <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the follow-up outcome</p>
               <div className="grid grid-cols-2 gap-2">
                 {PRIMARY_ACTIONS.map((action) => (
                   <button
@@ -1921,6 +2015,12 @@ function ActionPanel({
               </div>
             )}
 
+            {orderFollowUp && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+                Schedule a call to ask this customer about their next order. This does not create or change an Order Desk order.
+              </div>
+            )}
+
             {primaryAction === "COMPLETED" && (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">
                 This will close the follow-up for this customer. Add a note below if the operator needs context later.
@@ -1966,11 +2066,11 @@ function ActionPanel({
             </div>
 
             <div>
-              <label className="text-sm font-semibold">{primaryAction === "FOLLOW_UP_LATER" ? "Reminder notes" : "Promised payment / response"}</label>
+              <label className="text-sm font-semibold">{orderFollowUp || primaryAction === "FOLLOW_UP_LATER" ? "Reminder notes" : "Promised payment / response"}</label>
               <input
                 value={customerResponse}
                 onChange={(event) => setCustomerResponse(event.target.value)}
-                placeholder={primaryAction === "FOLLOW_UP_LATER" ? "Example: customer asked callback tomorrow morning" : "Example: promised Rs 10,000 by 6 PM"}
+                placeholder={orderFollowUp ? "Example: ask for next cement requirement" : primaryAction === "FOLLOW_UP_LATER" ? "Example: customer asked callback tomorrow morning" : "Example: promised Rs 10,000 by 6 PM"}
                 className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
@@ -2123,6 +2223,22 @@ function ActionPanel({
                   </select>
                 </div>
               </div>
+            )}
+
+            {orderFollowUp && canAssignFollowUp && (
+              <label className="block">
+                <span className="text-sm font-semibold">Assigned staff</span>
+                <select
+                  value={assignedToId}
+                  onChange={(event) => setAssignedToId(event.target.value)}
+                  className="mt-2 min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                >
+                  <option value="">Assign to me</option>
+                  {staffOptions.map((staff) => (
+                    <option key={staff.id} value={staff.id}>{staff.name} - {roleLabel(staff.role)}</option>
+                  ))}
+                </select>
+              </label>
             )}
 
             {showScheduleFields && (

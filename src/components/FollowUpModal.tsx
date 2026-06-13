@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FollowUpPriority, FollowUpStatus } from "@prisma/client";
 import { Bell, CalendarClock, CheckCircle2, Landmark, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
+import { isShopAdminRole, normalizeFixedRole, roleLabel } from "@/lib/operational-roles";
 
 type RecoveryActionKey =
   | "CALLBACK_REQUESTED"
@@ -15,6 +17,7 @@ type RecoveryActionKey =
   | "NOT_RESPONDING"
   | "VISIT_COMPLETED"
   | "FOLLOW_UP_DONE"
+  | typeof ORDER_FOLLOW_UP
   | "RESCHEDULE"
   | "CUSTOMER_DISPUTE"
   | "WRONG_NUMBER";
@@ -55,6 +58,7 @@ const ACTIONS: {
   { key: "NOT_RESPONDING", label: "Not responding", status: "NOT_REACHABLE", priority: "HIGH", tone: "bg-amber-50 text-amber-800 border-amber-200", defaultSummary: "Customer not responding" },
   { key: "VISIT_COMPLETED", label: "Visit completed", status: "COMPLETED", priority: "MEDIUM", tone: "bg-slate-50 text-slate-800 border-slate-200", defaultSummary: "Visited customer, payment discussion done" },
   { key: "FOLLOW_UP_DONE", label: "Recovery follow-up done", status: "COMPLETED", priority: "MEDIUM", tone: "bg-green-50 text-green-800 border-green-200", defaultSummary: "Recovery follow-up done" },
+  { key: ORDER_FOLLOW_UP, label: "Order Follow-up", status: "PENDING", priority: "MEDIUM", tone: "bg-amber-50 text-amber-900 border-amber-300", defaultSummary: "Call customer for a new order" },
   { key: "RESCHEDULE", label: "Reschedule follow-up", status: "RESCHEDULED", priority: "MEDIUM", tone: "bg-blue-50 text-blue-800 border-blue-200", defaultSummary: "Follow-up rescheduled" },
   { key: "CUSTOMER_DISPUTE", label: "Customer dispute", status: "FOLLOW_UP_REQUIRED", priority: "URGENT", tone: "bg-orange-50 text-orange-800 border-orange-200", defaultSummary: "Customer raised dispute" },
   { key: "WRONG_NUMBER", label: "Wrong number/unavailable", status: "WRONG_NUMBER", priority: "LOW", tone: "bg-rose-50 text-rose-800 border-rose-200", defaultSummary: "Wrong number or customer unavailable" },
@@ -63,6 +67,18 @@ const ACTIONS: {
 function toDateTime(value: string) {
   return value ? new Date(value).toISOString() : null;
 }
+
+function toIstDateTime(date: string, time: string) {
+  if (!date || !time) return null;
+  const parsed = new Date(`${date}T${time}:00+05:30`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+type StaffOption = {
+  id: string;
+  name: string;
+  role: string;
+};
 
 function money(value: number | undefined) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value ?? 0);
@@ -81,6 +97,11 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
   const [nextDate, setNextDate] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(false);
   const [reminderDate, setReminderDate] = useState("");
+  const [orderReminderDate, setOrderReminderDate] = useState("");
+  const [orderReminderTime, setOrderReminderTime] = useState("");
+  const [assignedToId, setAssignedToId] = useState("");
+  const [staff, setStaff] = useState<StaffOption[]>([]);
+  const [canAssign, setCanAssign] = useState(false);
   const [imageName, setImageName] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
   const [chequeBank, setChequeBank] = useState("");
@@ -93,6 +114,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
   const isCheque = actionKey.startsWith("CHEQUE");
   const needsAmount = actionKey === "PAYMENT_RECEIVED" || isCheque;
   const needsPromise = actionKey === "PROMISE_TO_PAY";
+  const isOrderReminder = actionKey === ORDER_FOLLOW_UP;
   const computedSummary = useMemo(() => {
     if (summary.trim()) return summary.trim();
     if (actionKey === "PROMISE_TO_PAY" && promiseDate) return `Customer promised payment on ${formatDateTime(promiseDate)}`;
@@ -102,12 +124,35 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
     return action.defaultSummary;
   }, [action.defaultSummary, actionKey, chequeAmount, nextDate, promiseDate, recoveryAmount, summary]);
 
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((response) => response.ok ? response.json() : null)
+      .then(async (data) => {
+        if (!isShopAdminRole(data?.user?.role ?? "")) return;
+        setCanAssign(true);
+        const response = await fetch("/api/users");
+        if (!response.ok) return;
+        const payload = await response.json();
+        setStaff((payload.users ?? []).filter((user: StaffOption) =>
+          ["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalizeFixedRole(user.role))),
+        ));
+      })
+      .catch(() => undefined);
+  }, []);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setError("");
     const amount = Number(recoveryAmount || chequeAmount || 0);
-    const reminderAt = toDateTime(reminderDate || nextDate);
+    const reminderAt = isOrderReminder
+      ? toIstDateTime(orderReminderDate, orderReminderTime)
+      : toDateTime(reminderDate || nextDate);
+    if (isOrderReminder && !reminderAt) {
+      setLoading(false);
+      setError("Reminder date and time are required for an Order Follow-up.");
+      return;
+    }
     const nextFollowupAt = actionKey === "CHEQUE_BOUNCED" && !nextDate && !promiseDate && !reminderDate
       ? new Date().toISOString()
       : toDateTime(nextDate || promiseDate || reminderDate);
@@ -123,14 +168,15 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
           notes: details || computedSummary,
           reminderNotes: reminderEnabled ? `Reminder set for ${reminderAt ? formatDateTime(reminderAt) : "selected time"}` : undefined,
           customerResponse: needsPromise ? computedSummary : undefined,
-          manualReminder: reminderEnabled,
-          reminderEnabled,
-          nextFollowUpDateTime: reminderEnabled ? reminderAt : null,
-          scheduledAt: reminderEnabled ? reminderAt : nextFollowupAt,
-          nextFollowupDate: nextFollowupAt,
+          manualReminder: isOrderReminder || reminderEnabled,
+          reminderEnabled: isOrderReminder || reminderEnabled,
+          nextFollowUpDateTime: isOrderReminder || reminderEnabled ? reminderAt : null,
+          scheduledAt: isOrderReminder || reminderEnabled ? reminderAt : nextFollowupAt,
+          nextFollowupDate: isOrderReminder ? reminderAt : nextFollowupAt,
           paidAmount: actionKey === "PAYMENT_RECEIVED" || isCheque ? amount : undefined,
           sourceModule: "CUSTOMER_MODULE",
-          followUpType: action.label,
+          followUpType: isOrderReminder ? ORDER_FOLLOW_UP : action.label,
+          assignedToId: isOrderReminder && assignedToId ? assignedToId : undefined,
           summary: computedSummary,
           detailedNotes: details || computedSummary,
           paymentStatus: actionKey === "PAYMENT_RECEIVED" ? (amount >= balance ? "PAID" : "PARTIAL_PAID") : isCheque ? action.label.toUpperCase().replace(/\s+/g, "_") : undefined,
@@ -184,6 +230,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
                         setActionKey(item.key);
                         setSummary("");
                         if (item.key === "PAYMENT_RECEIVED") setReminderEnabled(false);
+                        if (item.key === ORDER_FOLLOW_UP) setReminderEnabled(true);
                       }}
                       className={cn(
                         "min-h-11 rounded-lg border px-3 text-left text-xs font-semibold",
@@ -200,8 +247,31 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
                 <Field label="Short summary" value={summary} onChange={setSummary} placeholder={action.defaultSummary} />
                 {needsAmount && <Field label="Recovery amount" type="number" value={recoveryAmount} onChange={setRecoveryAmount} placeholder="Amount" />}
                 {needsPromise && <Field label="Promise/payment date" type="datetime-local" value={promiseDate} onChange={setPromiseDate} />}
-                <Field label="Next follow-up date & time" type="datetime-local" value={nextDate} onChange={setNextDate} />
+                {!isOrderReminder && <Field label="Next follow-up date & time" type="datetime-local" value={nextDate} onChange={setNextDate} />}
               </div>
+
+              {isOrderReminder && (
+                <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30 sm:grid-cols-2">
+                  <Field label="Reminder date" type="date" value={orderReminderDate} onChange={setOrderReminderDate} />
+                  <Field label="Reminder time" type="time" value={orderReminderTime} onChange={setOrderReminderTime} />
+                  {canAssign && (
+                    <label className="block sm:col-span-2">
+                      <span className="text-sm font-semibold">Assigned staff</span>
+                      <select
+                        value={assignedToId}
+                        onChange={(event) => setAssignedToId(event.target.value)}
+                        className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-600 dark:bg-slate-800"
+                      >
+                        <option value="">Assign to me</option>
+                        {staff.map((user) => <option key={user.id} value={user.id}>{user.name} - {roleLabel(user.role)}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <p className="text-xs text-slate-600 dark:text-slate-300 sm:col-span-2">
+                    The selected person will receive an in-app reminder at this date and time (IST).
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="text-sm font-semibold">Detailed notes</label>
@@ -229,7 +299,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
                 </div>
               )}
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              {!isOrderReminder && <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex min-h-12 items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
                   <input
                     type="checkbox"
@@ -249,7 +319,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
                   </span>
                 </label>
                 <Field label="Reminder date/time" type="datetime-local" value={reminderDate} onChange={setReminderDate} disabled={!reminderEnabled} />
-              </div>
+              </div>}
 
               <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
                 <Upload className="h-4 w-4" />
@@ -293,7 +363,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
 
           <div className="sticky bottom-0 grid grid-cols-[1fr_auto] gap-2 border-t border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <button type="submit" disabled={loading} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-60">
-              {loading ? "Saving..." : "Save Recovery Update"}
+              {loading ? "Saving..." : isOrderReminder ? "Schedule Order Follow-up" : "Save Recovery Update"}
             </button>
             <button type="button" onClick={onClose} className="hidden min-h-12 items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700 sm:inline-flex">
               Cancel

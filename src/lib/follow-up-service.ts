@@ -15,6 +15,9 @@ export type RecordFollowUpInput = {
   shopId: string;
   customerId: string;
   createdById: string;
+  assignedToId?: string | null;
+  orderId?: string | null;
+  supersedesFollowUpId?: string | null;
   status: FollowUpStatus;
   priority?: FollowUpPriority;
   notes?: string | null;
@@ -44,6 +47,8 @@ export type RecordFollowUpInput = {
   paymentMethod?: string | null;
   updateCustomerFollowup?: boolean;
   updateCustomerStatus?: boolean;
+  updateCustomerNotes?: boolean;
+  incrementCallCount?: boolean;
 };
 
 function toDate(value: Date | string | null | undefined) {
@@ -99,6 +104,23 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
   const nextCustomerStatus = customerStatusFromFollowUp(input.status, newBalance);
   const shouldUpdateStatus = input.updateCustomerStatus !== false;
 
+  if (input.supersedesFollowUpId) {
+    const superseded = await tx.followUp.updateMany({
+      where: {
+        id: input.supersedesFollowUpId,
+        shopId: input.shopId,
+        customerId: input.customerId,
+        supersededAt: null,
+        cancelledAt: null,
+      },
+      data: {
+        supersededAt: now,
+        reminderEnabled: false,
+      },
+    });
+    if (!superseded.count) throw new Error("FOLLOW_UP_TO_SUPERSEDE_NOT_FOUND");
+  }
+
   const followUp = await tx.followUp.create({
     data: {
       shopId: input.shopId,
@@ -117,6 +139,8 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
       actionLoggedAt: now,
       nextFollowupDate: nextDate,
       createdById: input.createdById,
+      assignedToId: input.assignedToId,
+      orderId: input.orderId,
       sourceModule: input.sourceModule,
       followUpType: input.followUpType ?? input.status,
       summary: input.summary ?? input.notes ?? input.customerResponse,
@@ -154,8 +178,8 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
       ...(newBalance <= 0 ? { nextFollowupDate: null } : {}),
       ...(shouldReduceBalance ? { outstandingBalance: newBalance } : {}),
       ...(shouldUpdateStatus ? { status: nextCustomerStatus } : {}),
-      notes: input.notes ?? customer.notes,
-      totalCallsMade: { increment: 1 },
+      ...(input.updateCustomerNotes === false ? {} : { notes: input.notes ?? customer.notes }),
+      ...(input.incrementCallCount === false ? {} : { totalCallsMade: { increment: 1 } }),
     },
   });
 

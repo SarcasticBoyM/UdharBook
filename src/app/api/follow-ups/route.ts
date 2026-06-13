@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
@@ -8,6 +8,8 @@ import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity, type FollowUpSourceModule } from "@/lib/follow-up-service";
 import { canUseFollowUps } from "@/lib/permissions";
 import { notifyFollowUpCompleted } from "@/lib/notifications";
+import { isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
+import { isOrderFollowUp } from "@/lib/follow-up-types";
 
 const schema = z.object({
   customerId: z.string(),
@@ -45,8 +47,32 @@ const schema = z.object({
   chequeStatus: z.string().max(80).optional(),
   promiseDate: z.string().datetime().optional().nullable(),
   activitySource: z.string().max(80).optional(),
+  assignedToId: z.string().min(1).optional().nullable(),
+  orderId: z.string().min(1).optional().nullable(),
+  supersedesFollowUpId: z.string().min(1).optional().nullable(),
   metadata: z.unknown().optional(),
 });
+
+const cancelSchema = z.object({
+  id: z.string().min(1),
+  action: z.literal("CANCEL"),
+});
+
+type ScopedUserRow = {
+  id: string;
+  role: string;
+  disabledAt: Date | null;
+};
+
+async function findScopedUser(userId: string, shopId: string) {
+  const [user] = await prisma.$queryRaw<ScopedUserRow[]>(Prisma.sql`
+    SELECT "id", "role"::text AS "role", "disabledAt"
+    FROM "User"
+    WHERE "id" = ${userId} AND "shopId" = ${shopId}
+    LIMIT 1
+  `);
+  return user ?? null;
+}
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -58,12 +84,46 @@ export async function POST(request: Request) {
     const shopId = requireShopId(request, session);
     const customer = await prisma.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false } });
     if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+    const orderFollowUp = isOrderFollowUp(body.followUpType);
+    const reminderAtValue = body.nextFollowUpDateTime ?? body.scheduledAt ?? body.nextFollowupDate;
+    const reminderAt = reminderAtValue ? new Date(reminderAtValue) : null;
+    if (orderFollowUp && (!reminderAt || Number.isNaN(reminderAt.getTime()))) {
+      return NextResponse.json({ error: "Reminder date and time are required for an Order Follow-up." }, { status: 400 });
+    }
+
+    const assignedToId = body.assignedToId ?? session.id;
+    if (body.assignedToId && body.assignedToId !== session.id && !isShopAdminRole(session.role) && session.role !== "SUPER_ADMIN") {
+      return NextResponse.json({ error: "Only a Shop Admin can assign a follow-up to another staff member." }, { status: 403 });
+    }
+    const assignedTo = await findScopedUser(assignedToId, shopId);
+    if (!assignedTo || assignedTo.disabledAt) {
+      return NextResponse.json({ error: "Select an active staff member from this shop." }, { status: 400 });
+    }
+    if (
+      body.assignedToId &&
+      !["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalizeFixedRole(assignedTo.role)))
+    ) {
+      return NextResponse.json({ error: "Order follow-ups can only be assigned to operational staff." }, { status: 400 });
+    }
+
+    const linkedOrder = body.orderId
+      ? await prisma.order.findFirst({
+          where: { id: body.orderId, shopId, customerId: body.customerId },
+          select: { id: true },
+        })
+      : null;
+    if (body.orderId && !linkedOrder) {
+      return NextResponse.json({ error: "The selected order does not belong to this customer and shop." }, { status: 400 });
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       return recordFollowUpActivity(tx, {
         shopId,
         customerId: body.customerId,
         createdById: session.id,
+        assignedToId,
+        orderId: linkedOrder?.id,
+        supersedesFollowUpId: body.supersedesFollowUpId,
         status: body.status,
         priority: body.priority,
         notes: body.notes,
@@ -86,6 +146,10 @@ export async function POST(request: Request) {
         metadata: body.metadata as Prisma.InputJsonValue | undefined,
         recordPayment: body.status === "PAID" || body.status === "PARTIAL_PAID",
         paymentMethod: body.status === "PAID" ? "Full recovery" : "Partial recovery",
+        updateCustomerFollowup: !orderFollowUp,
+        updateCustomerStatus: !orderFollowUp,
+        updateCustomerNotes: !orderFollowUp,
+        incrementCallCount: !orderFollowUp,
       });
     });
 
@@ -113,8 +177,55 @@ export async function POST(request: Request) {
       data: result,
       ...(notification ? { notification } : {}),
     }, { status: 201 });
-  } catch {
-    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({
+        error: "Invalid follow-up details.",
+        details: error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`),
+      }, { status: 400 });
+    }
+    const message = error instanceof Error ? error.message : "Invalid request";
+    const status = message === "FOLLOW_UP_TO_SUPERSEDE_NOT_FOUND" ? 404 : 500;
+    return NextResponse.json({
+      error: message === "FOLLOW_UP_TO_SUPERSEDE_NOT_FOUND"
+        ? "The scheduled follow-up is no longer available."
+        : "Could not save the follow-up.",
+    }, { status });
+  }
+}
+
+export async function PATCH(request: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canUseFollowUps(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  try {
+    const body = cancelSchema.parse(await request.json());
+    const shopId = requireShopId(request, session);
+    const followUp = await prisma.followUp.findFirst({
+      where: { id: body.id, shopId },
+      select: { id: true, assignedToId: true, createdById: true, cancelledAt: true, completedAt: true },
+    });
+    if (!followUp) return NextResponse.json({ error: "Follow-up not found." }, { status: 404 });
+    const canCancel =
+      isShopAdminRole(session.role) ||
+      session.role === "SUPER_ADMIN" ||
+      followUp.assignedToId === session.id ||
+      followUp.createdById === session.id;
+    if (!canCancel) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (followUp.completedAt) return NextResponse.json({ error: "A completed follow-up cannot be cancelled." }, { status: 409 });
+
+    const updated = await prisma.followUp.update({
+      where: { id: followUp.id },
+      data: {
+        cancelledAt: followUp.cancelledAt ?? new Date(),
+        reminderEnabled: false,
+      },
+    });
+    return NextResponse.json({ success: true, followUp: updated });
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ error: "Invalid cancellation request." }, { status: 400 });
+    return NextResponse.json({ error: "Could not cancel the follow-up." }, { status: 500 });
   }
 }
 

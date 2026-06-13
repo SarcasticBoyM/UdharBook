@@ -66,7 +66,7 @@ function canAccessPage(role: string, pathname: string) {
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/shops");
   if (normalized === "SALES_PERSON") {
-    return pathStarts(pathname, ["/orders", "/cheques", "/customers", "/field-staff", "/daily-visits", "/qrvcard"]) && !pathname.startsWith("/customers/new");
+    return pathStarts(pathname, ["/orders", "/cheques", "/customers", "/today-follow-ups", "/field-staff", "/daily-visits", "/qrvcard"]) && !pathname.startsWith("/customers/new");
   }
   if (normalized === "ACCOUNT_STAFF") {
     return pathStarts(pathname, ["/", "/customers", "/upload", "/today-follow-ups", "/orders", "/cheques", "/reports", "/qrvcard"]) &&
@@ -86,8 +86,8 @@ function canAccessApi(role: string, pathname: string) {
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/api/shops") && !pathname.startsWith("/api/onboarding");
   if (normalized === "SALES_PERSON") {
-    return pathStarts(pathname, ["/api/auth", "/api/orders", "/api/cheques", "/api/customers/search", "/api/customers"]) &&
-      !pathStarts(pathname, ["/api/customers/import", "/api/customers/new", "/api/follow-ups", "/api/reports", "/api/users", "/api/dashboard"]);
+    return pathStarts(pathname, ["/api/auth", "/api/orders", "/api/cheques", "/api/customers/search", "/api/customers", "/api/follow-ups", "/api/today-follow-ups"]) &&
+      !pathStarts(pathname, ["/api/customers/import", "/api/customers/new", "/api/reports", "/api/users", "/api/dashboard"]);
   }
   if (normalized === "ACCOUNT_STAFF") {
     return pathStarts(pathname, ["/api/auth", "/api/customers", "/api/bulk", "/api/follow-ups", "/api/follow-up-reports", "/api/today-follow-ups", "/api/orders", "/api/cheques", "/api/cheque-deposit-accounts", "/api/reports", "/api/dashboard", "/api/qrvcard"]) &&
@@ -127,6 +127,14 @@ function getSecret() {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const traceId = crypto.randomUUID();
+
+  if (
+    pathname === "/api/notifications/due" &&
+    process.env.CRON_SECRET &&
+    request.headers.get("authorization") === `Bearer ${process.env.CRON_SECRET}`
+  ) {
+    return NextResponse.next();
+  }
 
   if (PUBLIC.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
