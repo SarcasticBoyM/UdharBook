@@ -19,6 +19,7 @@ type Visit = {
   status: "CHECKED_IN" | "COMPLETED" | "CANCELLED";
   checkInAt: string;
   checkOutAt: string | null;
+  createdAt: string;
   checkInLat: number;
   checkInLng: number;
   checkOutLat: number | null;
@@ -65,20 +66,68 @@ function money(value: number) {
 }
 
 function duration(start: string, end?: string | null) {
+  const startTime = new Date(start).getTime();
   const endTime = end ? new Date(end).getTime() : Date.now();
-  const minutes = Math.max(0, Math.round((endTime - new Date(start).getTime()) / 60000));
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return "-";
+  const elapsedMs = endTime - startTime;
+  if (elapsedMs < 60000) return "< 1 min";
+  const minutes = Math.floor(elapsedMs / 60000);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60} min`;
 }
 
 function durationMinutes(start: string, end?: string | null) {
+  const startTime = new Date(start).getTime();
   const endTime = end ? new Date(end).getTime() : Date.now();
-  return Math.max(0, Math.round((endTime - new Date(start).getTime()) / 60000));
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return 0;
+  return Math.floor((endTime - startTime) / 60000);
 }
 
 function time(value?: string | null) {
   if (!value) return "-";
-  return new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function visitDate(value?: string | null) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function visitStart(visit: Visit) {
+  return visit.checkInAt || visit.createdAt;
+}
+
+function statusLabel(visit: Visit) {
+  if (!visit.checkOutAt && visit.status === "CHECKED_IN") return "In Progress";
+  return visit.status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function isOngoingVisit(visit: Visit) {
+  return visit.status === "CHECKED_IN" && !visit.checkOutAt;
+}
+
+function visitDuration(visit: Visit) {
+  if (visit.checkOutAt) return duration(visitStart(visit), visit.checkOutAt);
+  return isOngoingVisit(visit) ? duration(visitStart(visit)) : "-";
+}
+
+function visitDurationMinutes(visit: Visit) {
+  if (visit.checkOutAt) return durationMinutes(visitStart(visit), visit.checkOutAt);
+  return isOngoingVisit(visit) ? durationMinutes(visitStart(visit)) : 0;
 }
 
 function csvEscape(value: string) {
@@ -154,7 +203,7 @@ export default function DailyVisitsPage() {
   );
 
   const orderedVisits = useMemo(
-    () => [...filteredVisits].sort((a, b) => new Date(a.checkInAt).getTime() - new Date(b.checkInAt).getTime()),
+    () => [...filteredVisits].sort((a, b) => new Date(visitStart(a)).getTime() - new Date(visitStart(b)).getTime()),
     [filteredVisits],
   );
 
@@ -169,7 +218,7 @@ export default function DailyVisitsPage() {
     orders: filteredVisits.filter(isOrderVisit).length,
     recovery: filteredVisits.reduce((sum, visit) => sum + visit.recoveryAmount, 0),
     km: filteredVisits.reduce((sum, visit) => sum + visit.travelKm, 0),
-    timeSpent: filteredVisits.reduce((sum, visit) => sum + durationMinutes(visit.checkInAt, visit.checkOutAt), 0),
+    timeSpent: filteredVisits.reduce((sum, visit) => sum + visitDurationMinutes(visit), 0),
   };
 
   const load = useCallback(async () => {
@@ -203,9 +252,9 @@ export default function DailyVisitsPage() {
         visit.customer.contactNumber,
         visit.visitType,
         visit.status,
-        new Date(visit.checkInAt).toISOString(),
+        new Date(visitStart(visit)).toISOString(),
         visit.checkOutAt ? new Date(visit.checkOutAt).toISOString() : "",
-        duration(visit.checkInAt, visit.checkOutAt),
+        visitDuration(visit),
         visit.verified ? "Yes" : "No",
         String(visit.recoveryAmount),
         visit.result ?? visit.notes ?? "",
@@ -309,7 +358,7 @@ export default function DailyVisitsPage() {
         {viewMode === "map" && canViewRouteMap ? (
           <RouteMap visits={orderedVisits} routePoints={filteredRoutePoints} />
         ) : (
-          <Timeline visits={filteredVisits} loading={loading} />
+          <Timeline visits={orderedVisits} loading={loading} />
         )}
       </section>
     </div>
@@ -327,6 +376,7 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Visit</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Visit Date</th>
               <th className="px-4 py-3">Check In</th>
               <th className="px-4 py-3">Check Out</th>
               <th className="px-4 py-3">Duration</th>
@@ -344,11 +394,12 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
                 </td>
                 <td className="px-4 py-3">{visit.visitType}</td>
                 <td className="px-4 py-3">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{statusLabel(visit)}</span>
                 </td>
-                <td className="px-4 py-3">{time(visit.checkInAt)}</td>
-                <td className="px-4 py-3">{time(visit.checkOutAt)}</td>
-                <td className="px-4 py-3">{duration(visit.checkInAt, visit.checkOutAt)}</td>
+                <td className="whitespace-nowrap px-4 py-3">{visitDate(visitStart(visit))}</td>
+                <td className="whitespace-nowrap px-4 py-3">{time(visitStart(visit))}</td>
+                <td className="whitespace-nowrap px-4 py-3">{visit.checkOutAt ? time(visit.checkOutAt) : isOngoingVisit(visit) ? "In Progress" : "Not recorded"}</td>
+                <td className="whitespace-nowrap px-4 py-3">{visitDuration(visit)}</td>
                 <td className="px-4 py-3 font-semibold">{money(visit.recoveryAmount)}</td>
                 <td className="px-4 py-3">{notesSummary(visit)}</td>
               </tr>
@@ -362,12 +413,34 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="break-words font-semibold">{index + 1}. {visit.customer.partyName}</p>
-                <p className="mt-1 break-words text-xs text-slate-500">{visit.staff.name} | {visit.visitType} | {duration(visit.checkInAt, visit.checkOutAt)}</p>
+                <p className="mt-1 break-words text-xs text-slate-500">{visit.staff.name} | {visit.visitType}</p>
               </div>
-              <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
+              <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{statusLabel(visit)}</span>
+            </div>
+            <p className="mt-2 text-xs font-medium text-slate-500">{visitDate(visitStart(visit))}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <span>{time(visitStart(visit))}</span>
+              {visit.checkOutAt ? (
+                <>
+                  <span aria-hidden="true">→</span>
+                  <span>{time(visit.checkOutAt)}</span>
+                  <span className="text-slate-400" aria-hidden="true">•</span>
+                  <span>{visitDuration(visit)}</span>
+                </>
+              ) : isOngoingVisit(visit) ? (
+                <>
+                  <span className="text-slate-400" aria-hidden="true">•</span>
+                  <span className="text-blue-700 dark:text-blue-300">In Progress</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-400" aria-hidden="true">•</span>
+                  <span className="text-slate-500">End time not recorded</span>
+                </>
+              )}
             </div>
             <p className="mt-2 break-words text-sm">{notesSummary(visit)}</p>
-            <p className="mt-2 text-sm font-bold">{money(visit.recoveryAmount)}</p>
+            {visit.recoveryAmount > 0 && <p className="mt-2 text-sm font-bold">{money(visit.recoveryAmount)}</p>}
           </div>
         ))}
       </div>
@@ -430,7 +503,7 @@ function RouteMap({ visits, routePoints }: { visits: Visit[]; routePoints: Route
             const tone = visitTone(visit);
             return (
               <g key={visit.id}>
-                <title>{`${index + 1}. ${visit.customer.partyName} | ${time(visit.checkInAt)} | ${visit.visitType} | ${notesSummary(visit)} | ${duration(visit.checkInAt, visit.checkOutAt)}`}</title>
+                <title>{`${index + 1}. ${visit.customer.partyName} | ${visitDate(visitStart(visit))} | ${time(visitStart(visit))} | ${visit.visitType} | ${notesSummary(visit)} | ${visitDuration(visit)}`}</title>
                 <circle cx={point.x} cy={point.y} r="3.1" fill={tone.fill} stroke={tone.stroke} strokeWidth="0.55" />
                 <text x={point.x} y={point.y + 1.15} textAnchor="middle" className="fill-white text-[2.9px] font-bold">{index + 1}</text>
               </g>
@@ -451,7 +524,10 @@ function RouteMap({ visits, routePoints }: { visits: Visit[]; routePoints: Route
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white" style={{ backgroundColor: tone.fill }}>{index + 1}</span>
                     <div className="min-w-0">
                       <p className="font-semibold">{visit.customer.partyName}</p>
-                      <p className="text-xs text-slate-500">{time(visit.checkInAt)} - {time(visit.checkOutAt)} | {duration(visit.checkInAt, visit.checkOutAt)}</p>
+                      <p className="text-xs text-slate-500">{visitDate(visitStart(visit))}</p>
+                      <p className="text-xs text-slate-500">
+                        {time(visitStart(visit))} {visit.checkOutAt ? `- ${time(visit.checkOutAt)} | ${visitDuration(visit)}` : isOngoingVisit(visit) ? "| In Progress" : "| End time not recorded"}
+                      </p>
                       <p className="mt-1 text-xs font-semibold" style={{ color: tone.fill }}>{tone.label}</p>
                     </div>
                   </div>
@@ -491,23 +567,23 @@ function createProjector(points: { lat: number; lng: number }[]) {
 function productivityInsights(visits: Visit[]) {
   const completed = visits.filter((visit) => visit.checkOutAt);
   const averageDuration = completed.length
-    ? Math.round(completed.reduce((sum, visit) => sum + durationMinutes(visit.checkInAt, visit.checkOutAt), 0) / completed.length)
+    ? Math.round(completed.reduce((sum, visit) => sum + durationMinutes(visitStart(visit), visit.checkOutAt), 0) / completed.length)
     : 0;
   let longestIdleGap = 0;
   groupByStaff(visits.map((visit) => ({ ...visit, staffId: visit.staff.id }))).forEach((staffVisits) => {
-    const ordered = staffVisits.sort((a, b) => new Date(a.checkInAt).getTime() - new Date(b.checkInAt).getTime());
+    const ordered = staffVisits.sort((a, b) => new Date(visitStart(a)).getTime() - new Date(visitStart(b)).getTime());
     for (let index = 1; index < ordered.length; index += 1) {
       const previousOut = ordered[index - 1].checkOutAt;
       if (!previousOut) continue;
-      const gap = Math.max(0, Math.round((new Date(ordered[index].checkInAt).getTime() - new Date(previousOut).getTime()) / 60000));
+      const gap = Math.max(0, Math.floor((new Date(visitStart(ordered[index])).getTime() - new Date(previousOut).getTime()) / 60000));
       longestIdleGap = Math.max(longestIdleGap, gap);
     }
   });
   return {
     averageDuration,
     longestIdleGap,
-    firstVisit: visits[0]?.checkInAt ?? null,
-    lastVisit: visits[visits.length - 1]?.checkInAt ?? null,
+    firstVisit: visits[0] ? visitStart(visits[0]) : null,
+    lastVisit: visits.length > 0 ? visitStart(visits[visits.length - 1]) : null,
   };
 }
 
