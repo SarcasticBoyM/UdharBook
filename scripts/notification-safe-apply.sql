@@ -1,21 +1,48 @@
--- Run once in Supabase SQL Editor if Prisma migration deploy cannot reach the database.
--- Additive and idempotent: no notification or business records are deleted.
+-- UdharBook notification storage reconciliation.
+-- Additive, idempotent, and safe to run repeatedly in Supabase SQL Editor.
+-- This script does not drop, truncate, or reset any business or notification data.
 
 BEGIN;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'NotificationTargetType') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type typ
+    JOIN pg_namespace ns ON ns.oid = typ.typnamespace
+    WHERE ns.nspname = 'public' AND typ.typname = 'NotificationTargetType'
+  ) THEN
     CREATE TYPE "NotificationTargetType" AS ENUM ('SHOP', 'ROLE', 'USER');
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'NotificationRetryStatus') THEN
-    CREATE TYPE "NotificationRetryStatus" AS ENUM ('PENDING', 'PROCESSING', 'SENT', 'FAILED');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'NotificationPriority') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type typ
+    JOIN pg_namespace ns ON ns.oid = typ.typnamespace
+    WHERE ns.nspname = 'public' AND typ.typname = 'NotificationPriority'
+  ) THEN
     CREATE TYPE "NotificationPriority" AS ENUM ('CRITICAL', 'IMPORTANT', 'NORMAL');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type typ
+    JOIN pg_namespace ns ON ns.oid = typ.typnamespace
+    WHERE ns.nspname = 'public' AND typ.typname = 'NotificationRetryStatus'
+  ) THEN
+    CREATE TYPE "NotificationRetryStatus" AS ENUM ('PENDING', 'PROCESSING', 'SENT', 'FAILED');
   END IF;
 END
 $$;
+
+ALTER TYPE "NotificationTargetType" ADD VALUE IF NOT EXISTS 'SHOP';
+ALTER TYPE "NotificationTargetType" ADD VALUE IF NOT EXISTS 'ROLE';
+ALTER TYPE "NotificationTargetType" ADD VALUE IF NOT EXISTS 'USER';
+ALTER TYPE "NotificationPriority" ADD VALUE IF NOT EXISTS 'CRITICAL';
+ALTER TYPE "NotificationPriority" ADD VALUE IF NOT EXISTS 'IMPORTANT';
+ALTER TYPE "NotificationPriority" ADD VALUE IF NOT EXISTS 'NORMAL';
+ALTER TYPE "NotificationRetryStatus" ADD VALUE IF NOT EXISTS 'PENDING';
+ALTER TYPE "NotificationRetryStatus" ADD VALUE IF NOT EXISTS 'PROCESSING';
+ALTER TYPE "NotificationRetryStatus" ADD VALUE IF NOT EXISTS 'SENT';
+ALTER TYPE "NotificationRetryStatus" ADD VALUE IF NOT EXISTS 'FAILED';
+
+COMMIT;
+BEGIN;
 
 CREATE TABLE IF NOT EXISTS "Notification" (
   "id" TEXT NOT NULL,
@@ -43,9 +70,6 @@ ALTER TABLE "Notification"
   ADD COLUMN IF NOT EXISTS "userId" TEXT,
   ADD COLUMN IF NOT EXISTS "roleTarget" TEXT,
   ADD COLUMN IF NOT EXISTS "targetType" "NotificationTargetType" NOT NULL DEFAULT 'SHOP',
-  ADD COLUMN IF NOT EXISTS "type" TEXT,
-  ADD COLUMN IF NOT EXISTS "title" TEXT,
-  ADD COLUMN IF NOT EXISTS "message" TEXT,
   ADD COLUMN IF NOT EXISTS "entityType" TEXT,
   ADD COLUMN IF NOT EXISTS "entityId" TEXT,
   ADD COLUMN IF NOT EXISTS "actionUrl" TEXT,
@@ -60,7 +84,7 @@ ALTER TABLE "Notification"
 UPDATE "Notification"
 SET "idempotencyKey" =
   "shopId" || ':' ||
-  COALESCE("type", 'UNKNOWN') || ':' ||
+  "type" || ':' ||
   COALESCE(NULLIF("entityType", ''), 'GENERAL') || ':' ||
   COALESCE(NULLIF("entityId", ''), 'NONE') || ':' ||
   CASE
@@ -69,6 +93,10 @@ SET "idempotencyKey" =
     ELSE 'SHOP'
   END
 WHERE "idempotencyKey" IS NULL;
+
+-- Superseded by recipient-aware idempotency. This only removes the obsolete
+-- uniqueness rule; it does not remove notification rows.
+DROP INDEX IF EXISTS "Notification_shopId_type_entityType_entityId_key";
 
 CREATE UNIQUE INDEX IF NOT EXISTS "Notification_idempotencyKey_key"
   ON "Notification"("idempotencyKey");
@@ -104,6 +132,16 @@ CREATE TABLE IF NOT EXISTS "NotificationRetry" (
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "NotificationRetry_pkey" PRIMARY KEY ("id")
 );
+
+ALTER TABLE "NotificationRetry"
+  ADD COLUMN IF NOT EXISTS "targetUserId" TEXT,
+  ADD COLUMN IF NOT EXISTS "targetRole" TEXT,
+  ADD COLUMN IF NOT EXISTS "retryCount" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "maxRetries" INTEGER NOT NULL DEFAULT 4,
+  ADD COLUMN IF NOT EXISTS "lastError" TEXT,
+  ADD COLUMN IF NOT EXISTS "status" "NotificationRetryStatus" NOT NULL DEFAULT 'PENDING',
+  ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "NotificationRetry_idempotencyKey_key"
   ON "NotificationRetry"("idempotencyKey");
@@ -145,9 +183,40 @@ $$;
 
 COMMIT;
 
--- Safe verification result: expected tables and columns only, no message content.
-SELECT table_name, column_name, data_type
-FROM information_schema.columns
-WHERE table_schema = 'public'
-  AND table_name IN ('Notification', 'NotificationRetry')
-ORDER BY table_name, ordinal_position;
+-- Verification summary. Every missing_* value must be 0.
+WITH required_tables(name) AS (
+  VALUES ('Notification'), ('NotificationRetry')
+),
+required_columns(table_name, column_name) AS (
+  VALUES
+    ('Notification', 'id'), ('Notification', 'shopId'), ('Notification', 'userId'),
+    ('Notification', 'roleTarget'), ('Notification', 'targetType'), ('Notification', 'type'),
+    ('Notification', 'title'), ('Notification', 'message'), ('Notification', 'entityType'),
+    ('Notification', 'entityId'), ('Notification', 'actionUrl'), ('Notification', 'metadata'),
+    ('Notification', 'idempotencyKey'), ('Notification', 'priority'), ('Notification', 'isRead'),
+    ('Notification', 'readByUserIds'), ('Notification', 'deletedByUserIds'), ('Notification', 'createdAt'),
+    ('NotificationRetry', 'id'), ('NotificationRetry', 'shopId'), ('NotificationRetry', 'eventType'),
+    ('NotificationRetry', 'entityType'), ('NotificationRetry', 'entityId'),
+    ('NotificationRetry', 'targetUserId'), ('NotificationRetry', 'targetRole'),
+    ('NotificationRetry', 'idempotencyKey'), ('NotificationRetry', 'payload'),
+    ('NotificationRetry', 'retryCount'), ('NotificationRetry', 'maxRetries'),
+    ('NotificationRetry', 'nextRetryAt'), ('NotificationRetry', 'lastError'),
+    ('NotificationRetry', 'status'), ('NotificationRetry', 'createdAt'),
+    ('NotificationRetry', 'updatedAt')
+)
+SELECT
+  (SELECT COUNT(*) FROM required_tables required
+    WHERE NOT EXISTS (
+      SELECT 1 FROM information_schema.tables actual
+      WHERE actual.table_schema = 'public' AND actual.table_name = required.name
+    )) AS missing_tables,
+  (SELECT COUNT(*) FROM required_columns required
+    WHERE NOT EXISTS (
+      SELECT 1 FROM information_schema.columns actual
+      WHERE actual.table_schema = 'public'
+        AND actual.table_name = required.table_name
+        AND actual.column_name = required.column_name
+    )) AS missing_columns;
+
+SELECT "id", "type", "priority", "createdAt" FROM "Notification" LIMIT 1;
+SELECT "id", "eventType", "status", "nextRetryAt" FROM "NotificationRetry" LIMIT 1;

@@ -7,6 +7,11 @@ import { requireShopId } from "@/lib/tenant";
 import { canAssignTasks, normalizeFixedRole } from "@/lib/operational-roles";
 import { logger } from "@/lib/logger";
 import {
+  checkNotificationStorage,
+  notificationStorageAdminMessage,
+  type NotificationStorageReadiness,
+} from "@/lib/notification-storage";
+import {
   generateTaskOverdueNotifications,
   notificationEntityAvailable,
   processNotificationRetries,
@@ -30,17 +35,27 @@ const runtimeRecipientRules = {
   CHEQUE_BOUNCED: "Same-shop Shop Admin, Account Staff, Sales Person Cum Accounts, and relevant assigned user",
 };
 
-function notificationApiError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("NotificationPriority") ||
-    message.includes("NotificationRetry") ||
-    message.includes("Notification") && message.includes("does not exist") ||
-    message.includes("column") && message.includes("priority")
-  ) {
-    return "Notification storage is not ready. Apply the pending notification database migrations.";
-  }
+function notificationApiError() {
   return "Notifications could not be loaded. Please retry.";
+}
+
+function canSeeStorageDiagnostics(role: string) {
+  const normalizedRole = String(normalizeFixedRole(role));
+  return normalizedRole === "SHOP_ADMIN" || normalizedRole === "SUPER_ADMIN";
+}
+
+function storageErrorResponse(readiness: NotificationStorageReadiness, role: string) {
+  const admin = canSeeStorageDiagnostics(role);
+  return {
+    success: false,
+    notifications: [],
+    unreadCount: 0,
+    criticalUnreadCount: 0,
+    error: admin
+      ? notificationStorageAdminMessage(readiness)
+      : "Notifications are temporarily unavailable. Please retry shortly.",
+    ...(admin ? { storage: readiness } : {}),
+  };
 }
 
 function visibleWhere(shopId: string, userId: string, role: string): Prisma.NotificationWhereInput {
@@ -72,21 +87,41 @@ function unreadWhere(userId: string): Prisma.NotificationWhereInput {
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const forceStorageCheck = searchParams.get("storageCheck") === "force";
+  const debugRequested = searchParams.get("debug") === "runtime";
+  const readiness = await checkNotificationStorage({ force: forceStorageCheck || debugRequested });
+  if (!readiness.ready) {
+    if (canSeeStorageDiagnostics(session.role)) {
+      logger.error("notification_storage_not_ready", {
+        event: "notification_storage_not_ready",
+        userId: session.id,
+        role: String(normalizeFixedRole(session.role)),
+        shopId: session.shopId,
+        prismaCode: readiness.prismaCode,
+        issues: readiness.issues,
+        failureReason: readiness.failureReason,
+        checkedAt: readiness.checkedAt,
+      });
+    }
+    return NextResponse.json(storageErrorResponse(readiness, session.role), { status: 503 });
+  }
+
   if (session.role === "SUPER_ADMIN") {
     return NextResponse.json({
       success: true,
       notifications: [],
       unreadCount: 0,
       criticalUnreadCount: 0,
+      ...(debugRequested ? { storage: readiness } : {}),
     });
   }
 
   const shopId = requireShopId(request, session);
-  const { searchParams } = new URL(request.url);
   const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? 20)));
   const visible = visibleWhere(shopId, session.id, session.role);
   const resolveId = searchParams.get("resolveId");
-  const debugRequested = searchParams.get("debug") === "runtime";
 
   try {
     await generateTaskOverdueNotifications(shopId);
@@ -128,6 +163,7 @@ export async function GET(request: Request) {
             available: false,
             reason: "No persisted push subscription store or server-side VAPID delivery service is configured.",
           },
+          storage: readiness,
           apiError: null,
         },
       });
@@ -199,15 +235,18 @@ export async function GET(request: Request) {
       notifications,
     });
   } catch (error) {
-    const safeError = notificationApiError(error);
-    logger.error("notification_api_get_failed", {
-      event: "notification_api_get_failed",
-      shopId,
-      userId: session.id,
-      role: session.role,
-      debugRequested,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const safeError = notificationApiError();
+    if (canSeeStorageDiagnostics(session.role)) {
+      logger.error("notification_api_get_failed", {
+        event: "notification_api_get_failed",
+        shopId,
+        userId: session.id,
+        role: session.role,
+        debugRequested,
+        prismaCode: error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return NextResponse.json({
       success: false,
       notifications: [],
@@ -229,6 +268,7 @@ export async function GET(request: Request) {
                 available: false,
                 reason: "No persisted push subscription store or server-side VAPID delivery service is configured.",
               },
+              storage: await checkNotificationStorage({ force: true }),
               apiError: safeError,
             },
           }
@@ -240,7 +280,25 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role === "SUPER_ADMIN") return NextResponse.json({ ok: true, unreadCount: 0 });
+  const readiness = await checkNotificationStorage();
+  if (!readiness.ready) {
+    if (canSeeStorageDiagnostics(session.role)) {
+      logger.error("notification_storage_not_ready", {
+        event: "notification_storage_not_ready",
+        userId: session.id,
+        role: String(normalizeFixedRole(session.role)),
+        shopId: session.shopId,
+        prismaCode: readiness.prismaCode,
+        issues: readiness.issues,
+        failureReason: readiness.failureReason,
+        checkedAt: readiness.checkedAt,
+      });
+    }
+    return NextResponse.json(storageErrorResponse(readiness, session.role), { status: 503 });
+  }
+  if (session.role === "SUPER_ADMIN") {
+    return NextResponse.json({ success: true, ok: true, unreadCount: 0, criticalUnreadCount: 0 });
+  }
 
   const shopId = requireShopId(request, session);
   try {
@@ -299,14 +357,17 @@ export async function PATCH(request: Request) {
   } catch (error) {
     const safeError = error instanceof z.ZodError
       ? "Invalid notification action."
-      : notificationApiError(error);
-    logger.error("notification_api_patch_failed", {
-      event: "notification_api_patch_failed",
-      shopId,
-      userId: session.id,
-      role: session.role,
-      error: error instanceof Error ? error.message : String(error),
-    });
+      : notificationApiError();
+    if (canSeeStorageDiagnostics(session.role)) {
+      logger.error("notification_api_patch_failed", {
+        event: "notification_api_patch_failed",
+        shopId,
+        userId: session.id,
+        role: session.role,
+        prismaCode: error instanceof Prisma.PrismaClientKnownRequestError ? error.code : null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return NextResponse.json({ success: false, error: safeError }, {
       status: error instanceof z.ZodError ? 400 : 503,
     });

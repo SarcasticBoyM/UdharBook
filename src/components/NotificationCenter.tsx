@@ -184,12 +184,14 @@ export function NotificationCenter() {
     }
   }, []);
 
-  const loadNotifications = useCallback(async (showNew = true) => {
+  const loadNotifications = useCallback(async (showNew = true, forceStorageCheck = false) => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     setLoadingNotifications(true);
     try {
-      const response = await fetch("/api/notifications?limit=50", { credentials: "same-origin", cache: "no-store" });
+      const search = new URLSearchParams({ limit: "50" });
+      if (forceStorageCheck) search.set("storageCheck", "force");
+      const response = await fetch(`/api/notifications?${search.toString()}`, { credentials: "same-origin", cache: "no-store" });
       const data = await response.json().catch(() => ({})) as Partial<NotificationResponse>;
       if (!response.ok || data.success === false) {
         setLoadError(data.error ?? "Notifications could not be loaded. Please retry.");
@@ -448,7 +450,7 @@ export function NotificationCenter() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => void loadNotifications(false)}
+                    onClick={() => void loadNotifications(false, true)}
                     disabled={loadingNotifications}
                     className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-md bg-red-700 px-3 font-semibold text-white disabled:opacity-60"
                   >
