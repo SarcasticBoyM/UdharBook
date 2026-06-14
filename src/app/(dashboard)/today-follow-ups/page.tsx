@@ -520,7 +520,20 @@ export default function TodayFollowUpsPage() {
   const [staffOptions, setStaffOptions] = useState<StaffOption[]>([]);
   const [linkedFollowUpId, setLinkedFollowUpId] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLElement | null>(null);
   const notifiedIds = useRef<Set<string>>(new Set());
+
+  const scrollListElementIntoView = useCallback((element: HTMLElement | null) => {
+    const list = listRef.current;
+    if (!list || !element) return;
+    const listRect = list.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    if (elementRect.top < listRect.top) {
+      list.scrollBy({ top: elementRect.top - listRect.top, behavior: "smooth" });
+    } else if (elementRect.bottom > listRect.bottom) {
+      list.scrollBy({ top: elementRect.bottom - listRect.bottom, behavior: "smooth" });
+    }
+  }, []);
 
   useEffect(() => {
     setLinkedFollowUpId(new URLSearchParams(window.location.search).get("followUpId"));
@@ -549,9 +562,9 @@ export default function TodayFollowUpsPage() {
     if (!linked) return;
     setSelectedId(linked.id);
     window.setTimeout(() => {
-      document.getElementById(`scheduled-follow-up-${linkedFollowUpId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      scrollListElementIntoView(document.getElementById(`scheduled-follow-up-${linkedFollowUpId}`));
     }, 100);
-  }, [linkedFollowUpId, scheduled]);
+  }, [linkedFollowUpId, scheduled, scrollListElementIntoView]);
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
     if (reset || data.scheduled.length > 0) setScheduled(data.scheduled);
@@ -594,6 +607,45 @@ export default function TodayFollowUpsPage() {
       }
     },
     [batchTag, debouncedQuery, filter, mergeQueue, sort]
+  );
+
+  const refreshAffectedCustomer = useCallback(
+    async (customerId: string) => {
+      const params = new URLSearchParams({
+        take: String(Math.max(PAGE_SIZE, pending.length)),
+        skip: "0",
+        sort,
+        filter,
+        search: debouncedQuery,
+      });
+      if (batchTag.trim()) params.set("batchTag", batchTag.trim());
+      const res = await fetch(`/api/today-follow-ups?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as TodayResponse;
+      const nextScheduled = data.scheduled.find((item) => item.id === customerId);
+      const nextPending = data.pending.find((item) => item.id === customerId);
+      const nextDone = data.done.find((item) => item.id === customerId);
+
+      setScheduled((current) => {
+        const withoutCustomer = current.filter((item) => item.id !== customerId);
+        return nextScheduled ? [nextScheduled, ...withoutCustomer] : withoutCustomer;
+      });
+      setPending((current) => {
+        if (!nextPending) return current.filter((item) => item.id !== customerId);
+        const found = current.some((item) => item.id === customerId);
+        return found
+          ? current.map((item) => (item.id === customerId ? nextPending : item))
+          : [nextPending, ...current];
+      });
+      setDone((current) => {
+        const withoutCustomer = current.filter((item) => item.id !== customerId);
+        return nextDone ? [nextDone, ...withoutCustomer] : withoutCustomer;
+      });
+      setSummary(data.summary);
+      setSections(data.sections);
+      setHasMore(data.pagination.hasMore);
+    },
+    [batchTag, debouncedQuery, filter, pending.length, sort]
   );
 
   useEffect(() => {
@@ -651,6 +703,11 @@ export default function TodayFollowUpsPage() {
     [scheduled, scheduledFilter]
   );
 
+  const queueOrder = useMemo(
+    () => [...visibleScheduled.map((customer) => customer.id), ...pending.map((customer) => customer.id), ...done.map((customer) => customer.id)],
+    [done, pending, visibleScheduled]
+  );
+
   const playAlert = useCallback(() => {
     if (!soundEnabled) return;
     const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -687,13 +744,17 @@ export default function TodayFollowUpsPage() {
         notification.onclick = () => {
           window.focus();
           setSelectedId(reminder.customerId);
+          window.setTimeout(() => {
+            const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(reminder.customerId)}"]`) ?? null;
+            scrollListElementIntoView(target);
+          }, 100);
         };
       }
     };
     checkDue();
     const timer = window.setInterval(checkDue, 60000);
     return () => window.clearInterval(timer);
-  }, [playAlert]);
+  }, [playAlert, scrollListElementIntoView]);
 
   const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0) => {
     const now = new Date().toISOString();
@@ -762,6 +823,7 @@ export default function TodayFollowUpsPage() {
   };
 
   const cancelScheduled = async (followUpId: string) => {
+    const customerId = scheduled.find((customer) => customer.scheduledFollowUp.id === followUpId)?.id;
     const response = await fetch("/api/follow-ups", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -769,8 +831,24 @@ export default function TodayFollowUpsPage() {
     });
     if (!response.ok) throw new Error("Could not cancel follow-up");
     setScheduled((current) => current.filter((customer) => customer.scheduledFollowUp.id !== followUpId));
-    await loadPage(0, true);
+    if (customerId) await refreshAffectedCustomer(customerId);
   };
+
+  const handleSaved = useCallback(
+    async (customerId: string) => {
+      const currentIndex = queueOrder.indexOf(customerId);
+      const nextId = queueOrder[currentIndex + 1] ?? queueOrder[currentIndex - 1] ?? null;
+      await refreshAffectedCustomer(customerId);
+      setSelectedId(nextId);
+      if (nextId) {
+        window.setTimeout(() => {
+          const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(nextId)}"]`) ?? null;
+          scrollListElementIntoView(target);
+        }, 0);
+      }
+    },
+    [queueOrder, refreshAffectedCustomer, scrollListElementIntoView]
+  );
 
   return (
     <div className="mx-auto w-full max-w-none pb-24">
@@ -877,8 +955,8 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <div className="mt-4 grid w-full min-w-0 gap-5 xl:grid-cols-[minmax(680px,68fr)_minmax(320px,32fr)]">
-        <main className="min-w-0 space-y-5">
+      <div className="mt-4 grid w-full min-w-0 gap-5 overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)] lg:items-start">
+        <main ref={listRef} className="min-w-0 space-y-5 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
           <ScheduledQueueSection
             customers={visibleScheduled}
             total={scheduled.length}
@@ -992,10 +1070,7 @@ export default function TodayFollowUpsPage() {
           staffOptions={staffOptions}
           onClose={() => setSelectedId(null)}
           onOptimistic={applyOptimisticAction}
-          onSaved={() => {
-            setSelectedId(null);
-            loadPage(0, true);
-          }}
+          onSaved={handleSaved}
         />
       </div>
     </div>
@@ -1253,6 +1328,7 @@ function ScheduledFollowUpCard({
   return (
     <article
       id={`scheduled-follow-up-${scheduled.id}`}
+      data-customer-id={customer.id}
       onClick={onOpen}
       className={cn(
         "min-w-0 cursor-pointer overflow-hidden rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
@@ -1397,6 +1473,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
   const status = statusLabel(customer.optimisticStatus ?? latest?.status ?? customer.status);
   return (
     <article
+      data-customer-id={customer.id}
       onClick={onOpen}
       className={cn(
         "grid min-h-20 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-3 transition [contain-intrinsic-size:96px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_150px_150px_160px]",
@@ -1519,6 +1596,7 @@ function CustomerCard({
 
   return (
     <article
+      data-customer-id={customer.id}
       onClick={onOpen}
       onTouchStart={(event) => {
         const touch = event.touches[0];
@@ -1629,6 +1707,7 @@ function DoneCard({ customer, onOpen }: { customer: QueueCustomer; onOpen: () =>
   return (
     <button
       type="button"
+      data-customer-id={customer.id}
       onClick={onOpen}
       className="w-full rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-left shadow-sm dark:border-emerald-900 dark:bg-emerald-950/30"
     >
@@ -1678,7 +1757,7 @@ function ActionPanel({
   staffOptions: StaffOption[];
   onClose: () => void;
   onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number) => void;
-  onSaved: () => void;
+  onSaved: (customerId: string) => Promise<void>;
 }) {
   const [primaryAction, setPrimaryAction] = useState<PrimaryFollowUpAction>("PAYMENT_UPDATE");
   const [status, setStatus] = useState<QueueStatus>("CONTACTED");
@@ -1719,7 +1798,7 @@ function ActionPanel({
 
   if (!customer) {
     return (
-      <aside className="hidden w-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 xl:block">
+      <aside className="hidden w-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 lg:block">
         Select a party to record the next follow-up action.
       </aside>
     );
@@ -1861,16 +1940,16 @@ function ActionPanel({
         }),
       });
       if (!res.ok) throw new Error("Could not save follow-up");
-      onSaved();
+      await onSaved(customer.id);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <aside className="fixed inset-0 z-40 overflow-y-auto bg-black/40 p-3 xl:sticky xl:top-5 xl:z-0 xl:block xl:h-[calc(100vh-2.5rem)] xl:w-full xl:min-w-0 xl:overflow-visible xl:bg-transparent xl:p-0">
-      <div className="ml-auto flex min-h-full w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 xl:h-full xl:min-h-0 xl:max-w-none xl:overflow-hidden xl:shadow-sm">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+    <aside className="fixed inset-0 z-40 bg-black/40 lg:sticky lg:top-4 lg:z-0 lg:h-[calc(100dvh-2rem)] lg:w-full lg:min-w-0 lg:bg-transparent">
+      <div className="ml-auto flex h-[100dvh] w-full max-w-lg flex-col overflow-hidden border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 lg:h-full lg:min-h-0 lg:max-w-none lg:rounded-xl lg:shadow-sm">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
           <div>
             <p className="text-xs font-bold uppercase text-brand-600 dark:text-brand-300">What happened?</p>
             <h2 className="mt-1 text-xl font-bold">{customer.partyName}</h2>
@@ -2297,7 +2376,7 @@ function ActionPanel({
             </div>
           </div>
 
-          <div className="sticky bottom-0 grid grid-cols-[1fr_auto] gap-2 border-t border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-[1fr_auto] gap-2 border-t border-slate-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-[0_-8px_20px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
             <button
               type="submit"
               disabled={saving}
