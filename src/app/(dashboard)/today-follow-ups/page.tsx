@@ -105,6 +105,17 @@ type ScheduledQueueCustomer = QueueCustomer & {
     manualReminder: boolean;
     promiseToPay: boolean;
     overdue: boolean;
+    task: {
+      id: string;
+      taskType: string;
+      taskTypeLabel: string;
+      status: string;
+      priority: string;
+      dueDate: string;
+      notes: string | null;
+      progressNotes: string | null;
+      assignedTo: string;
+    } | null;
   };
 };
 
@@ -158,7 +169,7 @@ type FilterKey =
   | "not_answering"
   | "urgent";
 
-type ScheduledFilterKey = "all" | "today" | "upcoming" | "overdue" | "promise" | "reminder";
+type ScheduledFilterKey = "all" | "today" | "upcoming" | "overdue" | "promise" | "reminder" | "payment" | "order" | "task_linked";
 
 const PAGE_SIZE = 30;
 const HIGH_AMOUNT = 50000;
@@ -197,6 +208,9 @@ const SCHEDULED_FILTERS: { value: ScheduledFilterKey; label: string }[] = [
   { value: "today", label: "Due Today" },
   { value: "overdue", label: "Overdue" },
   { value: "promise", label: "Promise To Pay" },
+  { value: "payment", label: "Payment Follow-up" },
+  { value: "order", label: "Order Follow-up" },
+  { value: "task_linked", label: "Task-linked" },
 ];
 
 const STATUS_OPTIONS: { value: QueueStatus; label: string; tone: string }[] = [
@@ -471,6 +485,9 @@ function matchesScheduledFilter(item: ScheduledQueueCustomer, filter: ScheduledF
   if (filter === "overdue") return isPastDue(scheduledAt);
   if (filter === "promise") return item.scheduledFollowUp.promiseToPay;
   if (filter === "reminder") return item.scheduledFollowUp.manualReminder || item.scheduledFollowUp.reminderEnabled;
+  if (filter === "payment") return item.scheduledFollowUp.followUpType === "PAYMENT_FOLLOW_UP";
+  if (filter === "order") return isOrderFollowUp(item.scheduledFollowUp.followUpType);
+  if (filter === "task_linked") return Boolean(item.scheduledFollowUp.task);
   return true;
 }
 
@@ -509,6 +526,7 @@ export default function TodayFollowUpsPage() {
   const [sort, setSort] = useState<SortKey>("priority_desc");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [scheduledFilter, setScheduledFilter] = useState<ScheduledFilterKey>("all");
+  const [scheduledAssigneeId, setScheduledAssigneeId] = useState("");
   const [scheduledCollapsed, setScheduledCollapsed] = useState(false);
   const [lightweightMode, setLightweightMode] = useState(false);
   const [totalActiveCustomers, setTotalActiveCustomers] = useState(0);
@@ -770,8 +788,24 @@ export default function TodayFollowUpsPage() {
   );
 
   const visibleScheduled = useMemo(
-    () => scheduled.filter((customer) => matchesScheduledFilter(customer, scheduledFilter)),
-    [scheduled, scheduledFilter]
+    () => scheduled.filter((customer) => {
+      if (!matchesScheduledFilter(customer, scheduledFilter)) return false;
+      if (scheduledAssigneeId && customer.scheduledFollowUp.assignedToId !== scheduledAssigneeId) return false;
+      if (!debouncedQuery) return true;
+      const task = customer.scheduledFollowUp.task;
+      const haystack = [
+        customer.partyName,
+        customer.contactNumber,
+        customer.batchTag,
+        customer.scheduledFollowUp.notes,
+        customer.scheduledFollowUp.reminderNotes,
+        task?.taskTypeLabel,
+        task?.notes,
+        task?.progressNotes,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(debouncedQuery.toLowerCase());
+    }),
+    [debouncedQuery, scheduled, scheduledAssigneeId, scheduledFilter]
   );
 
   const queueOrder = useMemo(
@@ -903,6 +937,18 @@ export default function TodayFollowUpsPage() {
     if (!response.ok) throw new Error("Could not cancel follow-up");
     setScheduled((current) => current.filter((customer) => customer.scheduledFollowUp.id !== followUpId));
     if (customerId) await refreshAffectedCustomer(customerId);
+  };
+
+  const updateLinkedTask = async (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => {
+    const task = customer.scheduledFollowUp.task;
+    if (!task) return;
+    const response = await fetch("/api/tasks", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: task.id, status }),
+    });
+    if (!response.ok) throw new Error("Could not update linked task");
+    await refreshAffectedCustomer(customer.id);
   };
 
   const handleSaved = useCallback(
@@ -1037,10 +1083,14 @@ export default function TodayFollowUpsPage() {
             filter={scheduledFilter}
             collapsed={scheduledCollapsed}
             onFilterChange={setScheduledFilter}
+            assignedToId={scheduledAssigneeId}
+            staffOptions={staffOptions}
+            onAssignedToChange={setScheduledAssigneeId}
             onToggle={() => setScheduledCollapsed((value) => !value)}
             onSelect={openCustomer}
             onQuickSave={quickSave}
             onCancel={cancelScheduled}
+            onTaskStatus={updateLinkedTask}
           />
 
           {loading ? (
@@ -1185,10 +1235,14 @@ function ScheduledQueueSection({
   filter,
   collapsed,
   onFilterChange,
+  assignedToId,
+  staffOptions,
+  onAssignedToChange,
   onToggle,
   onSelect,
   onQuickSave,
   onCancel,
+  onTaskStatus,
 }: {
   customers: ScheduledQueueCustomer[];
   total: number;
@@ -1197,10 +1251,14 @@ function ScheduledQueueSection({
   filter: ScheduledFilterKey;
   collapsed: boolean;
   onFilterChange: (filter: ScheduledFilterKey) => void;
+  assignedToId: string;
+  staffOptions: StaffOption[];
+  onAssignedToChange: (assignedToId: string) => void;
   onToggle: () => void;
   onSelect: (id: string) => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
   onCancel: (followUpId: string) => Promise<void>;
+  onTaskStatus: (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => Promise<void>;
 }) {
   const grouped = {
     overdue: customers.filter((customer) => scheduledGroupFor(customer) === "overdue"),
@@ -1243,7 +1301,8 @@ function ScheduledQueueSection({
 
       {!collapsed && (
         <>
-          <div className="mt-5 overflow-x-auto pb-1">
+          <div className="mt-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="overflow-x-auto pb-1">
             <div className="inline-flex min-w-max max-w-full rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
               {SCHEDULED_FILTERS.map((item) => (
                 <button
@@ -1261,6 +1320,18 @@ function ScheduledQueueSection({
                 </button>
               ))}
             </div>
+            </div>
+            {staffOptions.length > 0 && (
+              <select
+                value={assignedToId}
+                onChange={(event) => onAssignedToChange(event.target.value)}
+                aria-label="Filter scheduled follow-ups by assigned staff"
+                className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+              >
+                <option value="">All assigned staff</option>
+                {staffOptions.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+              </select>
+            )}
           </div>
 
           {customers.length === 0 ? (
@@ -1283,6 +1354,7 @@ function ScheduledQueueSection({
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
+                onTaskStatus={onTaskStatus}
               />
               <ScheduledGroup
                 title="Due Today"
@@ -1292,6 +1364,7 @@ function ScheduledQueueSection({
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
+                onTaskStatus={onTaskStatus}
               />
               <ScheduledGroup
                 title="Upcoming"
@@ -1301,6 +1374,7 @@ function ScheduledQueueSection({
                 onSelect={onSelect}
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
+                onTaskStatus={onTaskStatus}
               />
             </div>
           )}
@@ -1332,6 +1406,7 @@ function ScheduledGroup({
   onSelect,
   onQuickSave,
   onCancel,
+  onTaskStatus,
 }: {
   title: string;
   description: string;
@@ -1340,6 +1415,7 @@ function ScheduledGroup({
   onSelect: (id: string) => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
   onCancel: (followUpId: string) => Promise<void>;
+  onTaskStatus: (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => Promise<void>;
 }) {
   if (customers.length === 0) return null;
   return (
@@ -1360,6 +1436,7 @@ function ScheduledGroup({
             onOpen={() => onSelect(customer.id)}
             onQuickSave={onQuickSave}
             onCancel={onCancel}
+            onTaskStatus={onTaskStatus}
           />
         ))}
       </div>
@@ -1373,12 +1450,14 @@ function ScheduledFollowUpCard({
   onOpen,
   onQuickSave,
   onCancel,
+  onTaskStatus,
 }: {
   customer: ScheduledQueueCustomer;
   active: boolean;
   onOpen: () => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
   onCancel: (followUpId: string) => Promise<void>;
+  onTaskStatus: (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => Promise<void>;
 }) {
   const scheduled = customer.scheduledFollowUp;
   const dueAt = new Date(scheduled.scheduledAt);
@@ -1388,6 +1467,7 @@ function ScheduledFollowUpCard({
   const notes = scheduled.notes || scheduled.customerResponse || scheduled.reminderNotes || latest?.notes || customer.notes || "No notes added.";
   const isPromise = Boolean(scheduled.promiseToPay);
   const isReminder = Boolean(scheduled.manualReminder || scheduled.reminderEnabled);
+  const linkedTask = scheduled.task;
   const stateLabel = overdue ? "Overdue" : group === "today" ? "Due Today" : "Upcoming";
   const stateTone = overdue ? "red" : group === "today" ? "amber" : "blue";
   const cardTone =
@@ -1425,6 +1505,7 @@ function ScheduledFollowUpCard({
             {isPromise && <Badge tone="violet">Promise to pay</Badge>}
             {isReminder && <Badge tone="blue">Reminder set</Badge>}
             <Badge tone={isOrderFollowUp(scheduled.followUpType) ? "amber" : "slate"}>{followUpTypeLabel(scheduled.followUpType)}</Badge>
+            {linkedTask && <Badge tone="violet">Task • {linkedTask.taskTypeLabel}</Badge>}
           </div>
         </div>
 
@@ -1447,6 +1528,11 @@ function ScheduledFollowUpCard({
               <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 By {scheduled.assignedTo || "Staff"}
               </span>
+              {linkedTask && (
+                <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  Task: {statusLabel(linkedTask.status)}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -1457,8 +1543,35 @@ function ScheduledFollowUpCard({
             {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
           <QuickButton label="Open Follow-up" onClick={onOpen} />
-          <QuickButton label="Quick Complete" onClick={() => onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.", scheduled.id)} />
-          {isOrderFollowUp(scheduled.followUpType) && <QuickButton label="Cancel" onClick={() => onCancel(scheduled.id)} />}
+          {linkedTask && (
+            <Link
+              href={`/tasks?taskId=${encodeURIComponent(linkedTask.id)}`}
+              onClick={(event) => event.stopPropagation()}
+              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              Open Task
+            </Link>
+          )}
+          <Link
+            href={`/customers/${customer.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            Open Customer
+          </Link>
+          {linkedTask?.status === "PENDING" && <QuickButton label="Start Task" onClick={() => onTaskStatus(customer, "IN_PROGRESS")} />}
+          <QuickButton
+            label={linkedTask ? "Mark Completed" : "Quick Complete"}
+            onClick={() => linkedTask
+              ? onTaskStatus(customer, "COMPLETED")
+              : onQuickSave(customer, "COMPLETED", "Completed scheduled follow-up.", scheduled.id)}
+          />
+          {(linkedTask || isOrderFollowUp(scheduled.followUpType)) && (
+            <QuickButton
+              label="Cancel"
+              onClick={() => linkedTask ? onTaskStatus(customer, "CANCELLED") : onCancel(scheduled.id)}
+            />
+          )}
         </div>
       </div>
       <div className="mt-4 flex min-w-0 items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
@@ -2046,12 +2159,12 @@ function ActionPanel({
                 seed={{
                   customerId: customer.id,
                   customerName: customer.partyName,
-                  taskType: "FOLLOW_UP_VISIT",
+                  taskType: orderFollowUp ? "ORDER_FOLLOW_UP" : "PAYMENT_COLLECTION",
                   notes: `Follow up with ${customer.partyName}\nOutstanding: ${formatCurrency(customer.outstandingBalance)}\n${latest?.notes ?? customer.notes ?? ""}`.trim(),
                   priority: derivedPriority(customer),
-                  dueDate: reminderInputFromDate(customer.nextFollowupDate) || undefined,
+                  dueDate: reminderInputFromDate(scheduledSource?.scheduledAt ?? customer.nextFollowupDate) || undefined,
                   sourceEntityType: "FOLLOW_UP",
-                  sourceEntityId: latest?.id,
+                  sourceEntityId: scheduledSource?.id ?? latest?.id,
                   referenceUrl: `/customers/${customer.id}`,
                 }}
                 className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"

@@ -418,6 +418,9 @@ model Task {
   status           String    @default("PENDING")
   dueDate          DateTime
   completedAt      DateTime?
+  linkedFollowUpId String?   @unique
+  linkedFollowUp   FollowUp? @relation("TaskLinkedFollowUp", fields: [linkedFollowUpId], references: [id], onDelete: SetNull)
+  idempotencyKey   String?   @unique
   sourceEntityType String?
   sourceEntityId   String?
   referenceUrl     String?
@@ -429,6 +432,7 @@ model Task {
   @@index([shopId, assignedById, createdAt])
   @@index([shopId, customerId, createdAt])
   @@index([shopId, sourceEntityType, sourceEntityId])
+  @@index([shopId, linkedFollowUpId])
 }
 
 model UserRoleAssignment {
@@ -786,6 +790,7 @@ model FollowUp {
   queueRank        Int?
   createdById      String
   createdBy        User           @relation("FollowUpCreatedBy", fields: [createdById], references: [id])
+  linkedTask       Task?          @relation("TaskLinkedFollowUp")
   createdAt        DateTime       @default(now())
 
   @@index([customerId, followupDate])

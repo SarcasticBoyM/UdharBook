@@ -7,9 +7,11 @@ import { requireShopId } from "@/lib/tenant";
 import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity, type FollowUpSourceModule } from "@/lib/follow-up-service";
 import { canUseFollowUps } from "@/lib/permissions";
-import { notifyFollowUpCompleted } from "@/lib/notifications";
+import { notifyFollowUpCompleted, notifyTaskCompleted } from "@/lib/notifications";
+import { normalizeTaskType, taskTypeLabels } from "@/lib/tasks";
 import { isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
 import { isOrderFollowUp } from "@/lib/follow-up-types";
+import { cancelLinkedTaskFromFollowUp, syncLinkedTaskFromFollowUp } from "@/lib/task-follow-up-sync";
 
 const schema = z.object({
   customerId: z.string(),
@@ -117,7 +119,7 @@ export async function POST(request: Request) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      return recordFollowUpActivity(tx, {
+      const recorded = await recordFollowUpActivity(tx, {
         shopId,
         customerId: body.customerId,
         createdById: session.id,
@@ -151,6 +153,15 @@ export async function POST(request: Request) {
         updateCustomerNotes: !orderFollowUp,
         incrementCallCount: !orderFollowUp,
       });
+      const linkedTask = await syncLinkedTaskFromFollowUp(tx, {
+        previousFollowUpId: body.supersedesFollowUpId,
+        followUpId: recorded.followUp.id,
+        shopId,
+        status: body.status,
+        reminderAt,
+        notes: body.detailedNotes ?? body.notes ?? body.customerResponse,
+      });
+      return { ...recorded, linkedTask };
     });
 
     await logActivity({
@@ -170,12 +181,26 @@ export async function POST(request: Request) {
         completedByName: session.name,
       })
       : undefined;
+    const taskNotification = result.linkedTask && result.linkedTask.status === "COMPLETED"
+      ? await notifyTaskCompleted({
+          shopId,
+          taskId: result.linkedTask.id,
+          assignedById: result.linkedTask.assignedById,
+          taskTypeLabel: (() => {
+            const normalized = normalizeTaskType(result.linkedTask.taskType);
+            return normalized ? taskTypeLabels[normalized] : result.linkedTask.title;
+          })(),
+          customerName: customer.partyName,
+          completedByName: session.name,
+        })
+      : undefined;
 
     return NextResponse.json({
       ...result,
       success: true,
       data: result,
       ...(notification ? { notification } : {}),
+      ...(taskNotification ? { taskNotification } : {}),
     }, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -215,12 +240,16 @@ export async function PATCH(request: Request) {
     if (!canCancel) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     if (followUp.completedAt) return NextResponse.json({ error: "A completed follow-up cannot be cancelled." }, { status: 409 });
 
-    const updated = await prisma.followUp.update({
-      where: { id: followUp.id },
-      data: {
-        cancelledAt: followUp.cancelledAt ?? new Date(),
-        reminderEnabled: false,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const cancelled = await tx.followUp.update({
+        where: { id: followUp.id },
+        data: {
+          cancelledAt: followUp.cancelledAt ?? new Date(),
+          reminderEnabled: false,
+        },
+      });
+      await cancelLinkedTaskFromFollowUp(tx, { followUpId: followUp.id, shopId });
+      return cancelled;
     });
     return NextResponse.json({ success: true, followUp: updated });
   } catch (error) {

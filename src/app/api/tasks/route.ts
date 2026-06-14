@@ -6,7 +6,15 @@ import { prisma } from "@/lib/db";
 import { requireShopId } from "@/lib/tenant";
 import { canAccessTasks, canAssignTasks, normalizeFixedRole } from "@/lib/operational-roles";
 import { notifyTaskAssigned, notifyTaskCompleted, notifyTaskReassigned } from "@/lib/notifications";
-import { taskPriorities, taskReferenceUrl, taskStatuses, taskTypeLabels, taskTypes } from "@/lib/tasks";
+import {
+  isScheduledFollowUpTaskType,
+  taskPriorities,
+  taskReferenceUrl,
+  taskStatuses,
+  taskTypeLabels,
+  taskTypes,
+} from "@/lib/tasks";
+import { createTaskWithFollowUp, TaskFollowUpSyncError, updateTaskWithFollowUp } from "@/lib/task-follow-up-sync";
 
 const createSchema = z.object({
   shopId: z.string().optional(),
@@ -20,19 +28,23 @@ const createSchema = z.object({
   sourceEntityType: z.string().trim().max(60).optional().nullable(),
   sourceEntityId: z.string().trim().max(120).optional().nullable(),
   referenceUrl: z.string().trim().max(500).refine((value) => value.startsWith("/"), "Reference URL must be app-local.").optional().nullable(),
+  idempotencyKey: z.string().trim().min(8).max(160).optional().nullable(),
 });
+const idempotencyKeySchema = z.string().trim().min(8).max(160);
 
 const patchSchema = z.object({
   id: z.string().min(1),
   assignedToId: z.string().min(1).optional(),
   status: z.enum(taskStatuses).optional(),
   progressNotes: z.string().trim().max(2000).optional().nullable(),
+  dueDate: z.string().datetime().optional(),
 });
 
 const taskInclude = {
   customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
   assignedTo: { select: { id: true, name: true, role: true } },
   assignedBy: { select: { id: true, name: true, role: true } },
+  linkedFollowUp: { select: { id: true, followUpType: true, status: true, nextFollowUpDateTime: true, cancelledAt: true } },
 } satisfies Prisma.TaskInclude;
 
 function isAssignableRole(role: string) {
@@ -115,6 +127,25 @@ export async function POST(request: Request) {
   try {
     const body = createSchema.parse(await request.json());
     const shopId = shopIdForCreate(request, session, body.shopId);
+    const bodyKey = body.idempotencyKey?.trim() || null;
+    const headerKey = request.headers.get("Idempotency-Key")?.trim() || null;
+    if (bodyKey && headerKey && bodyKey !== headerKey) {
+      return NextResponse.json({
+        success: false,
+        code: "IDEMPOTENCY_KEY_CONFLICT",
+        error: "Request idempotency keys do not match.",
+      }, { status: 400 });
+    }
+    const idempotencyKey = bodyKey || headerKey;
+    if (idempotencyKey) idempotencyKeySchema.parse(idempotencyKey);
+    if (isScheduledFollowUpTaskType(body.taskType) && body.customerId && !idempotencyKey) {
+      return NextResponse.json({
+        success: false,
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+        error: "A request idempotency key is required.",
+      }, { status: 400 });
+    }
+
     const dueDate = new Date(body.dueDate);
     const assignedTo = await prisma.user.findFirst({
       where: { id: body.assignedToId, shopId, disabledAt: null },
@@ -124,53 +155,88 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Select an active operational staff member from this shop." }, { status: 400 });
     }
 
-    const customer = body.customerId
-      ? await prisma.customer.findFirst({
-          where: { id: body.customerId, shopId },
-          select: { id: true, partyName: true },
+    let result;
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        const synced = await createTaskWithFollowUp(tx, {
+          shopId,
+          customerId: body.customerId,
+          assignedToId: assignedTo.id,
+          assignedById: session.id,
+          taskType: body.taskType,
+          title: body.title || taskTypeLabels[body.taskType],
+          notes: body.notes || null,
+          priority: body.priority,
+          dueDate,
+          sourceEntityType: body.sourceEntityType || null,
+          sourceEntityId: body.sourceEntityId || null,
+          referenceUrl: body.referenceUrl || taskReferenceUrl({
+            customerId: body.customerId,
+            sourceEntityType: body.sourceEntityType,
+            sourceEntityId: body.sourceEntityId,
+          }),
+          idempotencyKey,
+        });
+        const task = await tx.task.findUniqueOrThrow({ where: { id: synced.task.id }, include: taskInclude });
+        return { task, followUp: synced.followUp, created: synced.created };
+      });
+    } catch (error) {
+      if (idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const existing = await prisma.task.findFirst({
+          where: {
+            shopId,
+            assignedById: session.id,
+            idempotencyKey,
+          },
+          include: taskInclude,
+        });
+        if (existing) {
+          result = { task: existing, followUp: existing.linkedFollowUp, created: false };
+        } else {
+          return NextResponse.json({
+            success: false,
+            code: "IDEMPOTENCY_CONFLICT",
+            error: "The task request conflicted with another operation.",
+          }, { status: 409 });
+        }
+      } else {
+        throw error;
+      }
+    }
+
+    const notification = result.created
+      ? await notifyTaskAssigned({
+          shopId,
+          taskId: result.task.id,
+          assignedToId: assignedTo.id,
+          assignedById: session.id,
+          taskTypeLabel: taskTypeLabels[body.taskType],
+          customerName: result.task.customer?.partyName,
+          dueDate,
+          assignedByName: session.name,
         })
-      : null;
-    if (body.customerId && !customer) return NextResponse.json({ error: "Customer not found for this shop." }, { status: 404 });
-
-    const task = await prisma.task.create({
-      data: {
-        shopId,
-        customerId: customer?.id,
-        assignedToId: assignedTo.id,
-        assignedById: session.id,
-        taskType: body.taskType,
-        title: body.title || taskTypeLabels[body.taskType],
-        notes: body.notes || null,
-        priority: body.priority,
-        dueDate,
-        sourceEntityType: body.sourceEntityType || null,
-        sourceEntityId: body.sourceEntityId || null,
-        referenceUrl: body.referenceUrl || taskReferenceUrl({
-          customerId: customer?.id,
-          sourceEntityType: body.sourceEntityType,
-          sourceEntityId: body.sourceEntityId,
-        }),
+      : undefined;
+    return NextResponse.json({
+      success: true,
+      task: result.task,
+      data: result.task,
+      followUpSync: {
+        linked: Boolean(result.task.linkedFollowUpId),
+        followUpId: result.task.linkedFollowUpId,
+        created: Boolean(result.followUp && result.created && body.sourceEntityType !== "FOLLOW_UP"),
       },
-      include: taskInclude,
-    });
-
-    const notification = await notifyTaskAssigned({
-      shopId,
-      taskId: task.id,
-      assignedToId: assignedTo.id,
-      assignedById: session.id,
-      taskTypeLabel: taskTypeLabels[body.taskType],
-      customerName: customer?.partyName,
-      dueDate,
-      assignedByName: session.name,
-    });
-    return NextResponse.json({ success: true, task, data: task, notification }, { status: 201 });
+      idempotentReplay: !result.created,
+      ...(notification ? { notification } : {}),
+    }, { status: result.created ? 201 : 200 });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({
         error: "Invalid task details.",
         details: error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`),
       }, { status: 400 });
+    }
+    if (error instanceof TaskFollowUpSyncError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
     }
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Could not assign task.",
@@ -211,16 +277,16 @@ export async function PATCH(request: Request) {
 
     const completedNow = body.status === "COMPLETED" && existing.status !== "COMPLETED";
     const reassignedNow = Boolean(reassignedTo);
-    const task = await prisma.task.update({
-      where: { id: existing.id },
-      data: {
-        ...(body.status ? { status: body.status } : {}),
-        ...(reassignedTo ? { assignedToId: reassignedTo.id } : {}),
-        ...(body.progressNotes !== undefined ? { progressNotes: body.progressNotes || null } : {}),
-        ...(completedNow ? { completedAt: new Date() } : {}),
-        ...(body.status && body.status !== "COMPLETED" ? { completedAt: null } : {}),
-      },
-      include: taskInclude,
+    const task = await prisma.$transaction(async (tx) => {
+      await updateTaskWithFollowUp(tx, {
+        taskId: existing.id,
+        shopId,
+        assignedToId: reassignedTo?.id,
+        status: body.status,
+        progressNotes: body.progressNotes,
+        dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
+      });
+      return tx.task.findUniqueOrThrow({ where: { id: existing.id }, include: taskInclude });
     });
 
     const notification = completedNow
@@ -248,6 +314,9 @@ export async function PATCH(request: Request) {
         error: "Invalid task update.",
         details: error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`),
       }, { status: 400 });
+    }
+    if (error instanceof TaskFollowUpSyncError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update task." }, { status: 500 });
   }

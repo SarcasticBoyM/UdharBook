@@ -502,6 +502,7 @@ export async function generateTaskOverdueNotifications(shopId: string) {
         shopId,
         dueDate: { lt: now },
         status: { notIn: ["COMPLETED", "CANCELLED"] },
+        linkedFollowUpId: null,
       },
       select: {
         id: true,
@@ -874,6 +875,56 @@ export async function notifyOrderFollowUpDue(input: {
       input.shopId,
       "ORDER_FOLLOW_UP_DUE",
       input.followUpId,
+      occurrence,
+      input.recipientUserId,
+    ].join(":"),
+  });
+}
+
+export async function notifyCustomerTaskDue(input: {
+  shopId: string;
+  taskId: string;
+  followUpId: string;
+  recipientUserId: string;
+  taskTypeLabel: string;
+  customerName: string;
+  reminderAt: Date;
+  notes?: string | null;
+}) {
+  const reminderLabel = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(input.reminderAt);
+  const occurrence = input.reminderAt.toISOString();
+  return safeCreateNotification({
+    shopId: input.shopId,
+    target: { type: "USER", userId: input.recipientUserId },
+    type: "CUSTOMER_TASK_DUE",
+    title: `${input.taskTypeLabel} Due`,
+    message: [
+      `Customer: ${input.customerName}`,
+      `Reminder: ${reminderLabel}`,
+      input.notes ? `Note: ${input.notes}` : "",
+    ].filter(Boolean).join("\n"),
+    entityType: "TASK",
+    entityId: input.taskId,
+    actionUrl: `/tasks?taskId=${encodeURIComponent(input.taskId)}`,
+    metadata: {
+      followUpId: input.followUpId,
+      customerName: input.customerName,
+      taskTypeLabel: input.taskTypeLabel,
+      reminderAt: occurrence,
+      notes: input.notes ?? null,
+    },
+    idempotencyKey: [
+      input.shopId,
+      "CUSTOMER_TASK_DUE",
+      input.taskId,
       occurrence,
       input.recipientUserId,
     ].join(":"),

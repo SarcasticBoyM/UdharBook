@@ -11,6 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "node scripts/prisma-migrate-deploy.mjs",
     "prisma:seed": "tsx prisma/seed.ts",
+    "tasks:reconcile-followups": "tsx scripts/reconcile-customer-task-followups.ts",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "seed": "tsx prisma/seed.ts",

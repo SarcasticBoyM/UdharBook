@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { processDueOrderFollowUpReminders } from "@/lib/order-follow-up-reminders";
+import { processDueCustomerTaskReminders } from "@/lib/customer-task-reminders";
 
 function hasCronAuthorization(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -11,28 +12,30 @@ function hasCronAuthorization(request: Request) {
 
 async function processRequest(request: Request) {
   if (hasCronAuthorization(request)) {
-    const result = await processDueOrderFollowUpReminders({ limit: 100 });
+    const [orderResult, taskResult] = await Promise.all([
+      processDueOrderFollowUpReminders({ limit: 100 }),
+      processDueCustomerTaskReminders({ limit: 100 }),
+    ]);
     return NextResponse.json({
       success: true,
-      processed: result.scanned,
-      queued: result.queued,
-      failed: result.failed,
-      checkedAt: result.checkedAt.toISOString(),
+      processed: orderResult.scanned + taskResult.scanned,
+      queued: orderResult.queued + taskResult.queued,
+      failed: orderResult.failed + taskResult.failed,
+      checkedAt: new Date(Math.max(orderResult.checkedAt.getTime(), taskResult.checkedAt.getTime())).toISOString(),
     });
   }
 
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const shopId = requireShopId(request, session);
-  const result = await processDueOrderFollowUpReminders({
-    shopId,
-    recipientUserId: session.id,
-    limit: 20,
-  });
+  const [orderResult, taskResult] = await Promise.all([
+    processDueOrderFollowUpReminders({ shopId, recipientUserId: session.id, limit: 20 }),
+    processDueCustomerTaskReminders({ shopId, recipientUserId: session.id, limit: 20 }),
+  ]);
   return NextResponse.json({
     success: true,
-    reminders: result.reminders,
-    checkedAt: result.checkedAt.toISOString(),
+    reminders: [...orderResult.reminders, ...taskResult.reminders],
+    checkedAt: new Date(Math.max(orderResult.checkedAt.getTime(), taskResult.checkedAt.getTime())).toISOString(),
   });
 }
 

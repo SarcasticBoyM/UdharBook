@@ -24,6 +24,7 @@ export async function GET(
       customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
       assignedTo: { select: { id: true, name: true, role: true } },
       assignedBy: { select: { id: true, name: true, role: true } },
+      linkedFollowUp: { select: { id: true, followUpType: true, status: true, nextFollowUpDateTime: true, cancelledAt: true } },
     },
   });
 

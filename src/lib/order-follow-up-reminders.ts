@@ -27,6 +27,7 @@ export async function processDueOrderFollowUpReminders(options: {
     where: {
       ...(options.shopId ? { shopId: options.shopId } : {}),
       followUpType: ORDER_FOLLOW_UP,
+      linkedTask: null,
       reminderEnabled: true,
       reminderSentAt: null,
       supersededAt: null,

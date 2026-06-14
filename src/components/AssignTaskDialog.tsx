@@ -42,8 +42,14 @@ function defaultDueDate() {
   return local.toISOString().slice(0, 16);
 }
 
-function toIso(value: string) {
-  return new Date(value).toISOString();
+function toIstIso(value: string) {
+  return new Date(`${value}:00+05:30`).toISOString();
+}
+
+function taskCreationKey() {
+  if (typeof crypto.randomUUID === "function") return `TASK_CREATE:${crypto.randomUUID()}`;
+  const random = crypto.getRandomValues(new Uint32Array(4));
+  return `TASK_CREATE:${Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("")}`;
 }
 
 export function AssignTaskButton({
@@ -101,6 +107,7 @@ export function AssignTaskDialog({
   const [customerResults, setCustomerResults] = useState<CustomerOption[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [idempotencyKey] = useState(taskCreationKey);
 
   const seedShopId = seed?.shopId;
   const shopQuery = seedShopId ? `&shopId=${encodeURIComponent(seedShopId)}` : "";
@@ -147,6 +154,7 @@ export function AssignTaskDialog({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
         ...(seedShopId ? { "x-shop-id": seedShopId } : {}),
       },
       body: JSON.stringify({
@@ -157,7 +165,8 @@ export function AssignTaskDialog({
         title: effectiveTitle,
         notes: notes || null,
         priority,
-        dueDate: toIso(dueDate),
+        dueDate: toIstIso(dueDate),
+        idempotencyKey,
         sourceEntityType: seed?.sourceEntityType ?? null,
         sourceEntityId: seed?.sourceEntityId ?? null,
         referenceUrl: seed?.referenceUrl ?? null,

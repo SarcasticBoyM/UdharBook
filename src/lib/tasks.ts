@@ -1,5 +1,6 @@
 export const taskTypes = [
   "PAYMENT_COLLECTION",
+  "PAYMENT_FOLLOW_UP",
   "FOLLOW_UP_VISIT",
   "CHEQUE_COLLECTION",
   "CHEQUE_DEPOSIT",
@@ -12,6 +13,7 @@ export type TaskType = (typeof taskTypes)[number];
 
 export const taskTypeLabels: Record<TaskType, string> = {
   PAYMENT_COLLECTION: "Payment Collection",
+  PAYMENT_FOLLOW_UP: "Payment Follow-up",
   FOLLOW_UP_VISIT: "Follow-up Visit",
   CHEQUE_COLLECTION: "Cheque Collection",
   CHEQUE_DEPOSIT: "Cheque Deposit",
@@ -22,6 +24,41 @@ export const taskTypeLabels: Record<TaskType, string> = {
 
 export const taskPriorities = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 export const taskStatuses = ["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"] as const;
+
+const taskTypeAliases: Record<string, TaskType> = {
+  PAYMENT_COLLECTION: "PAYMENT_COLLECTION",
+  PAYMENT_FOLLOW_UP: "PAYMENT_FOLLOW_UP",
+  FOLLOW_UP_VISIT: "FOLLOW_UP_VISIT",
+  ORDER_FOLLOW_UP: "ORDER_FOLLOW_UP",
+  CHEQUE_COLLECTION: "CHEQUE_COLLECTION",
+  INVOICE_HARD_COPY_DELIVERY: "INVOICE_HARD_COPY_DELIVERY",
+  PAYMENTCOLLECTION: "PAYMENT_COLLECTION",
+  PAYMENTFOLLOWUP: "PAYMENT_FOLLOW_UP",
+  FOLLOWUPVISIT: "FOLLOW_UP_VISIT",
+  ORDERFOLLOWUP: "ORDER_FOLLOW_UP",
+  CHEQUECOLLECTION: "CHEQUE_COLLECTION",
+  INVOICEHARDCOPYDELIVERY: "INVOICE_HARD_COPY_DELIVERY",
+};
+
+export const scheduledFollowUpTaskTypes = [
+  "PAYMENT_COLLECTION",
+  "PAYMENT_FOLLOW_UP",
+  "FOLLOW_UP_VISIT",
+  "ORDER_FOLLOW_UP",
+  "CHEQUE_COLLECTION",
+  "INVOICE_HARD_COPY_DELIVERY",
+] as const satisfies readonly TaskType[];
+
+export function normalizeTaskType(value: string | null | undefined): TaskType | null {
+  if (!value) return null;
+  const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return taskTypeAliases[normalized] ?? taskTypeAliases[normalized.replace(/_/g, "")] ?? null;
+}
+
+export function isScheduledFollowUpTaskType(value: string | null | undefined) {
+  const normalized = normalizeTaskType(value);
+  return Boolean(normalized && scheduledFollowUpTaskTypes.includes(normalized as (typeof scheduledFollowUpTaskTypes)[number]));
+}
 
 export function taskReferenceUrl(input: {
   customerId?: string | null;

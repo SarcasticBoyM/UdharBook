@@ -19,6 +19,7 @@ type TaskRow = {
   status: string;
   dueDate: string;
   completedAt: string | null;
+  linkedFollowUp: { id: string; followUpType: string | null; status: string; nextFollowUpDateTime: string | null; cancelledAt: string | null } | null;
   referenceUrl: string | null;
   createdAt: string;
   customer: { id: string; partyName: string; outstandingBalance: number; contactNumber: string } | null;
@@ -31,7 +32,25 @@ function display(value: string) {
 }
 
 function dateTime(value: string) {
-  return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function reminderInput(value: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+}
+
+function reminderIso(value: string) {
+  return new Date(`${value}:00+05:30`).toISOString();
 }
 
 function priorityTone(priority: string) {
@@ -61,6 +80,7 @@ export default function TasksPage() {
   const [error, setError] = useState("");
   const [taskLinkMessage, setTaskLinkMessage] = useState("");
   const [notesByTask, setNotesByTask] = useState<Record<string, string>>({});
+  const [dueDatesByTask, setDueDatesByTask] = useState<Record<string, string>>({});
   const admin = isShopAdminRole(role);
   const canAssign = canAssignTasks(role);
 
@@ -105,6 +125,13 @@ export default function TasksPage() {
         }
         return next;
       });
+      setDueDatesByTask((current) => {
+        const next = { ...current };
+        for (const task of loadedTasks) {
+          if (!(task.id in next)) next[task.id] = reminderInput(task.dueDate);
+        }
+        return next;
+      });
       if (highlightedId) {
         window.setTimeout(() => document.getElementById(`task-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
       }
@@ -127,7 +154,7 @@ export default function TasksPage() {
     CANCELLED: counts.cancelled,
   }), [counts]);
 
-  async function updateTask(task: TaskRow, nextStatus?: string) {
+  async function updateTask(task: TaskRow, nextStatus?: string, reschedule = false) {
     setMessage("");
     const response = await fetch("/api/tasks", {
       method: "PATCH",
@@ -136,6 +163,7 @@ export default function TasksPage() {
         id: task.id,
         status: nextStatus,
         progressNotes: notesByTask[task.id] ?? "",
+        ...(reschedule ? { dueDate: reminderIso(dueDatesByTask[task.id]) } : {}),
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -241,8 +269,14 @@ export default function TasksPage() {
                   </div>
 
                   {task.notes && <p className="mt-3 whitespace-pre-line rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800">{task.notes}</p>}
+                  {task.linkedFollowUp && (
+                    <div className="mt-3 rounded-lg border border-brand-200 bg-brand-50 p-3 text-sm text-brand-900 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-100">
+                      Linked Scheduled Follow-up • {display(task.linkedFollowUp.followUpType ?? "Follow-up")}
+                    </div>
+                  )}
 
-                  <label className="mt-3 block">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block">
                     <span className="text-xs font-semibold text-slate-500">Progress notes</span>
                     <textarea
                       value={notesByTask[task.id] ?? ""}
@@ -253,6 +287,17 @@ export default function TasksPage() {
                       placeholder="Add visit result, collection update, delivery note, or completion details"
                     />
                   </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-500">Due date and reminder time (IST)</span>
+                    <input
+                      type="datetime-local"
+                      value={dueDatesByTask[task.id] ?? ""}
+                      onChange={(event) => setDueDatesByTask((current) => ({ ...current, [task.id]: event.target.value }))}
+                      disabled={task.status === "CANCELLED" || task.status === "COMPLETED"}
+                      className="mt-1 min-h-12 w-full rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950 disabled:opacity-60"
+                    />
+                  </label>
+                  </div>
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     {task.referenceUrl && (
@@ -276,6 +321,11 @@ export default function TasksPage() {
                     {!admin && !["COMPLETED", "CANCELLED"].includes(task.status) && (
                       <button type="button" onClick={() => updateTask(task)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
                         Save Notes
+                      </button>
+                    )}
+                    {admin && !["COMPLETED", "CANCELLED"].includes(task.status) && (
+                      <button type="button" onClick={() => updateTask(task, undefined, true)} className="min-h-10 rounded-lg border border-brand-300 px-3 text-sm font-semibold text-brand-700 dark:border-brand-800 dark:text-brand-300">
+                        Reschedule
                       </button>
                     )}
                     {admin && !["COMPLETED", "CANCELLED"].includes(task.status) && (

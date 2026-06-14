@@ -70,6 +70,13 @@ export const notificationEventPolicies = {
     persistent: false,
     bypassQuietHours: false,
   },
+  CUSTOMER_TASK_DUE: {
+    priority: "IMPORTANT",
+    toast: true,
+    push: true,
+    persistent: false,
+    bypassQuietHours: false,
+  },
   CHEQUE_DEPOSITED: {
     priority: "IMPORTANT",
     toast: true,
@@ -127,7 +134,7 @@ export function shouldPushNotification(eventType: string, date = new Date()) {
 export function notificationCategory(eventType: string, entityType?: string | null) {
   const event = eventType.toUpperCase();
   const entity = entityType?.toUpperCase();
-  if (event === "ORDER_FOLLOW_UP_DUE") return "FOLLOW_UPS";
+  if (event === "ORDER_FOLLOW_UP_DUE" || event === "CUSTOMER_TASK_DUE") return "FOLLOW_UPS";
   if (event.startsWith("ORDER_") || entity === "ORDER") return "ORDERS";
   if (event.startsWith("TASK_") || entity === "TASK") return "TASKS";
   if (event.startsWith("CHEQUE_") || entity === "CHEQUE") return "CHEQUES";

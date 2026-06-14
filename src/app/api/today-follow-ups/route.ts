@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
 import { isOrderFollowUp } from "@/lib/follow-up-types";
+import { canAssignTasks } from "@/lib/operational-roles";
+import { normalizeTaskType, taskTypeLabels } from "@/lib/tasks";
 
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 const LIGHTWEIGHT_THRESHOLD = Number(process.env.TODAY_FOLLOWUPS_LIGHTWEIGHT_THRESHOLD ?? 200);
@@ -166,6 +168,17 @@ type ScheduledFollowUp = QueueCustomer & {
     manualReminder: boolean;
     promiseToPay: boolean;
     overdue: boolean;
+    task: {
+      id: string;
+      taskType: string;
+      taskTypeLabel: string;
+      status: string;
+      priority: string;
+      dueDate: Date;
+      notes: string | null;
+      progressNotes: string | null;
+      assignedTo: string;
+    } | null;
   };
 };
 
@@ -350,6 +363,7 @@ export async function GET(request: Request) {
   const batchTag = (searchParams.get("batchTag") ?? "").trim();
   const requestedMode = searchParams.get("mode");
   const shopId = requireShopId(request, session);
+  const canSeeAllScheduled = canAssignTasks(session.role);
   const todayStart = startOfToday();
   const todayEnd = endOfToday();
 
@@ -440,17 +454,41 @@ export async function GET(request: Request) {
       supersededAt: null,
       cancelledAt: null,
       customer: { isArchived: false },
-      OR: [
-        { manualReminder: true },
-        { reminderEnabled: true },
-        { nextFollowUpDateTime: { not: null } },
-        { scheduledAt: { not: null } },
-        { status: { in: ACTIVE_SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
+      AND: [
+        ...(!canSeeAllScheduled
+          ? [{
+              OR: [
+                { assignedToId: session.id },
+                { assignedToId: null, createdById: session.id },
+              ],
+            }]
+          : []),
+        {
+          OR: [
+            { manualReminder: true },
+            { reminderEnabled: true },
+            { nextFollowUpDateTime: { not: null } },
+            { scheduledAt: { not: null } },
+            { status: { in: ACTIVE_SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
+          ],
+        },
       ],
     },
     include: {
       createdBy: { select: { name: true } },
       assignedTo: { select: { id: true, name: true } },
+      linkedTask: {
+        select: {
+          id: true,
+          taskType: true,
+          status: true,
+          priority: true,
+          dueDate: true,
+          notes: true,
+          progressNotes: true,
+          assignedTo: { select: { name: true } },
+        },
+      },
       customer: { include },
     },
     orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
@@ -461,8 +499,8 @@ export async function GET(request: Request) {
   for (const row of scheduledRows) {
     if (!isExplicitlyScheduled(row)) continue;
     const orderFollowUp = isOrderFollowUp(row.followUpType);
-    if (!orderFollowUp && latestFollowUpId(row.customer) !== row.id) continue;
-    if (!orderFollowUp && isClosedForActiveQueue(row.customer)) continue;
+    if (!orderFollowUp && !row.linkedTask && latestFollowUpId(row.customer) !== row.id) continue;
+    if (!orderFollowUp && !row.linkedTask && isClosedForActiveQueue(row.customer)) continue;
     const scheduledAt = scheduledDateFor(row);
     if (!scheduledAt) continue;
     const smart = smartPriority(row.customer);
@@ -485,6 +523,22 @@ export async function GET(request: Request) {
         manualReminder: row.manualReminder,
         promiseToPay: row.status === "PAYMENT_PROMISED",
         overdue: isPastDue(scheduledAt),
+        task: row.linkedTask
+          ? {
+              id: row.linkedTask.id,
+              taskType: row.linkedTask.taskType,
+              taskTypeLabel: (() => {
+                const normalized = normalizeTaskType(row.linkedTask.taskType);
+                return normalized ? taskTypeLabels[normalized] : row.linkedTask.taskType;
+              })(),
+              status: row.linkedTask.status,
+              priority: row.linkedTask.priority,
+              dueDate: row.linkedTask.dueDate,
+              notes: row.linkedTask.notes,
+              progressNotes: row.linkedTask.progressNotes,
+              assignedTo: row.linkedTask.assignedTo.name,
+            }
+          : null,
       },
     };
     candidate.queueScore = queueScore(candidate);
