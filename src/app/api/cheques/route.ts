@@ -928,6 +928,7 @@ export async function POST(request: Request) {
         recordPayment: false,
       });
       const nextBalance = Math.max(0, customer.outstandingBalance - body.amount);
+      const balanceAppliedAmount = customer.outstandingBalance - nextBalance;
       const nextStatus = nextBalance <= 0 ? "CLEARED" : customer.status === "CLEARED" ? "PENDING" : customer.status;
       await tx.customer.update({
         where: { id: body.customerId },
@@ -936,7 +937,7 @@ export async function POST(request: Request) {
           status: nextStatus,
         },
       });
-      await tx.paymentEntry.create({
+      const paymentEntry = await tx.paymentEntry.create({
         data: {
           shopId,
           customerId: body.customerId,
@@ -945,6 +946,15 @@ export async function POST(request: Request) {
           notes: `Cheque collected: ${body.chequeNumber}`,
           paidAt: new Date(body.collectionDateTime),
           createdById: session.id,
+        },
+      });
+      await tx.cheque.update({
+        where: { id: created.id },
+        data: {
+          balanceAppliedAt: new Date(body.collectionDateTime),
+          balanceAppliedAmount,
+          balanceAppliedCustomerId: body.customerId,
+          balancePaymentEntryId: paymentEntry.id,
         },
       });
       await tx.statusHistory.create({
@@ -968,7 +978,10 @@ export async function POST(request: Request) {
           },
         });
       }
-      return created;
+      return tx.cheque.findUniqueOrThrow({
+        where: { id: created.id },
+        include: chequeInclude(),
+      });
     });
 
     await logActivity({

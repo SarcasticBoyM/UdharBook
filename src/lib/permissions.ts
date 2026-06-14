@@ -33,6 +33,10 @@ export function canUseCheques(role: UserRole | string): boolean {
   return isShopAdminRole(role) || isSalesRole(role) || isAccountsRole(role);
 }
 
+export function canManageChequeAccounting(role: UserRole | string): boolean {
+  return isShopAdminRole(role) || isAccountsRole(role);
+}
+
 export function canUseFollowUps(role: UserRole | string): boolean {
   return isShopAdminRole(role) || isAccountsRole(role) || isSalesRole(role);
 }

@@ -28,6 +28,7 @@ import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
 import { combineDateTimeValue, currentIstDate, istDateTimeToIso } from "@/lib/app-date-time";
+import { canManageChequeAccounting } from "@/lib/permissions";
 
 type CustomerOption = {
   id: string;
@@ -38,6 +39,15 @@ type CustomerOption = {
   lastFollowupDate?: string | null;
   matchScore?: number;
 };
+
+const bounceReasons = [
+  "Insufficient Funds",
+  "Signature Mismatch",
+  "Payment Stopped",
+  "Account Closed",
+  "Technical Reason",
+  "Other",
+] as const;
 
 type UserOption = {
   id: string;
@@ -427,6 +437,10 @@ export default function ChequeCollectionsPage() {
   const [deleteAccount, setDeleteAccount] = useState<DepositAccount | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
   const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
+  const [bounceAction, setBounceAction] = useState<ChequeItem | null>(null);
+  const [bounceReason, setBounceReason] = useState<(typeof bounceReasons)[number]>("Insufficient Funds");
+  const [bounceNotes, setBounceNotes] = useState("");
+  const [bounceSaving, setBounceSaving] = useState(false);
   const [selectedDepositAccountId, setSelectedDepositAccountId] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
@@ -590,7 +604,11 @@ export default function ChequeCollectionsPage() {
     [data?.items]
   );
 
-  const updateStatus = async (cheque: ChequeItem, status: ChequeStatus) => {
+  const performStatusUpdate = async (
+    cheque: ChequeItem,
+    status: ChequeStatus,
+    extraBody: Record<string, string> = {},
+  ) => {
     if (["DEPOSITED", "CLEARED"].includes(status)) {
       setDepositAction({ cheque, status });
       setSelectedDepositAccountId(cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
@@ -599,13 +617,7 @@ export default function ChequeCollectionsPage() {
       setReceiptPreview("");
       return;
     }
-    const body: Record<string, string> = { status };
-    if (status === "BOUNCED") {
-      const reason = window.prompt("Bounce reason or remark?", cheque.bounceReason ?? "");
-      if (reason === null) return;
-      body.bounceReason = reason;
-      body.notes = reason;
-    }
+    const body: Record<string, string> = { status, ...extraBody };
     if (status === "RETURNED_TO_PARTY") {
       const confirmed = window.confirm("Mark this cheque as returned to party and close the workflow? Outstanding will be restored only if this cheque was already credited.");
       if (!confirmed) return;
@@ -626,7 +638,31 @@ export default function ChequeCollectionsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (res.ok) loadCheques();
+    if (res.ok) await loadCheques();
+    return res;
+  };
+
+  const updateStatus = async (cheque: ChequeItem, status: ChequeStatus) => {
+    if (status === "BOUNCED") {
+      if (!canManageChequeAccounting(currentRole)) return;
+      setBounceAction(cheque);
+      setBounceReason("Insufficient Funds");
+      setBounceNotes("");
+      return;
+    }
+    await performStatusUpdate(cheque, status);
+  };
+
+  const confirmBounce = async () => {
+    if (!bounceAction || (bounceReason === "Other" && !bounceNotes.trim())) return;
+    setBounceSaving(true);
+    const reason = bounceReason === "Other" ? `Other: ${bounceNotes.trim()}` : bounceReason;
+    const response = await performStatusUpdate(bounceAction, "BOUNCED", {
+      bounceReason: reason,
+      notes: reason,
+    });
+    setBounceSaving(false);
+    if (response?.ok) setBounceAction(null);
   };
 
   const confirmDepositAction = async () => {
@@ -1385,9 +1421,11 @@ export default function ChequeCollectionsPage() {
                         <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "CLEARED"); }} className="min-h-10 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white">
                           Cleared
                         </button>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
-                          Bounced
-                        </button>
+                        {canManageChequeAccounting(currentRole) && (
+                          <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
+                            Bounced
+                          </button>
+                        )}
                       </>
                     )}
                     {normalizedChequeStatus(cheque.status) === "BOUNCED" && (
@@ -1487,6 +1525,52 @@ export default function ChequeCollectionsPage() {
           </div>
         </aside>
       </div>
+
+      {bounceAction && (
+        <div className="fixed inset-0 z-[100] flex items-end bg-slate-950/55 sm:items-center sm:justify-center sm:p-4" onClick={() => !bounceSaving && setBounceAction(null)}>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void confirmBounce();
+            }}
+            className="ui-surface-elevated w-full rounded-t-2xl border p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-w-md sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold">Mark Cheque Bounced</h2>
+                <p className="mt-1 text-sm text-[var(--foreground-muted)]">
+                  {bounceAction.customer.partyName} | {formatCurrency(bounceAction.amount)}
+                </p>
+              </div>
+              <button type="button" disabled={bounceSaving} onClick={() => setBounceAction(null)} aria-label="Close bounce form" className="ui-control inline-flex h-11 w-11 items-center justify-center rounded-xl border">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <label className="mt-5 block text-sm font-semibold">
+              Bounce reason
+              <select value={bounceReason} onChange={(event) => setBounceReason(event.target.value as (typeof bounceReasons)[number])} className="ui-control mt-2 min-h-12 w-full rounded-lg border px-3">
+                {bounceReasons.map((reason) => <option key={reason}>{reason}</option>)}
+              </select>
+            </label>
+            {bounceReason === "Other" && (
+              <label className="mt-4 block text-sm font-semibold">
+                Reason notes
+                <textarea value={bounceNotes} onChange={(event) => setBounceNotes(event.target.value)} required rows={3} className="ui-control mt-2 w-full rounded-lg border p-3" placeholder="Describe the bank return reason" />
+              </label>
+            )}
+            <p className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              If this cheque previously reduced outstanding, that exact applied amount will be restored once.
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" disabled={bounceSaving} onClick={() => setBounceAction(null)} className="ui-control min-h-12 rounded-lg border font-semibold">Cancel</button>
+              <button type="submit" disabled={bounceSaving || (bounceReason === "Other" && !bounceNotes.trim())} className="min-h-12 rounded-lg bg-red-600 px-4 font-bold text-white disabled:opacity-50">
+                {bounceSaving ? "Saving..." : "Confirm Bounce"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {formOpen && (
         <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 sm:items-center sm:p-6">

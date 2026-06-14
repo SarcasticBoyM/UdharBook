@@ -649,6 +649,7 @@ export async function notifyChequeEvent(input: {
   chequeNumber: string;
   amount: number;
   actorName: string;
+  restoredOutstanding?: number;
   target?: NotificationTarget;
 }) {
   const bounced = input.type === "CHEQUE_BOUNCED";
@@ -662,7 +663,11 @@ export async function notifyChequeEvent(input: {
       style: "currency",
       currency: "INR",
       maximumFractionDigits: 0,
-    }).format(input.amount)}\nBy: ${input.actorName}${bounced ? "\nImmediate action required." : ""}`,
+    }).format(input.amount)}${bounced && input.restoredOutstanding !== undefined ? `\nOutstanding restored to: ${new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(input.restoredOutstanding)}` : ""}\nBy: ${input.actorName}${bounced ? "\nImmediate action required." : ""}`,
     entityType: "CHEQUE",
     entityId: input.chequeId,
     actionUrl: chequeUrl(input.chequeId),
@@ -670,6 +675,7 @@ export async function notifyChequeEvent(input: {
       customerName: input.customerName,
       chequeNumber: input.chequeNumber,
       amount: input.amount,
+      restoredOutstanding: input.restoredOutstanding,
       actorName: input.actorName,
     },
   });

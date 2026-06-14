@@ -900,6 +900,14 @@ model Cheque {
   bouncedAt          DateTime?
   clearedAt          DateTime?
   cancelledAt        DateTime?
+  balanceAppliedAt   DateTime?
+  balanceAppliedAmount Float?
+  balanceAppliedCustomerId String?
+  balancePaymentEntryId String? @unique
+  balanceReversedAt  DateTime?
+  balanceReversalReason String?
+  balanceReversalTransactionId String? @unique
+  balanceReappliedAt DateTime?
   replacedByChequeId String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
@@ -914,6 +922,8 @@ model Cheque {
   @@index([staffVisitId])
   @@index([depositReceiptUploadedById])
   @@index([customerId, createdAt])
+  @@index([shopId, balanceAppliedCustomerId])
+  @@index([shopId, balanceReversedAt])
   @@index([shopId, status, amount])
   @@index([shopId, status, collectionDateTime])
   @@index([shopId, status, depositDateTime])
