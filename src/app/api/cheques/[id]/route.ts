@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { ChequeStatus, Prisma } from "@prisma/client";
+import { Prisma, type ChequeStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
@@ -8,10 +8,10 @@ import { logActivity } from "@/lib/activity";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
 import { canManageChequeAccounting, canUseCheques } from "@/lib/permissions";
 import { notifyChequeEvent } from "@/lib/notifications";
-import { normalizeFixedRole } from "@/lib/operational-roles";
+import { isAccountsRole, isSalesRole, isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
 
 const updateSchema = z.object({
-  status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]),
+  status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]).optional(),
   notes: z.string().optional(),
   depositDateTime: z.string().datetime().optional().nullable(),
   depositedAccountId: z.string().optional(),
@@ -21,6 +21,23 @@ const updateSchema = z.object({
   depositReceiptType: z.string().optional().nullable(),
   depositReceiptUploadedAt: z.string().datetime().optional().nullable(),
   bounceReason: z.string().optional(),
+  customerId: z.string().optional(),
+  chequeNumber: z.string().min(1).optional(),
+  bankName: z.string().min(1).optional(),
+  branch: z.string().optional().nullable(),
+  chequeDate: z.string().datetime().optional(),
+  amount: z.number().positive().optional(),
+  accountHolderName: z.string().min(1).optional(),
+  collectionDateTime: z.string().datetime().optional(),
+  collectionNotes: z.string().optional().nullable(),
+  frontImageUrl: z.string().optional().nullable(),
+  ocrRawText: z.string().optional().nullable(),
+  ocrExtractedData: z.record(z.unknown()).optional().nullable(),
+  ocrConfidence: z.number().min(0).max(1).optional().nullable(),
+  ocrEditedFields: z.record(z.boolean()).optional().nullable(),
+  correctionReason: z.string().optional(),
+  expectedUpdatedAt: z.string().datetime().optional(),
+  sourceScreen: z.string().max(80).optional(),
 });
 
 const BOUNCE_REASONS = [
@@ -44,6 +61,73 @@ const responseInclude = {
     take: 20,
   },
 } satisfies Prisma.ChequeInclude;
+
+const EDITABLE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT"];
+const FINANCIAL_EDIT_FIELDS = ["customerId", "chequeNumber", "bankName", "branch", "chequeDate", "amount", "accountHolderName", "collectionDateTime", "frontImageUrl"] as const;
+
+function isEligibleEditStatus(status: ChequeStatus) {
+  return EDITABLE_STATUSES.includes(status);
+}
+
+function canEditCollectedCheque(role: string, userId: string, cheque: { collectedById: string }) {
+  if (role === "SUPER_ADMIN" || isShopAdminRole(role) || isAccountsRole(role)) return true;
+  return isSalesRole(role) && cheque.collectedById === userId;
+}
+
+function canChangeChequeCustomer(role: string) {
+  return role === "SUPER_ADMIN" || isShopAdminRole(role) || isAccountsRole(role);
+}
+
+function customerStatusFor(balance: number, currentStatus: "ACTIVE" | "PENDING" | "HIGH_RISK" | "CLEARED") {
+  if (balance <= 0) return "CLEARED" as const;
+  return currentStatus === "CLEARED" ? "PENDING" as const : currentStatus;
+}
+
+function changedValue(oldValue: unknown, newValue: unknown) {
+  const oldComparable = oldValue instanceof Date ? oldValue.toISOString() : oldValue ?? "";
+  const newComparable = newValue instanceof Date ? newValue.toISOString() : newValue ?? "";
+  return String(oldComparable) !== String(newComparable);
+}
+
+function editFieldChanges(current: Prisma.ChequeGetPayload<{ include: { customer: true } }>, body: z.infer<typeof updateSchema>) {
+  const nextChequeDate = body.chequeDate ? new Date(body.chequeDate) : undefined;
+  const nextCollectionDateTime = body.collectionDateTime ? new Date(body.collectionDateTime) : undefined;
+  const pairs: { field: string; oldValue: unknown; newValue: unknown }[] = [
+    { field: "customerId", oldValue: current.customerId, newValue: body.customerId },
+    { field: "chequeNumber", oldValue: current.chequeNumber, newValue: body.chequeNumber },
+    { field: "bankName", oldValue: current.bankName, newValue: body.bankName },
+    { field: "branch", oldValue: current.branch, newValue: body.branch },
+    { field: "chequeDate", oldValue: current.chequeDate, newValue: nextChequeDate },
+    { field: "amount", oldValue: current.amount, newValue: body.amount },
+    { field: "accountHolderName", oldValue: current.accountHolderName, newValue: body.accountHolderName },
+    { field: "collectionDateTime", oldValue: current.collectionDateTime, newValue: nextCollectionDateTime },
+    { field: "collectionNotes", oldValue: current.collectionNotes, newValue: body.collectionNotes },
+    { field: "frontImageUrl", oldValue: current.frontImageUrl, newValue: body.frontImageUrl },
+  ];
+  return pairs.filter((pair) => pair.newValue !== undefined && changedValue(pair.oldValue, pair.newValue));
+}
+
+function auditLine(input: {
+  reason: string;
+  sourceScreen?: string;
+  changes: { field: string; oldValue: unknown; newValue: unknown }[];
+  balanceDelta: number;
+}) {
+  const fieldSummary = input.changes
+    .map((change) => {
+      const oldText = change.oldValue instanceof Date ? change.oldValue.toISOString() : String(change.oldValue ?? "-");
+      const newText = change.newValue instanceof Date ? change.newValue.toISOString() : String(change.newValue ?? "-");
+      return `${change.field}: ${oldText} -> ${newText}`;
+    })
+    .join("; ");
+  return [
+    "Cheque Edited",
+    fieldSummary,
+    `Reason: ${input.reason}`,
+    `Source: ${input.sourceScreen ?? "cheque-tracker"}`,
+    `Balance adjustment delta: ${input.balanceDelta}`,
+  ].filter(Boolean).join("\n");
+}
 
 async function balanceApplicationForCheque(tx: Prisma.TransactionClient, cheque: {
   id: string;
@@ -141,13 +225,314 @@ export async function PATCH(
     },
   });
   if (!existing) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
-  if (!isValidTransition(existing.status, body.status)) {
+
+  const requestedEditFields = FINANCIAL_EDIT_FIELDS.filter((field) => body[field] !== undefined);
+  const isCollectedEditRequest = requestedEditFields.length > 0 || body.collectionNotes !== undefined;
+  if (isCollectedEditRequest && !body.status) {
+    if (!canEditCollectedCheque(session.role, session.id, existing)) {
+      return NextResponse.json({ code: "CHEQUE_EDIT_FORBIDDEN", error: "You do not have permission to edit this cheque." }, { status: 403 });
+    }
+
+    const hasFinancialChanges = requestedEditFields.length > 0;
+    if (!isEligibleEditStatus(existing.status) && hasFinancialChanges) {
+      return NextResponse.json({
+        code: "CHEQUE_FINALIZED",
+        error: "This cheque is already deposited or finalized. Normal financial editing is not allowed.",
+      }, { status: 409 });
+    }
+    if (!isEligibleEditStatus(existing.status) && !canManageChequeAccounting(session.role)) {
+      return NextResponse.json({
+        code: "CHEQUE_NOTES_LOCKED",
+        error: "Only authorized accounting staff can add correction notes after a cheque is finalized.",
+      }, { status: 403 });
+    }
+
+    if (body.expectedUpdatedAt && existing.updatedAt.toISOString() !== new Date(body.expectedUpdatedAt).toISOString()) {
+      return NextResponse.json({
+        code: "CHEQUE_CONFLICT",
+        error: "This cheque was updated by another user. Refresh and review the latest details.",
+      }, { status: 409 });
+    }
+
+    if (body.customerId && body.customerId !== existing.customerId && !canChangeChequeCustomer(session.role)) {
+      return NextResponse.json({
+        code: "CUSTOMER_CHANGE_FORBIDDEN",
+        error: "Only Shop Admin or authorized accounting staff can change the cheque customer.",
+      }, { status: 403 });
+    }
+
+    const duplicate = (body.chequeNumber || body.bankName)
+      ? await prisma.cheque.findFirst({
+          where: {
+            id: { not: id },
+            shopId,
+            chequeNumber: body.chequeNumber ?? existing.chequeNumber,
+            bankName: body.bankName ?? existing.bankName,
+          },
+          select: {
+            chequeNumber: true,
+            bankName: true,
+            amount: true,
+            chequeDate: true,
+            customer: { select: { partyName: true } },
+          },
+        })
+      : null;
+    if (duplicate) {
+      return NextResponse.json({
+        code: "DUPLICATE_CHEQUE",
+        error: "A cheque with this number and bank already exists.",
+        duplicate: {
+          chequeNumber: duplicate.chequeNumber,
+          customer: duplicate.customer.partyName,
+          amount: duplicate.amount,
+          chequeDate: duplicate.chequeDate,
+          bankName: duplicate.bankName,
+        },
+      }, { status: 409 });
+    }
+
+    const newCustomer = body.customerId && body.customerId !== existing.customerId
+      ? await prisma.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false } })
+      : null;
+    if (body.customerId && body.customerId !== existing.customerId && !newCustomer) {
+      return NextResponse.json({ code: "CUSTOMER_NOT_FOUND", error: "Selected customer was not found in this shop." }, { status: 404 });
+    }
+
+    const previewChanges = editFieldChanges(existing, body);
+    const sensitiveChanged = previewChanges.some((change) => ["customerId", "amount", "chequeDate"].includes(change.field));
+    if (sensitiveChanged && !body.correctionReason?.trim()) {
+      return NextResponse.json({
+        code: "CORRECTION_REASON_REQUIRED",
+        error: "Correction reason is required for amount, date, or customer changes.",
+      }, { status: 400 });
+    }
+    if (body.customerId && body.customerId !== existing.customerId) {
+      const confirmed = body.correctionReason?.trim();
+      if (!confirmed) {
+        return NextResponse.json({ code: "CUSTOMER_CHANGE_REASON_REQUIRED", error: "Correction reason is required to change customer." }, { status: 400 });
+      }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.cheque.findFirst({ where: { id, shopId }, include: { customer: true } });
+      if (!current) throw new Error("Cheque not found");
+      if (body.expectedUpdatedAt && current.updatedAt.toISOString() !== new Date(body.expectedUpdatedAt).toISOString()) {
+        return { conflict: true as const };
+      }
+
+      const changes = editFieldChanges(current, body);
+      if (changes.length === 0) {
+        const cheque = await tx.cheque.findUniqueOrThrow({ where: { id }, include: responseInclude });
+        return { conflict: false as const, cheque, balanceAdjustment: { applied: false, delta: 0 }, changedCustomerId: current.customerId };
+      }
+
+      const balanceApplication = await balanceApplicationForCheque(tx, current);
+      const oldAppliedAmount = balanceApplication?.amount ?? 0;
+      const targetCustomerId = body.customerId ?? current.customerId;
+      const nextAmount = body.amount ?? current.amount;
+      let balanceDelta = 0;
+
+      if (isEligibleEditStatus(current.status) && balanceApplication) {
+        if (targetCustomerId !== current.customerId) {
+          const oldCustomer = await tx.customer.findFirst({ where: { id: balanceApplication.customerId, shopId } });
+          const targetCustomer = await tx.customer.findFirst({ where: { id: targetCustomerId, shopId, isArchived: false } });
+          if (!oldCustomer || !targetCustomer) throw new Error("Customer balance correction could not be completed.");
+
+          const oldCustomerBalance = oldCustomer.outstandingBalance + oldAppliedAmount;
+          await tx.customer.update({
+            where: { id: oldCustomer.id },
+            data: {
+              outstandingBalance: oldCustomerBalance,
+              status: customerStatusFor(oldCustomerBalance, oldCustomer.status),
+            },
+          });
+
+          const newAppliedAmount = Math.min(nextAmount, targetCustomer.outstandingBalance);
+          const targetBalance = Math.max(0, targetCustomer.outstandingBalance - newAppliedAmount);
+          await tx.customer.update({
+            where: { id: targetCustomer.id },
+            data: {
+              outstandingBalance: targetBalance,
+              status: customerStatusFor(targetBalance, targetCustomer.status),
+            },
+          });
+          await tx.statusHistory.create({
+            data: {
+              customerId: oldCustomer.id,
+              fromStatus: oldCustomer.status,
+              toStatus: customerStatusFor(oldCustomerBalance, oldCustomer.status),
+              notes: `Cheque correction reversed: ${current.chequeNumber}. Amount restored: ${oldAppliedAmount}. Reason: ${body.correctionReason}`,
+              changedById: session.id,
+            },
+          });
+          await tx.statusHistory.create({
+            data: {
+              customerId: targetCustomer.id,
+              fromStatus: targetCustomer.status,
+              toStatus: customerStatusFor(targetBalance, targetCustomer.status),
+              notes: `Cheque correction applied: ${body.chequeNumber ?? current.chequeNumber}. Amount reduced: ${newAppliedAmount}. Reason: ${body.correctionReason}`,
+              changedById: session.id,
+            },
+          });
+          balanceDelta = newAppliedAmount - oldAppliedAmount;
+          if (balanceApplication.paymentEntryId) {
+            await tx.paymentEntry.update({
+              where: { id: balanceApplication.paymentEntryId },
+              data: { customerId: targetCustomer.id, amount: nextAmount, notes: `Cheque corrected: ${body.chequeNumber ?? current.chequeNumber}` },
+            });
+          }
+          await tx.cheque.update({
+            where: { id },
+            data: {
+              balanceAppliedAmount: newAppliedAmount,
+              balanceAppliedCustomerId: targetCustomer.id,
+              balancePaymentEntryId: balanceApplication.paymentEntryId ?? current.balancePaymentEntryId,
+            },
+          });
+        } else if (body.amount !== undefined && body.amount !== current.amount) {
+          const appliedCustomer = await tx.customer.findFirst({ where: { id: balanceApplication.customerId, shopId } });
+          if (!appliedCustomer) throw new Error("Applied-balance customer is not available in this shop.");
+          const amountDelta = body.amount - current.amount;
+          const newAppliedAmount = Math.max(0, oldAppliedAmount + amountDelta);
+          const nextBalance = amountDelta >= 0
+            ? Math.max(0, appliedCustomer.outstandingBalance - amountDelta)
+            : appliedCustomer.outstandingBalance + Math.abs(amountDelta);
+          await tx.customer.update({
+            where: { id: appliedCustomer.id },
+            data: {
+              outstandingBalance: nextBalance,
+              status: customerStatusFor(nextBalance, appliedCustomer.status),
+            },
+          });
+          await tx.statusHistory.create({
+            data: {
+              customerId: appliedCustomer.id,
+              fromStatus: appliedCustomer.status,
+              toStatus: customerStatusFor(nextBalance, appliedCustomer.status),
+              notes: `Cheque amount corrected: ${current.chequeNumber}. ${current.amount} -> ${body.amount}. Balance delta: ${amountDelta}. Reason: ${body.correctionReason}`,
+              changedById: session.id,
+            },
+          });
+          balanceDelta = amountDelta;
+          if (balanceApplication.paymentEntryId) {
+            await tx.paymentEntry.update({
+              where: { id: balanceApplication.paymentEntryId },
+              data: { amount: body.amount, notes: `Cheque corrected: ${body.chequeNumber ?? current.chequeNumber}` },
+            });
+          }
+          await tx.cheque.update({
+            where: { id },
+            data: {
+              balanceAppliedAmount: newAppliedAmount,
+              balanceAppliedCustomerId: balanceApplication.customerId,
+              balancePaymentEntryId: balanceApplication.paymentEntryId ?? current.balancePaymentEntryId,
+            },
+          });
+        }
+      }
+
+      await tx.cheque.update({
+        where: { id },
+        data: {
+          customerId: targetCustomerId,
+          chequeNumber: body.chequeNumber ?? current.chequeNumber,
+          bankName: body.bankName ?? current.bankName,
+          branch: body.branch === null ? null : body.branch ?? current.branch,
+          chequeDate: body.chequeDate ? new Date(body.chequeDate) : current.chequeDate,
+          amount: nextAmount,
+          accountHolderName: body.accountHolderName ?? current.accountHolderName,
+          collectionDateTime: body.collectionDateTime ? new Date(body.collectionDateTime) : current.collectionDateTime,
+          collectionNotes: body.collectionNotes === null ? null : body.collectionNotes ?? current.collectionNotes,
+          frontImageUrl: body.frontImageUrl === null ? null : body.frontImageUrl ?? current.frontImageUrl,
+          ocrRawText: body.ocrRawText === null ? null : body.ocrRawText ?? current.ocrRawText,
+          ocrExtractedData: body.ocrExtractedData === null ? Prisma.JsonNull : body.ocrExtractedData as Prisma.InputJsonValue | undefined,
+          ocrConfidence: body.ocrConfidence === null ? null : body.ocrConfidence ?? current.ocrConfidence,
+          ocrEditedFields: body.ocrEditedFields === null ? Prisma.JsonNull : body.ocrEditedFields as Prisma.InputJsonValue | undefined,
+        },
+      });
+
+      if (current.staffVisitId && targetCustomerId !== current.customerId) {
+        await tx.staffVisit.updateMany({
+          where: { id: current.staffVisitId, shopId },
+          data: { customerId: targetCustomerId },
+        });
+      }
+      await tx.followUp.updateMany({
+        where: { shopId, chequeId: id },
+        data: {
+          customerId: targetCustomerId,
+          recoveryAmount: nextAmount,
+          detailedNotes: body.collectionNotes ?? undefined,
+          metadata: {
+            chequeNumber: body.chequeNumber ?? current.chequeNumber,
+            bankName: body.bankName ?? current.bankName,
+            chequeDate: body.chequeDate ?? current.chequeDate.toISOString(),
+            correctionReason: body.correctionReason ?? null,
+          },
+        },
+      });
+
+      await tx.chequeActivity.create({
+        data: {
+          shopId,
+          chequeId: id,
+          userId: session.id,
+          type: "NOTE",
+          fromStatus: current.status,
+          toStatus: current.status,
+          notes: auditLine({
+            reason: body.correctionReason?.trim() || "Notes corrected",
+            sourceScreen: body.sourceScreen,
+            changes,
+            balanceDelta,
+          }),
+        },
+      });
+
+      const cheque = await tx.cheque.findUniqueOrThrow({ where: { id }, include: responseInclude });
+      return {
+        conflict: false as const,
+        cheque,
+        balanceAdjustment: { applied: balanceDelta !== 0, delta: balanceDelta },
+        changedCustomerId: targetCustomerId,
+      };
+    });
+
+    if (result.conflict) {
+      return NextResponse.json({
+        code: "CHEQUE_CONFLICT",
+        error: "This cheque was updated by another user. Refresh and review the latest details.",
+      }, { status: 409 });
+    }
+
+    await logActivity({
+      action: "cheque_edited",
+      userId: session.id,
+      shopId,
+      customerId: result.changedCustomerId,
+      details: `${existing.chequeNumber}: ${body.correctionReason ?? "Cheque corrected"}`,
+    });
+
+    return NextResponse.json({
+      success: true,
+      cheque: result.cheque,
+      data: result.cheque,
+      balanceAdjustment: result.balanceAdjustment,
+    });
+  }
+
+  if (!body.status) {
+    return NextResponse.json({ error: "Cheque status is required for workflow updates." }, { status: 400 });
+  }
+  const targetStatus = body.status;
+  if (!isValidTransition(existing.status, targetStatus)) {
     return NextResponse.json(
-      { error: `Invalid cheque workflow: ${existing.status} cannot move to ${body.status}` },
+      { error: `Invalid cheque workflow: ${existing.status} cannot move to ${targetStatus}` },
       { status: 400 }
     );
   }
-  const requiresDepositAccount = ["DEPOSITED", "CLEARED"].includes(body.status);
+  const requiresDepositAccount = ["DEPOSITED", "CLEARED"].includes(targetStatus);
   if (requiresDepositAccount && !body.depositedAccountId && !existing.depositedAccountId) {
     return NextResponse.json({ error: "Deposit account is required" }, { status: 400 });
   }
@@ -167,7 +552,7 @@ export async function PATCH(
       include: { customer: true },
     });
     if (!current) throw new Error("Cheque not found");
-    if (current.status === body.status) {
+    if (current.status === targetStatus) {
       const cheque = await tx.cheque.findUniqueOrThrow({ where: { id }, include: responseInclude });
       return {
         cheque,
@@ -177,8 +562,8 @@ export async function PATCH(
           : { applied: false as const, reason: "NO_STATUS_TRANSITION" as const },
       };
     }
-    if (!isValidTransition(current.status, body.status)) {
-      throw new Error(`Invalid cheque workflow: ${current.status} cannot move to ${body.status}`);
+    if (!isValidTransition(current.status, targetStatus)) {
+      throw new Error(`Invalid cheque workflow: ${current.status} cannot move to ${targetStatus}`);
     }
     const replayResult = async (
       reason: "ALREADY_REVERSED" | "NO_STATUS_TRANSITION" | "BALANCE_NOT_APPLIED",
@@ -194,7 +579,7 @@ export async function PATCH(
       | { applied: false; reason: "BALANCE_NOT_APPLIED" | "ALREADY_REVERSED" | "NOT_A_BOUNCE" }
       = { applied: false, reason: "NOT_A_BOUNCE" };
 
-    if (body.status === "CLEARED" && current.status !== "CLEARED") {
+    if (targetStatus === "CLEARED" && current.status !== "CLEARED") {
       const clearingClaim = await tx.cheque.updateMany({
         where: {
           id,
@@ -273,7 +658,7 @@ export async function PATCH(
       }
     }
 
-    if (body.status === "BOUNCED") {
+    if (targetStatus === "BOUNCED") {
       if (current.balanceReversedAt) {
         const claim = await tx.cheque.updateMany({
           where: { id, shopId, status: current.status },
@@ -349,15 +734,15 @@ export async function PATCH(
       }
     }
 
-    if (body.status !== "BOUNCED" && body.status !== "CLEARED") {
+    if (targetStatus !== "BOUNCED" && targetStatus !== "CLEARED") {
       const transitionClaim = await tx.cheque.updateMany({
         where: { id, shopId, status: current.status },
-        data: { status: body.status },
+        data: { status: targetStatus },
       });
       if (transitionClaim.count === 0) return replayResult("NO_STATUS_TRANSITION");
     }
 
-    if (body.status === "BOUNCED" && balanceReversal.applied === false && balanceReversal.reason === "BALANCE_NOT_APPLIED") {
+    if (targetStatus === "BOUNCED" && balanceReversal.applied === false && balanceReversal.reason === "BALANCE_NOT_APPLIED") {
       await tx.customer.update({
         where: { id: current.customerId },
         data: {
@@ -367,7 +752,7 @@ export async function PATCH(
       });
     }
 
-    if (body.status === "RETURNED_TO_PARTY") {
+    if (targetStatus === "RETURNED_TO_PARTY") {
       await tx.customer.update({
         where: { id: current.customerId },
         data: { status: "PENDING", nextFollowupDate: now },
@@ -386,9 +771,9 @@ export async function PATCH(
     await tx.cheque.update({
       where: { id },
       data: {
-        status: body.status,
+        status: targetStatus,
         depositDateTime:
-          ["DEPOSITED", "CLEARED"].includes(body.status)
+          ["DEPOSITED", "CLEARED"].includes(targetStatus)
             ? body.depositDateTime
               ? new Date(body.depositDateTime)
               : current.depositDateTime ?? now
@@ -414,11 +799,11 @@ export async function PATCH(
             : body.depositReceiptUrl
               ? session.id
               : current.depositReceiptUploadedById,
-        depositedById: ["DEPOSITED", "CLEARED"].includes(body.status) ? session.id : current.depositedById,
-        bounceReason: body.status === "BOUNCED" ? body.bounceReason ?? body.notes : current.bounceReason,
-        bouncedAt: body.status === "BOUNCED" ? now : current.bouncedAt,
-        clearedAt: body.status === "CLEARED" ? now : current.clearedAt,
-        cancelledAt: ["CANCELLED", "RETURNED_TO_PARTY"].includes(body.status) ? now : current.cancelledAt,
+        depositedById: ["DEPOSITED", "CLEARED"].includes(targetStatus) ? session.id : current.depositedById,
+        bounceReason: targetStatus === "BOUNCED" ? body.bounceReason ?? body.notes : current.bounceReason,
+        bouncedAt: targetStatus === "BOUNCED" ? now : current.bouncedAt,
+        clearedAt: targetStatus === "CLEARED" ? now : current.clearedAt,
+        cancelledAt: ["CANCELLED", "RETURNED_TO_PARTY"].includes(targetStatus) ? now : current.cancelledAt,
       },
       include: responseInclude,
     });
@@ -428,11 +813,11 @@ export async function PATCH(
         shopId,
         chequeId: id,
         userId: session.id,
-        type: activityType(body.status),
+        type: activityType(targetStatus),
         fromStatus: current.status,
-        toStatus: body.status,
+        toStatus: targetStatus,
         notes:
-          body.status === "BOUNCED" && balanceReversal.applied
+          targetStatus === "BOUNCED" && balanceReversal.applied
             ? `Cheque bounced. Amount: ${current.amount}. Reason: ${body.bounceReason}. Balance restored: ${balanceReversal.amount}. Balance ${balanceReversal.previousBalance} -> ${balanceReversal.newBalance}.`
             : body.notes ??
           body.bounceReason ??
@@ -448,7 +833,7 @@ export async function PATCH(
           userId: session.id,
           type: "NOTE",
           fromStatus: current.status,
-          toStatus: body.status,
+          toStatus: targetStatus,
           notes: "Deposit receipt uploaded",
         },
       });
@@ -458,11 +843,11 @@ export async function PATCH(
       ? `${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}`
       : body.depositBankAccount ?? current.depositBankAccount ?? "";
     const followUpStatus =
-      body.status === "BOUNCED"
+      targetStatus === "BOUNCED"
         ? "PENDING"
-        : body.status === "RETURNED_TO_PARTY"
+        : targetStatus === "RETURNED_TO_PARTY"
           ? "PENDING"
-        : body.status === "CLEARED"
+        : targetStatus === "CLEARED"
           ? current.amount >= current.customer.outstandingBalance
             ? "PAID"
             : "PARTIAL_PAID"
@@ -472,36 +857,36 @@ export async function PATCH(
       customerId: current.customerId,
       createdById: session.id,
       status: followUpStatus,
-      priority: body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY" ? "URGENT" : "MEDIUM",
+      priority: targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY" ? "URGENT" : "MEDIUM",
       notes:
         body.notes ??
         body.bounceReason ??
-        (body.status === "DEPOSITED" || body.status === "CLEARED" ? `Cheque ${body.status.toLowerCase()} ${depositSummary}`.trim() : undefined),
-      nextFollowupDate: body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY" ? now : null,
-      scheduledAt: body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY" ? now : null,
+        (targetStatus === "DEPOSITED" || targetStatus === "CLEARED" ? `Cheque ${targetStatus.toLowerCase()} ${depositSummary}`.trim() : undefined),
+      nextFollowupDate: targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY" ? now : null,
+      scheduledAt: targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY" ? now : null,
       recoveryAmount: current.amount,
-      paymentStatus: body.status === "CLEARED" ? "PAID_BY_CHEQUE" : body.status,
+      paymentStatus: targetStatus === "CLEARED" ? "PAID_BY_CHEQUE" : targetStatus,
       chequeId: current.id,
-      chequeStatus: body.status,
+      chequeStatus: targetStatus,
       sourceModule: "CHEQUE_DEPOSIT",
-      followUpType: `CHEQUE_${body.status}`,
+      followUpType: `CHEQUE_${targetStatus}`,
       summary:
-        body.status === "DEPOSITED"
+        targetStatus === "DEPOSITED"
           ? `Cheque deposited${depositSummary ? ` in ${depositSummary}` : ""}`
-          : body.status === "CLEARED"
+          : targetStatus === "CLEARED"
             ? `Cheque cleared Rs ${current.amount}`
-            : body.status === "BOUNCED"
+            : targetStatus === "BOUNCED"
               ? "Cheque bounced and customer follow-up required"
-              : body.status === "RETURNED_TO_PARTY"
+              : targetStatus === "RETURNED_TO_PARTY"
                 ? "Cheque returned to party and workflow closed"
-              : `Cheque ${body.status.toLowerCase()}`,
+              : `Cheque ${targetStatus.toLowerCase()}`,
       detailedNotes: body.notes ?? body.bounceReason,
       activitySource: "cheque-status",
       metadata: {
         chequeNumber: current.chequeNumber,
         bankName: current.bankName,
         fromStatus: current.status,
-        toStatus: body.status,
+        toStatus: targetStatus,
       },
       recordPayment: false,
       updateCustomerStatus: false,
@@ -523,38 +908,38 @@ export async function PATCH(
       userId: session.id,
       shopId,
       customerId: existing.customerId,
-      details: `${existing.chequeNumber}: ${existing.status} -> ${body.status}`,
+      details: `${existing.chequeNumber}: ${existing.status} -> ${targetStatus}`,
     });
   }
 
   const shopNotification =
     transactionResult.statusChanged &&
-    (body.status === "DEPOSITED" || body.status === "BOUNCED" || body.status === "RETURNED_TO_PARTY")
+    (targetStatus === "DEPOSITED" || targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY")
       ? await notifyChequeEvent({
       shopId,
       chequeId: updated.id,
       actorUserId: session.id,
       type:
-        body.status === "DEPOSITED"
+        targetStatus === "DEPOSITED"
           ? "CHEQUE_DEPOSITED"
-          : body.status === "BOUNCED"
+          : targetStatus === "BOUNCED"
             ? "CHEQUE_BOUNCED"
             : "CHEQUE_RETURNED",
       title:
-        body.status === "DEPOSITED"
+        targetStatus === "DEPOSITED"
           ? "Cheque Deposited"
-          : body.status === "BOUNCED"
+          : targetStatus === "BOUNCED"
             ? "Cheque Bounced"
             : "Cheque Returned",
       customerName: updated.customer.partyName,
       chequeNumber: updated.chequeNumber,
       amount: updated.amount,
       actorName: session.name,
-      restoredOutstanding: body.status === "BOUNCED" ? restoredOutstanding : undefined,
+      restoredOutstanding: targetStatus === "BOUNCED" ? restoredOutstanding : undefined,
       })
       : undefined;
   const assignedUserNotification =
-    body.status === "BOUNCED" &&
+    targetStatus === "BOUNCED" &&
     transactionResult.statusChanged &&
     String(normalizeFixedRole(existing.collectedBy.role)) === "SALES_PERSON"
       ? await notifyChequeEvent({

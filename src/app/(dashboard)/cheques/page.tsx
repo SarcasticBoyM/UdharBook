@@ -15,6 +15,7 @@ import {
   Landmark,
   Loader2,
   Paperclip,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -115,6 +116,7 @@ type ChequeItem = {
   bounceReason: string | null;
   clearedAt: string | null;
   bouncedAt: string | null;
+  updatedAt: string;
   customer: CustomerOption;
   collectedBy: UserOption;
   depositedBy: UserOption | null;
@@ -369,6 +371,28 @@ function normalizedChequeStatus(status?: ChequeStatus | null) {
   return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
 }
 
+function isCollectedEditable(status?: ChequeStatus | null) {
+  return status === "COLLECTED" || status === "PENDING_DEPOSIT";
+}
+
+function canEditCheque(role: string, userId: string, cheque: ChequeItem) {
+  if (!isCollectedEditable(cheque.status)) return false;
+  if (role === "SUPER_ADMIN" || role === "SHOP_ADMIN" || role === "ACCOUNT_STAFF" || role === "SALES_PERSON_CUM_ACCOUNTS") return true;
+  return role === "SALES_PERSON" && cheque.collectedBy.id === userId;
+}
+
+function dateOnly(value?: string | null) {
+  if (!value) return "";
+  return value.slice(0, 10);
+}
+
+function timeOnly(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toTimeString().slice(0, 5);
+}
+
 function StatCard({
   label,
   value,
@@ -413,7 +437,10 @@ export default function ChequeCollectionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingCheque, setEditingCheque] = useState<ChequeItem | null>(null);
   const [form, setForm] = useState<ChequeForm>(emptyForm);
+  const [formError, setFormError] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [recentCustomers, setRecentCustomers] = useState<CustomerOption[]>([]);
   const [customerLoading, setCustomerLoading] = useState(false);
@@ -427,6 +454,7 @@ export default function ChequeCollectionsPage() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [currentRole, setCurrentRole] = useState("");
+  const [currentUserId, setCurrentUserId] = useState("");
   const [depositAccounts, setDepositAccounts] = useState<DepositAccount[]>([]);
   const [depositAccountsError, setDepositAccountsError] = useState("");
   const [accountAudit, setAccountAudit] = useState<AccountAudit[]>([]);
@@ -539,8 +567,14 @@ export default function ChequeCollectionsPage() {
   useEffect(() => {
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
-      .then((payload) => setCurrentRole(payload?.user?.role ?? ""))
-      .catch(() => setCurrentRole(""));
+      .then((payload) => {
+        setCurrentRole(payload?.user?.role ?? "");
+        setCurrentUserId(payload?.user?.id ?? "");
+      })
+      .catch(() => {
+        setCurrentRole("");
+        setCurrentUserId("");
+      });
   }, []);
 
   useEffect(() => {
@@ -603,6 +637,44 @@ export default function ChequeCollectionsPage() {
     () => data?.items.reduce((sum, cheque) => sum + cheque.amount, 0) ?? 0,
     [data?.items]
   );
+
+  const openNewChequeForm = () => {
+    setEditingCheque(null);
+    setForm(emptyForm());
+    setCorrectionReason("");
+    setFormError("");
+    setSelectedCustomer(null);
+    setScanResult(null);
+    setSuggestedCustomerQuery("");
+    setFormOpen(true);
+  };
+
+  const openEditChequeForm = (cheque: ChequeItem) => {
+    setEditingCheque(cheque);
+    setForm({
+      customerId: cheque.customer.id,
+      customerSearch: `${cheque.customer.partyName} - ${cheque.customer.contactNumber}`,
+      chequeNumber: cheque.chequeNumber,
+      bankName: cheque.bankName,
+      branch: cheque.branch ?? "",
+      chequeDate: dateOnly(cheque.chequeDate),
+      amount: String(cheque.amount),
+      accountHolderName: cheque.accountHolderName,
+      micrCode: "",
+      ifscCode: "",
+      collectionDate: dateOnly(cheque.collectionDateTime),
+      collectionTime: timeOnly(cheque.collectionDateTime),
+      collectionNotes: cheque.collectionNotes ?? "",
+      frontImageUrl: cheque.frontImageUrl ?? "",
+    });
+    setSelectedCustomer(cheque.customer);
+    setCorrectionReason("");
+    setFormError("");
+    setScanResult(null);
+    setSuggestedCustomerQuery("");
+    setShowCustomerDropdown(false);
+    setFormOpen(true);
+  };
 
   const performStatusUpdate = async (
     cheque: ChequeItem,
@@ -744,6 +816,7 @@ export default function ChequeCollectionsPage() {
   const submitCheque = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
+    setFormError("");
     const editedFields = scanResult
       ? {
           chequeNumber: Boolean(scanResult.fields.chequeNumber && form.chequeNumber !== scanResult.fields.chequeNumber),
@@ -756,32 +829,55 @@ export default function ChequeCollectionsPage() {
           branch: Boolean(scanResult.fields.branch && form.branch !== scanResult.fields.branch),
         }
       : undefined;
-    const res = await fetch("/api/cheques", {
+    const requestBody = editingCheque
+      ? {
+          customerId: form.customerId,
+          chequeNumber: form.chequeNumber,
+          bankName: form.bankName,
+          branch: form.branch || null,
+          chequeDate: toDateTime(form.chequeDate, "00:00"),
+          amount: Number(form.amount),
+          accountHolderName: form.accountHolderName,
+          collectionDateTime: toDateTime(form.collectionDate, form.collectionTime),
+          collectionNotes: form.collectionNotes || null,
+          frontImageUrl: form.frontImageUrl || null,
+          ocrRawText: scanResult?.rawText || undefined,
+          ocrExtractedData: scanResult?.fields,
+          ocrConfidence: scanResult?.confidence,
+          ocrEditedFields: editedFields,
+          correctionReason: correctionReason.trim() || undefined,
+          expectedUpdatedAt: editingCheque.updatedAt,
+          sourceScreen: "cheque-tracker",
+        }
+      : {
+          customerId: form.customerId,
+          chequeNumber: form.chequeNumber,
+          bankName: form.bankName,
+          branch: form.branch || undefined,
+          chequeDate: toDateTime(form.chequeDate, "00:00"),
+          amount: Number(form.amount),
+          accountHolderName: form.accountHolderName,
+          collectionDateTime: toDateTime(form.collectionDate, form.collectionTime),
+          collectionNotes: form.collectionNotes || undefined,
+          frontImageUrl: form.frontImageUrl || undefined,
+          ocrRawText: scanResult?.rawText || undefined,
+          ocrExtractedData: scanResult?.fields,
+          ocrConfidence: scanResult?.confidence,
+          ocrEditedFields: editedFields,
+        };
+    const res = await fetch(editingCheque ? `/api/cheques/${editingCheque.id}` : "/api/cheques", {
       method: "POST",
+      ...(editingCheque ? { method: "PATCH" } : {}),
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customerId: form.customerId,
-        chequeNumber: form.chequeNumber,
-        bankName: form.bankName,
-        branch: form.branch || undefined,
-        chequeDate: toDateTime(form.chequeDate, "00:00"),
-        amount: Number(form.amount),
-        accountHolderName: form.accountHolderName,
-        collectionDateTime: toDateTime(form.collectionDate, form.collectionTime),
-        collectionNotes: form.collectionNotes || undefined,
-        frontImageUrl: form.frontImageUrl || undefined,
-        micrCode: form.micrCode || undefined,
-        ifscCode: form.ifscCode || undefined,
-        ocrRawText: scanResult?.rawText || undefined,
-        ocrExtractedData: scanResult?.fields,
-        ocrConfidence: scanResult?.confidence,
-        ocrEditedFields: editedFields,
-      }),
+      body: JSON.stringify(requestBody),
     });
     setSaving(false);
     if (res.ok) {
       saveOcrCorrections(scanResult, form);
       setForm(emptyForm());
+      setEditingCheque(null);
+      setCorrectionReason("");
+      setFormError("");
       setScanResult(null);
       setSelectedCustomer(null);
       setCustomers([]);
@@ -790,7 +886,9 @@ export default function ChequeCollectionsPage() {
       loadCheques();
     } else {
       const error = await res.json().catch(() => ({}));
-      window.alert(error.error ?? "Could not save cheque");
+      const message = error.error ?? "Could not save cheque";
+      setFormError(message);
+      window.alert(message);
     }
   };
 
@@ -926,23 +1024,10 @@ export default function ChequeCollectionsPage() {
       let result = (await res.json()) as ScanResult;
       result = applyOcrCorrections(result);
       setScanResult(result);
-      if (result.fields) {
+      if (!editingCheque && result.fields) {
         const detectedCustomerName =
           result.fields.customerName?.trim() || result.fields.accountHolderName?.trim();
-        setForm((current) => ({
-          ...current,
-          customerSearch: current.customerId
-            ? current.customerSearch
-            : detectedCustomerName || current.customerSearch,
-          chequeNumber: result.fields.chequeNumber ?? current.chequeNumber,
-          bankName: result.fields.bankName ?? current.bankName,
-          branch: result.fields.branch ?? current.branch,
-          chequeDate: result.fields.chequeDate ?? current.chequeDate,
-          amount: result.fields.amount ? String(result.fields.amount) : current.amount,
-          accountHolderName: result.fields.accountHolderName ?? current.accountHolderName,
-          micrCode: result.fields.micrCode ?? current.micrCode,
-          ifscCode: result.fields.ifscCode ?? current.ifscCode,
-        }));
+        setForm((current) => ({ ...current, customerSearch: current.customerId ? current.customerSearch : detectedCustomerName || current.customerSearch }));
         if (detectedCustomerName) {
           setSuggestedCustomerQuery(detectedCustomerName);
           setShowCustomerDropdown(true);
@@ -997,20 +1082,22 @@ export default function ChequeCollectionsPage() {
       let result = (await res.json()) as ScanResult;
       result = applyOcrCorrections(result);
       setScanResult(result);
-      setForm((current) => ({
-        ...current,
-        chequeNumber: result.fields.chequeNumber ?? current.chequeNumber,
-        bankName: result.fields.bankName ?? current.bankName,
-        branch: result.fields.branch ?? current.branch,
-        chequeDate: result.fields.chequeDate ?? current.chequeDate,
-        amount: result.fields.amount ? String(result.fields.amount) : current.amount,
-        accountHolderName: result.fields.accountHolderName ?? current.accountHolderName,
-        micrCode: result.fields.micrCode ?? current.micrCode,
-        ifscCode: result.fields.ifscCode ?? current.ifscCode,
-      }));
     } finally {
       setScanning(false);
     }
+  };
+
+  const applyScanFields = () => {
+    if (!scanResult?.fields) return;
+    setForm((current) => ({
+      ...current,
+      chequeNumber: scanResult.fields.chequeNumber ?? current.chequeNumber,
+      bankName: scanResult.fields.bankName ?? current.bankName,
+      branch: scanResult.fields.branch ?? current.branch,
+      chequeDate: scanResult.fields.chequeDate ?? current.chequeDate,
+      amount: scanResult.fields.amount ? String(scanResult.fields.amount) : current.amount,
+      accountHolderName: scanResult.fields.accountHolderName ?? current.accountHolderName,
+    }));
   };
 
   const selectCustomer = (customer: CustomerOption) => {
@@ -1026,13 +1113,20 @@ export default function ChequeCollectionsPage() {
 
   const visibleCustomerSuggestions =
     form.customerSearch.trim().length >= 1 || suggestedCustomerQuery ? customers : recentCustomers;
+  const sensitiveEditChanged = Boolean(
+    editingCheque &&
+      (editingCheque.customer.id !== form.customerId ||
+        Number(form.amount) !== editingCheque.amount ||
+        dateOnly(editingCheque.chequeDate) !== form.chequeDate)
+  );
   const canSaveCheque =
     Boolean(form.customerId) &&
     Boolean(form.chequeNumber.trim()) &&
     Boolean(form.bankName.trim()) &&
     Boolean(form.chequeDate) &&
     Number(form.amount) > 0 &&
-    Boolean(form.accountHolderName.trim());
+    Boolean(form.accountHolderName.trim()) &&
+    (!sensitiveEditChanged || Boolean(correctionReason.trim()));
 
   return (
     <div className="pb-24">
@@ -1058,7 +1152,7 @@ export default function ChequeCollectionsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setFormOpen(true)}
+            onClick={openNewChequeForm}
             className="flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white dark:bg-white dark:text-slate-950"
           >
             <Plus className="h-4 w-4" />
@@ -1411,6 +1505,12 @@ export default function ChequeCollectionsPage() {
                         }}
                       />
                     )}
+                    {canEditCheque(currentRole, currentUserId, cheque) && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); openEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
+                        <Pencil className="h-4 w-4" />
+                        Edit Cheque
+                      </button>
+                    )}
                     {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
                       <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
                         Mark Deposited
@@ -1463,6 +1563,12 @@ export default function ChequeCollectionsPage() {
                 <p className="mt-1 text-sm text-slate-500">
                   {selectedCheque.chequeNumber} | {selectedCheque.bankName}
                 </p>
+                {canEditCheque(currentRole, currentUserId, selectedCheque) && (
+                  <button type="button" onClick={() => openEditChequeForm(selectedCheque)} className="mt-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 text-sm font-semibold dark:border-slate-700">
+                    <Pencil className="h-4 w-4" />
+                    Edit Cheque
+                  </button>
+                )}
                 <dl className="mt-4 space-y-3 text-sm">
                   <div className="flex justify-between gap-4">
                     <dt className="text-slate-500">Amount</dt>
@@ -1577,13 +1683,20 @@ export default function ChequeCollectionsPage() {
           <form onSubmit={submitCheque} className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:mx-auto sm:max-w-3xl sm:rounded-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold">Collect New Cheque</h2>
-                <p className="mt-1 text-sm text-slate-500">Scan the cheque, verify editable details, then save.</p>
+                <h2 className="text-xl font-bold">{editingCheque ? "Edit Cheque" : "Collect New Cheque"}</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {editingCheque ? `Current status: ${formatStatus(editingCheque.status)}` : "Scan the cheque, verify editable details, then save."}
+                </p>
               </div>
-              <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border p-2">
+              <button type="button" onClick={() => { setFormOpen(false); setEditingCheque(null); setFormError(""); }} className="rounded-lg border p-2">
                 <XCircle className="h-5 w-5" />
               </button>
             </div>
+            {formError && (
+              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {formError}
+              </p>
+            )}
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1655,6 +1768,14 @@ export default function ChequeCollectionsPage() {
                     {scanResult.provider ? ` | ${scanResult.provider}` : ""}
                   </p>
                   {scanResult.warning && <p className="mt-1">{scanResult.warning}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={applyScanFields}
+                      className="rounded-lg border border-current px-3 py-2 text-xs font-semibold"
+                    >
+                      Apply detected values
+                    </button>
                   {form.frontImageUrl && (
                     <button
                       type="button"
@@ -1665,6 +1786,7 @@ export default function ChequeCollectionsPage() {
                       {scanning ? "Retrying..." : "Retry scan"}
                     </button>
                   )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1778,14 +1900,29 @@ export default function ChequeCollectionsPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
                 />
               </label>
+              {editingCheque && (
+                <label className="md:col-span-2">
+                  <span className="text-sm font-medium">
+                    Correction reason {sensitiveEditChanged ? <span className="text-red-600">*</span> : null}
+                  </span>
+                  <textarea
+                    value={correctionReason}
+                    onChange={(e) => setCorrectionReason(e.target.value)}
+                    rows={3}
+                    placeholder="OCR read wrong amount, cheque date entered incorrectly, wrong party selected..."
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    required={sensitiveEditChanged}
+                  />
+                </label>
+              )}
             </div>
 
             <div className="sticky bottom-0 -mx-5 mt-6 flex gap-3 border-t border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-              <button type="button" onClick={() => setFormOpen(false)} className="min-h-12 flex-1 rounded-lg border border-slate-300 text-sm font-semibold">
+              <button type="button" onClick={() => { setFormOpen(false); setEditingCheque(null); setFormError(""); }} className="min-h-12 flex-1 rounded-lg border border-slate-300 text-sm font-semibold">
                 Cancel
               </button>
               <button type="submit" disabled={saving || !canSaveCheque} className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950">
-                {saving ? "Saving..." : "Save Cheque"}
+                {saving ? "Saving..." : editingCheque ? "Save Changes" : "Save Cheque"}
               </button>
             </div>
           </form>
@@ -1977,7 +2114,7 @@ export default function ChequeCollectionsPage() {
       )}
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 lg:hidden">
-        <button onClick={() => setFormOpen(true)} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 text-sm font-semibold text-white dark:bg-white dark:text-slate-950">
+        <button onClick={openNewChequeForm} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 text-sm font-semibold text-white dark:bg-white dark:text-slate-950">
           <Plus className="h-4 w-4" />
           Collect Cheque
         </button>
