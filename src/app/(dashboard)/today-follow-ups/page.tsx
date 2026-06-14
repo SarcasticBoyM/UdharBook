@@ -521,7 +521,33 @@ export default function TodayFollowUpsPage() {
   const [linkedFollowUpId, setLinkedFollowUpId] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLElement | null>(null);
+  const sheetHistoryActiveRef = useRef(false);
+  const restoreFocusIdRef = useRef<string | null>(null);
+  const [mobileSheet, setMobileSheet] = useState(false);
   const notifiedIds = useRef<Set<string>>(new Set());
+
+  const restoreListFocus = useCallback(() => {
+    const customerId = restoreFocusIdRef.current;
+    if (!customerId) return;
+    window.setTimeout(() => {
+      const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(customerId)}"]`) ?? null;
+      target?.focus({ preventScroll: true });
+    }, 0);
+  }, []);
+
+  const openCustomer = useCallback((customerId: string) => {
+    restoreFocusIdRef.current = customerId;
+    setSelectedId(customerId);
+  }, []);
+
+  const closeCustomer = useCallback(() => {
+    if (sheetHistoryActiveRef.current) {
+      window.history.back();
+      return;
+    }
+    setSelectedId(null);
+    restoreListFocus();
+  }, [restoreListFocus]);
 
   const scrollListElementIntoView = useCallback((element: HTMLElement | null) => {
     const list = listRef.current;
@@ -544,6 +570,51 @@ export default function TodayFollowUpsPage() {
   }, []);
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = () => setMobileSheet(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const customerId = event.state?.todayFollowUpsSheetCustomerId as string | undefined;
+      if (customerId) {
+        sheetHistoryActiveRef.current = true;
+        restoreFocusIdRef.current = customerId;
+        setSelectedId(customerId);
+        return;
+      }
+      if (sheetHistoryActiveRef.current) {
+        sheetHistoryActiveRef.current = false;
+        setSelectedId(null);
+        restoreListFocus();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [restoreListFocus]);
+
+  useEffect(() => {
+    if (!mobileSheet || !selectedId) return;
+    if (sheetHistoryActiveRef.current) {
+      window.history.replaceState(
+        { ...window.history.state, todayFollowUpsSheetCustomerId: selectedId },
+        "",
+        window.location.href,
+      );
+      return;
+    }
+    window.history.pushState(
+      { ...window.history.state, todayFollowUpsSheetCustomerId: selectedId },
+      "",
+      window.location.href,
+    );
+    sheetHistoryActiveRef.current = true;
+  }, [mobileSheet, selectedId]);
+
+  useEffect(() => {
     if (!isShopAdminRole(currentRole)) {
       setStaffOptions([]);
       return;
@@ -560,11 +631,11 @@ export default function TodayFollowUpsPage() {
     if (!linkedFollowUpId || scheduled.length === 0) return;
     const linked = scheduled.find((customer) => customer.scheduledFollowUp.id === linkedFollowUpId);
     if (!linked) return;
-    setSelectedId(linked.id);
+    openCustomer(linked.id);
     window.setTimeout(() => {
       scrollListElementIntoView(document.getElementById(`scheduled-follow-up-${linkedFollowUpId}`));
     }, 100);
-  }, [linkedFollowUpId, scheduled, scrollListElementIntoView]);
+  }, [linkedFollowUpId, openCustomer, scheduled, scrollListElementIntoView]);
 
   const mergeQueue = useCallback((data: TodayResponse, reset: boolean) => {
     if (reset || data.scheduled.length > 0) setScheduled(data.scheduled);
@@ -743,7 +814,7 @@ export default function TodayFollowUpsPage() {
         });
         notification.onclick = () => {
           window.focus();
-          setSelectedId(reminder.customerId);
+          openCustomer(reminder.customerId);
           window.setTimeout(() => {
             const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(reminder.customerId)}"]`) ?? null;
             scrollListElementIntoView(target);
@@ -754,7 +825,7 @@ export default function TodayFollowUpsPage() {
     checkDue();
     const timer = window.setInterval(checkDue, 60000);
     return () => window.clearInterval(timer);
-  }, [playAlert, scrollListElementIntoView]);
+  }, [openCustomer, playAlert, scrollListElementIntoView]);
 
   const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0) => {
     const now = new Date().toISOString();
@@ -839,7 +910,8 @@ export default function TodayFollowUpsPage() {
       const currentIndex = queueOrder.indexOf(customerId);
       const nextId = queueOrder[currentIndex + 1] ?? queueOrder[currentIndex - 1] ?? null;
       await refreshAffectedCustomer(customerId);
-      setSelectedId(nextId);
+      if (nextId) openCustomer(nextId);
+      else closeCustomer();
       if (nextId) {
         window.setTimeout(() => {
           const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(nextId)}"]`) ?? null;
@@ -847,7 +919,7 @@ export default function TodayFollowUpsPage() {
         }, 0);
       }
     },
-    [queueOrder, refreshAffectedCustomer, scrollListElementIntoView]
+    [closeCustomer, openCustomer, queueOrder, refreshAffectedCustomer, scrollListElementIntoView]
   );
 
   return (
@@ -966,7 +1038,7 @@ export default function TodayFollowUpsPage() {
             collapsed={scheduledCollapsed}
             onFilterChange={setScheduledFilter}
             onToggle={() => setScheduledCollapsed((value) => !value)}
-            onSelect={setSelectedId}
+            onSelect={openCustomer}
             onQuickSave={quickSave}
             onCancel={cancelScheduled}
           />
@@ -985,7 +1057,7 @@ export default function TodayFollowUpsPage() {
                 customers={pending}
                 total={summary.pending}
                 selectedId={selectedId}
-                onSelect={setSelectedId}
+                onSelect={openCustomer}
                 onQuickSave={quickSave}
               />
               <div ref={sentinelRef} className="h-4" />
@@ -1002,7 +1074,7 @@ export default function TodayFollowUpsPage() {
                 count={sections.urgent}
                 customers={pendingSections.urgent}
                 selectedId={selectedId}
-                onSelect={setSelectedId}
+                onSelect={openCustomer}
                 onQuickSave={quickSave}
               />
               <QueueSection
@@ -1010,7 +1082,7 @@ export default function TodayFollowUpsPage() {
                 count={sections.today}
                 customers={pendingSections.today}
                 selectedId={selectedId}
-                onSelect={setSelectedId}
+                onSelect={openCustomer}
                 onQuickSave={quickSave}
               />
               <QueueSection
@@ -1018,7 +1090,7 @@ export default function TodayFollowUpsPage() {
                 count={sections.recent}
                 customers={pendingSections.recent}
                 selectedId={selectedId}
-                onSelect={setSelectedId}
+                onSelect={openCustomer}
                 onQuickSave={quickSave}
               />
               <div ref={sentinelRef} className="h-4" />
@@ -1042,7 +1114,7 @@ export default function TodayFollowUpsPage() {
                 </div>
               ) : (
                 done.map((customer) => (
-                  <DoneCard key={`${customer.id}-${customer.todayAction?.id ?? "done"}`} customer={customer} onOpen={() => setSelectedId(customer.id)} />
+                  <DoneCard key={`${customer.id}-${customer.todayAction?.id ?? "done"}`} customer={customer} onOpen={() => openCustomer(customer.id)} />
                 ))
               )}
             </div>
@@ -1068,7 +1140,7 @@ export default function TodayFollowUpsPage() {
           canAssignTask={isShopAdminRole(currentRole)}
           canAssignFollowUp={isShopAdminRole(currentRole)}
           staffOptions={staffOptions}
-          onClose={() => setSelectedId(null)}
+          onClose={closeCustomer}
           onOptimistic={applyOptimisticAction}
           onSaved={handleSaved}
         />
@@ -1329,6 +1401,7 @@ function ScheduledFollowUpCard({
     <article
       id={`scheduled-follow-up-${scheduled.id}`}
       data-customer-id={customer.id}
+      tabIndex={-1}
       onClick={onOpen}
       className={cn(
         "min-w-0 cursor-pointer overflow-hidden rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
@@ -1474,6 +1547,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
   return (
     <article
       data-customer-id={customer.id}
+      tabIndex={-1}
       onClick={onOpen}
       className={cn(
         "grid min-h-20 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-3 transition [contain-intrinsic-size:96px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_150px_150px_160px]",
@@ -1597,6 +1671,7 @@ function CustomerCard({
   return (
     <article
       data-customer-id={customer.id}
+      tabIndex={-1}
       onClick={onOpen}
       onTouchStart={(event) => {
         const touch = event.touches[0];
@@ -1947,15 +2022,24 @@ function ActionPanel({
   };
 
   return (
-    <aside className="fixed inset-0 z-40 bg-black/40 lg:sticky lg:top-4 lg:z-0 lg:h-[calc(100dvh-2rem)] lg:w-full lg:min-w-0 lg:bg-transparent">
-      <div className="ml-auto flex h-[100dvh] w-full max-w-lg flex-col overflow-hidden border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 lg:h-full lg:min-h-0 lg:max-w-none lg:rounded-xl lg:shadow-sm">
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-          <div>
+    <aside className="fixed inset-0 z-[60] bg-black/40 lg:sticky lg:top-4 lg:z-0 lg:h-[calc(100dvh-2rem)] lg:w-full lg:min-w-0 lg:bg-transparent">
+      <div className="ui-surface-elevated ml-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden border shadow-xl lg:h-full lg:min-h-0 lg:max-w-none lg:rounded-xl lg:shadow-sm">
+        <div className="ui-surface-muted grid shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:flex lg:items-start lg:justify-between lg:gap-3 lg:p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close follow-up and return to customer list"
+            className="ui-control inline-flex h-11 w-11 items-center justify-center rounded-lg border lg:hidden"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <div className="min-w-0 text-center lg:text-left">
             <p className="text-xs font-bold uppercase text-brand-600 dark:text-brand-300">What happened?</p>
-            <h2 className="mt-1 text-xl font-bold">{customer.partyName}</h2>
-            <p className="text-sm text-slate-500">{formatCurrency(customer.outstandingBalance)} outstanding</p>
+            <h2 className="mt-1 truncate text-base font-bold sm:text-lg lg:text-xl">{customer.partyName}</h2>
+            <p className="truncate text-xs text-slate-500 dark:text-slate-400 lg:text-sm">{formatCurrency(customer.outstandingBalance)} outstanding</p>
           </div>
-          <div className="flex items-center gap-2">
+          <span className="h-11 w-11 lg:hidden" aria-hidden="true" />
+          <div className="hidden items-center gap-2 lg:flex">
             {canAssignTask && (
               <AssignTaskButton
                 label="Assign To Staff"
@@ -1973,14 +2057,14 @@ function ActionPanel({
                 className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"
               />
             )}
-            <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <button type="button" onClick={onClose} aria-label="Close follow-up" className="ui-control inline-flex h-11 w-11 items-center justify-center rounded-lg border">
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4">
             <div className="grid grid-cols-2 gap-2">
               <a
                 href={telHref(customer.contactNumber)}
@@ -2000,7 +2084,7 @@ function ActionPanel({
             </div>
             {whatsAppMessage && <p className="-mt-2 text-xs font-semibold text-amber-700">{whatsAppMessage}</p>}
 
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+            <div className="ui-surface-muted rounded-xl border p-3">
               <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the follow-up outcome</p>
               <div className="grid grid-cols-2 gap-2">
                 {PRIMARY_ACTIONS.map((action) => (
@@ -2008,11 +2092,12 @@ function ActionPanel({
                     key={action.value}
                     type="button"
                     onClick={() => selectPrimaryAction(action.value)}
+                    aria-pressed={primaryAction === action.value}
                     className={cn(
-                      "min-h-20 rounded-xl border bg-white px-3 py-3 text-left transition dark:bg-slate-900",
+                      "min-h-20 rounded-xl border px-3 py-3 text-left transition",
                       primaryAction === action.value
-                        ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500 dark:bg-brand-950 dark:text-brand-100"
-                        : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        ? "ui-control-selected ring-1 ring-[var(--selected-border)]"
+                        : "ui-control"
                     )}
                   >
                     <span className="block text-sm font-bold">{action.label}</span>
@@ -2037,8 +2122,8 @@ function ActionPanel({
                       className={cn(
                         "min-h-11 rounded-lg border px-3 text-sm font-semibold",
                         status === outcome.value && notes === outcome.notes
-                          ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100"
-                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          ? "border-emerald-500 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-500 dark:border-emerald-400 dark:bg-emerald-950 dark:text-emerald-100"
+                          : "ui-control"
                       )}
                     >
                       {outcome.label}
@@ -2061,7 +2146,7 @@ function ActionPanel({
                         "min-h-11 rounded-lg border px-3 text-sm font-semibold",
                         status === outcome.value && notes === outcome.notes
                           ? "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-100"
-                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          : "ui-control"
                       )}
                     >
                       {outcome.label}
@@ -2084,7 +2169,7 @@ function ActionPanel({
                         "min-h-11 rounded-lg border px-3 text-sm font-semibold",
                         status === outcome.value && notes === outcome.notes
                           ? "border-brand-300 bg-brand-50 text-brand-800 dark:bg-brand-950 dark:text-brand-100"
-                          : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                          : "ui-control"
                       )}
                     >
                       {outcome.label}

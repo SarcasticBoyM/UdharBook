@@ -234,7 +234,7 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
                       }}
                       className={cn(
                         "min-h-11 rounded-lg border px-3 text-left text-xs font-semibold",
-                        actionKey === item.key ? item.tone : "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                        actionKey === item.key ? cn(item.tone, "dark:border-blue-400 dark:bg-blue-950 dark:text-blue-100") : "ui-control"
                       )}
                     >
                       {item.label}

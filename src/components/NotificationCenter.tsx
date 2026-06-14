@@ -351,7 +351,7 @@ export function NotificationCenter() {
         onClick={() => setOpen(true)}
         aria-label={loadError ? "Open notifications, notification service unavailable" : "Open notifications"}
         className={cn(
-          "fixed right-3 top-2 z-50 inline-flex h-10 min-w-10 items-center justify-center gap-1 rounded-lg border bg-white px-2 shadow-sm transition hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-100 md:right-5 md:top-5",
+          "ui-control fixed right-3 top-2 z-40 inline-flex h-10 min-w-10 items-center justify-center gap-1 rounded-lg border px-2 shadow-sm transition md:right-5 md:top-5",
           criticalUnreadCount > 0
             ? "border-red-300 text-red-700 dark:border-red-900"
             : loadError
@@ -388,10 +388,10 @@ export function NotificationCenter() {
       {open && (
         <div className="fixed inset-0 z-[70] bg-slate-950/40 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <section
-            className="ml-auto flex h-[100dvh] w-full max-w-md flex-col bg-white shadow-2xl dark:bg-slate-950 sm:border-l sm:border-slate-200 sm:dark:border-slate-800"
+            className="ui-surface-elevated ml-auto flex h-[100dvh] w-full max-w-md flex-col border-l shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <header className="sticky top-0 z-10 border-b border-slate-200 bg-white p-4 pt-[max(1rem,env(safe-area-inset-top))] dark:border-slate-800 dark:bg-slate-950">
+            <header className="ui-surface-elevated sticky top-0 z-10 border-b p-4 pt-[max(1rem,env(safe-area-inset-top))]">
               <div className="flex items-center gap-3">
                 <div>
                   <h2 className="text-base font-bold text-slate-900 dark:text-white">Notifications</h2>
@@ -402,7 +402,7 @@ export function NotificationCenter() {
                 <button
                   type="button"
                   onClick={() => void mutateNotification({ action: "MARK_ALL_READ" })}
-                  className="ml-auto inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  className="ui-control ml-auto inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm font-semibold"
                 >
                   <CheckCheck className="h-4 w-4" />
                   Mark all
@@ -411,7 +411,7 @@ export function NotificationCenter() {
                   type="button"
                   onClick={() => setOpen(false)}
                   aria-label="Close notifications"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                  className="ui-control inline-flex h-10 w-10 items-center justify-center rounded-md border"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -473,7 +473,7 @@ export function NotificationCenter() {
                         className={cn(
                           "rounded-lg border p-3",
                           notification.isRead
-                            ? "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950"
+                            ? "ui-surface"
                             : tone.unread,
                         )}
                       >
@@ -511,7 +511,7 @@ export function NotificationCenter() {
                             <button
                               type="button"
                               onClick={() => void mutateNotification({ action: "MARK_READ", id: notification.id })}
-                              className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                              className="ui-control inline-flex min-h-10 items-center gap-2 rounded-md border px-3 text-sm font-semibold"
                             >
                               <Check className="h-4 w-4" />
                               Mark read
