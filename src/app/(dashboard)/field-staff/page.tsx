@@ -18,6 +18,8 @@ import {
   UserPlus,
 } from "lucide-react";
 import { isSalesRole, isShopAdminRole } from "@/lib/operational-roles";
+import { AppDatePicker, AppDateTimePicker } from "@/components/AppDateTimePicker";
+import { combineDateTimeValue, istDateTimeToIso } from "@/lib/app-date-time";
 
 type CustomerSuggestion = {
   id: string;
@@ -591,7 +593,7 @@ export default function FieldStaffPage() {
           outcome: outcomeText,
           visitOutcomes: visitOutcomes.length ? visitOutcomes : [result],
           nextAction: hasOrder ? undefined : nextAction || undefined,
-          nextVisitDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+          nextVisitDate: hasFollowup && nextFollowupDate ? istDateTimeToIso(nextFollowupDate) ?? undefined : undefined,
           orderExpectedDelivery: hasOrder && orderExpectedDelivery ? new Date(orderExpectedDelivery).toISOString() : undefined,
           orderProductCategory: hasOrder ? orderProductCategory || undefined : undefined,
           orderPriority: hasOrder ? orderPriority || undefined : undefined,
@@ -606,7 +608,7 @@ export default function FieldStaffPage() {
           accuracy: position.coords.accuracy,
           notes,
           recoveryAmount: (hasPayment && paymentMode !== "Cheque Collected") || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
-          nextFollowupDate: hasFollowup && nextFollowupDate ? new Date(nextFollowupDate).toISOString() : undefined,
+          nextFollowupDate: hasFollowup && nextFollowupDate ? istDateTimeToIso(nextFollowupDate) ?? undefined : undefined,
         }),
       });
       const data = await res.json();
@@ -1001,7 +1003,7 @@ export default function FieldStaffPage() {
                 {isOrderOutcome(visitType, result, visitOutcomes) && (
                   <>
                     <textarea value={orderProductCategory} onChange={(e) => setOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
-                    <input value={orderExpectedDelivery} onChange={(e) => setOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                    <AppDatePicker label="Preferred Delivery Date" value={orderExpectedDelivery} onChange={setOrderExpectedDelivery} />
                     <select value={orderPriority} onChange={(e) => setOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
                       <option>Normal</option>
                       <option>Urgent</option>
@@ -1025,7 +1027,7 @@ export default function FieldStaffPage() {
                   />
                 )}
                 {needsNextFollowupOutcome(result, visitOutcomes) && (
-                  <input value={nextFollowupDate} onChange={(e) => setNextFollowupDate(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+                  <AppDateTimePicker label="Next Follow-up Date" value={nextFollowupDate} onChange={setNextFollowupDate} required />
                 )}
               </div>
             </div>
@@ -1148,7 +1150,7 @@ function VisitDetailFields({
         <input value={nextAction} onChange={(e) => onNextAction(e.target.value)} placeholder="Next action" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
       )}
       {hasFollowup && (
-        <input value={nextFollowupDate} onChange={(e) => onNextFollowup(e.target.value)} type="datetime-local" aria-label="Next Follow-up Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+        <AppDateTimePicker label="Next Follow-up Date" value={nextFollowupDate} onChange={onNextFollowup} required />
       )}
       {hasPayment && (
         <PaymentFields
@@ -1168,7 +1170,7 @@ function VisitDetailFields({
       {hasOrder && (
         <>
           <textarea value={orderProductCategory} onChange={(e) => onOrderProductCategory(e.target.value)} placeholder="Order Details" className="min-h-28 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:col-span-2" />
-          <input value={orderExpectedDelivery} onChange={(e) => onOrderExpectedDelivery(e.target.value)} type="date" aria-label="Preferred Delivery Date" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+          <AppDatePicker label="Preferred Delivery Date" value={orderExpectedDelivery} onChange={onOrderExpectedDelivery} />
           <select value={orderPriority} onChange={(e) => onOrderPriority(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
             <option>Normal</option>
             <option>Urgent</option>
@@ -1419,7 +1421,7 @@ function VisitChequeCollection({
         chequeNumber: form.chequeNumber.trim(),
         bankName: form.bankName.trim(),
         branch: form.branch || undefined,
-        chequeDate: new Date(`${form.chequeDate}T00:00:00`).toISOString(),
+        chequeDate: istDateTimeToIso(combineDateTimeValue(form.chequeDate, "00:00")),
         amount: Number(form.amount),
         accountHolderName: form.accountHolderName.trim(),
         collectionDateTime: new Date().toISOString(),
@@ -1524,6 +1526,9 @@ function Input({
   type?: string;
   inputMode?: "decimal" | "numeric" | "tel";
 }) {
+  if (type === "date") {
+    return <AppDatePicker label={label} value={value} onChange={onChange} required={required} />;
+  }
   return (
     <label className="text-sm">
       <span className="mb-1 block font-medium">{label}{required ? " *" : ""}</span>

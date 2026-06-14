@@ -7,6 +7,8 @@ import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCir
 import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
+import { AppDatePicker } from "@/components/AppDateTimePicker";
+import { istDateTimeToIso } from "@/lib/app-date-time";
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
@@ -91,7 +93,7 @@ function toInputDate(value?: string | null) {
 }
 
 function datePayload(value: string) {
-  return value ? new Date(`${value}T00:00:00`).toISOString() : null;
+  return value ? istDateTimeToIso(`${value}T00:00`) : null;
 }
 
 function formatDateTime(value: string) {
@@ -542,10 +544,7 @@ export default function OrderDeskPage() {
                 <textarea value={orderDetails} onChange={(e) => setOrderDetails(e.target.value)} rows={3} placeholder="Example: 100 bags cement + 20 steel rods" className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-sm font-semibold">Delivery Preferred Date</label>
-                  <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-                </div>
+                <AppDatePicker label="Delivery Preferred Date" value={deliveryDate} onChange={setDeliveryDate} />
                 <div>
                   <label className="text-sm font-semibold">Priority</label>
                   <select value={priority} onChange={(e) => setPriority(e.target.value)} className="mt-1 min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">

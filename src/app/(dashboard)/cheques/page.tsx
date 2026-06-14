@@ -26,6 +26,8 @@ import {
 import type { ChequeStatus } from "@prisma/client";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
+import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
+import { combineDateTimeValue, currentIstDate, istDateTimeToIso } from "@/lib/app-date-time";
 
 type CustomerOption = {
   id: string;
@@ -212,7 +214,7 @@ const statusTone: Record<ChequeStatus, string> = {
 function todayParts() {
   const now = new Date();
   return {
-    date: now.toISOString().slice(0, 10),
+    date: currentIstDate(now),
     time: now.toTimeString().slice(0, 5),
   };
 }
@@ -238,7 +240,7 @@ const emptyForm = (): ChequeForm => {
 };
 
 function toDateTime(date: string, time: string) {
-  return new Date(`${date}T${time || "00:00"}`).toISOString();
+  return istDateTimeToIso(combineDateTimeValue(date, time || "00:00")) ?? "";
 }
 
 function formatStatus(status?: string | null) {
@@ -1250,26 +1252,8 @@ export default function ChequeCollectionsPage() {
                     placeholder="Max amount"
                     className="min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
                   />
-                  <label className="relative z-10 block cursor-pointer text-xs font-medium text-slate-500">
-                    From Date
-                    <input
-                      type="date"
-                      value={from}
-                      onChange={(e) => setFrom(e.target.value)}
-                      onClick={(e) => e.currentTarget.showPicker?.()}
-                      className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    />
-                  </label>
-                  <label className="relative z-20 block cursor-pointer text-xs font-medium text-slate-500">
-                    To Date
-                    <input
-                      type="date"
-                      value={to}
-                      onChange={(e) => setTo(e.target.value)}
-                      onClick={(e) => e.currentTarget.showPicker?.()}
-                      className="mt-1 min-h-11 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    />
-                  </label>
+                  <AppDatePicker className="relative z-10" label="From Date" value={from} onChange={setFrom} />
+                  <AppDatePicker className="relative z-20" label="To Date" value={to} onChange={setTo} />
                 </div>
               </div>
             )}
@@ -1933,6 +1917,12 @@ function Input({
   required?: boolean;
   confidence?: number;
 }) {
+  if (type === "date") {
+    return <AppDatePicker label={label} value={value} onChange={onChange} required={required} />;
+  }
+  if (type === "time") {
+    return <AppTimePicker label={label} value={value} onChange={onChange} required={required} />;
+  }
   return (
     <label>
       <span className="flex items-center justify-between gap-2 text-sm font-medium">

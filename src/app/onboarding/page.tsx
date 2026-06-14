@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { ImportSummary } from "@/types";
 import { cn } from "@/lib/utils";
+import { AppTimePicker } from "@/components/AppDateTimePicker";
 
 type Status = {
   needsOnboarding: boolean;
@@ -675,6 +676,9 @@ function Field({
   placeholder?: string;
   required?: boolean;
 }) {
+  if (type === "time") {
+    return <AppTimePicker label={label} value={value} onChange={onChange} required={required} />;
+  }
   return (
     <label>
       <span className="text-sm font-semibold">{label}</span>

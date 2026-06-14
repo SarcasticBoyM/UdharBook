@@ -6,6 +6,8 @@ import { Bell, CalendarClock, CheckCircle2, Landmark, Upload, X } from "lucide-r
 import { cn } from "@/lib/utils";
 import { ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
 import { isShopAdminRole, normalizeFixedRole, roleLabel } from "@/lib/operational-roles";
+import { AppDatePicker, AppDateTimePicker, AppTimePicker } from "@/components/AppDateTimePicker";
+import { combineDateTimeValue, istDateTimeToIso } from "@/lib/app-date-time";
 
 type RecoveryActionKey =
   | "CALLBACK_REQUESTED"
@@ -65,13 +67,11 @@ const ACTIONS: {
 ];
 
 function toDateTime(value: string) {
-  return value ? new Date(value).toISOString() : null;
+  return istDateTimeToIso(value);
 }
 
 function toIstDateTime(date: string, time: string) {
-  if (!date || !time) return null;
-  const parsed = new Date(`${date}T${time}:00+05:30`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  return istDateTimeToIso(combineDateTimeValue(date, time));
 }
 
 type StaffOption = {
@@ -390,6 +390,15 @@ function Field({
   placeholder?: string;
   disabled?: boolean;
 }) {
+  if (type === "date") {
+    return <AppDatePicker label={label} value={value} onChange={onChange} disabled={disabled} />;
+  }
+  if (type === "time") {
+    return <AppTimePicker label={label} value={value} onChange={onChange} disabled={disabled} />;
+  }
+  if (type === "datetime-local") {
+    return <AppDateTimePicker label={label} value={value} onChange={onChange} disabled={disabled} />;
+  }
   return (
     <label className="block">
       <span className="text-sm font-semibold">{label}</span>

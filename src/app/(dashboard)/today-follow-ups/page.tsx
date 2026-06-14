@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   ChevronUp,
   Clock3,
   History,
@@ -30,7 +29,17 @@ import { displayPhone, telHref } from "@/lib/phone";
 import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
 import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
+import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
 import { followUpTypeLabel, isOrderFollowUp, ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
+import {
+  APP_TIME_ZONE,
+  combineDateTimeValue,
+  currentIstDate,
+  isoToIstDateTime,
+  istDateTimeToIso,
+  reminderPresets,
+  splitDateTimeValue,
+} from "@/lib/app-date-time";
 
 type QueueStatus =
   | "PENDING"
@@ -268,52 +277,16 @@ const NOTE_TEMPLATES = [
   "Payment collector visit required.",
 ];
 
-const REMINDERS = [
-  { label: "In 1 hour", minutes: 60 },
-  { label: "In 2 hours", minutes: 120 },
-  { label: "Tomorrow 10 AM", tomorrowHour: 10 },
-  { label: "Tomorrow 5 PM", tomorrowHour: 17 },
-];
-
-const APP_TIME_ZONE = "Asia/Kolkata";
-const IST_OFFSET_MINUTES = 330;
-
-function istParts(value: Date | string) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: APP_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(value));
-  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value ?? 0);
-  return {
-    year: part("year"),
-    month: part("month"),
-    day: part("day"),
-    hour: part("hour"),
-    minute: part("minute"),
-  };
-}
-
 function reminderInputFromDate(value: Date | string | null | undefined) {
-  if (!value) return "";
-  const parts = istParts(value);
-  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}:${pad2(parts.minute)}`;
+  return isoToIstDateTime(value);
 }
 
 function reminderInputToIso(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-  if (!match) return null;
-  const [, year, month, day, hour, minute] = match.map(Number);
-  const utcMs = Date.UTC(year, month - 1, day, hour, minute) - IST_OFFSET_MINUTES * 60000;
-  return new Date(utcMs).toISOString();
+  return istDateTimeToIso(value);
 }
 
 function todayReminderDateValue() {
-  return reminderDatePart(reminderInputFromDate(new Date()));
+  return currentIstDate();
 }
 
 function formatDateTime(date: string | Date | null | undefined) {
@@ -336,86 +309,21 @@ function endOfToday() {
   return new Date(reminderInputToIso(`${todayReminderDateValue()}T23:59`) ?? new Date());
 }
 
-function nextReminderDate(minutes?: number, tomorrowHour?: number) {
-  const date = new Date(Date.now() + (minutes ?? 0) * 60000);
-  if (tomorrowHour !== undefined) {
-    const current = istParts(new Date());
-    const utcMs = Date.UTC(current.year, current.month - 1, current.day + 1, tomorrowHour, 0) - IST_OFFSET_MINUTES * 60000;
-    return reminderInputFromDate(new Date(utcMs));
-  }
-  return reminderInputFromDate(date);
-}
-
-function pad2(value: number) {
-  return String(value).padStart(2, "0");
-}
-
 function reminderDatePart(value: string) {
-  return value ? value.slice(0, 10) : "";
+  return splitDateTimeValue(value).date;
 }
 
 function reminderTimePart(value: string) {
-  return value ? value.slice(11, 16) : "";
+  return splitDateTimeValue(value).time;
 }
 
 function combineReminderDateTime(date: string, time: string) {
-  if (!date) return "";
-  return `${date}T${time || "10:00"}`;
+  return combineDateTimeValue(date, time || "10:00");
 }
 
-function monthStart(value: string) {
-  const base = value ? new Date(`${reminderDatePart(value)}T00:00:00`) : new Date();
-  return new Date(base.getFullYear(), base.getMonth(), 1);
+function defaultReminderDate() {
+  return reminderPresets().find((preset) => preset.id === "tomorrow-10-am")?.value ?? "";
 }
-
-function monthLabel(date: Date) {
-  return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric" }).format(date);
-}
-
-function dateButtonLabel(value: string) {
-  if (!value) return "Select date";
-  const [year, month, day] = reminderDatePart(value).split("-").map(Number);
-  return new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
-}
-
-function timeButtonLabel(value: string) {
-  const time = reminderTimePart(value);
-  if (!time) return "Select time";
-  const [hourText, minute] = time.split(":");
-  const hour = Number(hourText);
-  const suffix = hour >= 12 ? "PM" : "AM";
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${minute} ${suffix}`;
-}
-
-function calendarCells(month: Date) {
-  const first = new Date(month.getFullYear(), month.getMonth(), 1);
-  const offset = first.getDay();
-  const cells: { value: string; label: number; muted: boolean }[] = [];
-  for (let index = 0; index < 42; index += 1) {
-    const date = new Date(first);
-    date.setDate(index - offset + 1);
-    cells.push({
-      value: `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
-      label: date.getDate(),
-      muted: date.getMonth() !== month.getMonth(),
-    });
-  }
-  return cells;
-}
-
-const REMINDER_TIME_OPTIONS = [
-  "09:00",
-  "10:00",
-  "11:00",
-  "12:00",
-  "14:00",
-  "15:00",
-  "16:00",
-  "17:00",
-  "18:00",
-  "19:00",
-];
 
 function latestFollowUp(customer: QueueCustomer) {
   return customer.followUps[0] ?? null;
@@ -908,7 +816,7 @@ export default function TodayFollowUpsPage() {
   };
 
   const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => {
-    const nextDate = status === "RESCHEDULED" ? reminderInputToIso(nextReminderDate(undefined, 10)) : customer.nextFollowupDate;
+    const nextDate = status === "RESCHEDULED" ? reminderInputToIso(defaultReminderDate()) : customer.nextFollowupDate;
     const paidAmount = status === "PAID" ? customer.outstandingBalance : 0;
     applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
     await fetch("/api/follow-ups", {
@@ -1957,10 +1865,7 @@ function ActionPanel({
   const [assignedToId, setAssignedToId] = useState("");
   const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [whatsAppMessage, setWhatsAppMessage] = useState("");
-  const [visibleReminderMonth, setVisibleReminderMonth] = useState(() => monthStart(""));
 
   useEffect(() => {
     if (!customer) return;
@@ -1978,9 +1883,6 @@ function ActionPanel({
     setPriority(derivedPriority(customer));
     const existingDate = reminderInputFromDate(editingOrderFollowUp ? scheduledSource?.scheduledAt : customer.nextFollowupDate);
     setNextDate(existingDate);
-    setVisibleReminderMonth(monthStart(existingDate));
-    setDatePickerOpen(false);
-    setTimePickerOpen(false);
     setWhatsAppMessage("");
   }, [customer]);
 
@@ -2002,18 +1904,14 @@ function ActionPanel({
   const selectedReminderDate = reminderDatePart(nextDate);
   const selectedReminderTime = reminderTimePart(nextDate);
   const todayValue = todayReminderDateValue();
-  const visibleCalendarCells = calendarCells(visibleReminderMonth);
   const updateReminderDate = (date: string) => {
     setNextDate(combineReminderDateTime(date, selectedReminderTime || "10:00"));
-    setVisibleReminderMonth(monthStart(`${date}T${selectedReminderTime || "10:00"}`));
     setSetReminder(true);
-    setDatePickerOpen(false);
   };
 
   const updateReminderTime = (time: string) => {
     setNextDate(combineReminderDateTime(selectedReminderDate || todayValue, time));
     setSetReminder(true);
-    setTimePickerOpen(false);
   };
 
   const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate);
@@ -2026,7 +1924,7 @@ function ActionPanel({
     setSetReminder(true);
     if (!notes) setNotes("WhatsApp reminder sent.");
     if (!customerResponse) setCustomerResponse("WhatsApp reminder sent");
-    if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+    if (!nextDate) setNextDate(defaultReminderDate());
 
     const isAndroid = /Android/i.test(navigator.userAgent);
     if (isAndroid && navigator.share) {
@@ -2049,23 +1947,23 @@ function ActionPanel({
     if (action === "PAYMENT_UPDATE") {
       setStatus("PAYMENT_PROMISED");
       setSetReminder(true);
-      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!nextDate) setNextDate(defaultReminderDate());
     }
     if (action === ORDER_FOLLOW_UP) {
       setStatus("PENDING");
       setSetReminder(true);
-      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!nextDate) setNextDate(defaultReminderDate());
       if (!notes) setNotes("Call customer for a new order.");
     }
     if (action === "FOLLOW_UP_LATER") {
       setStatus("RESCHEDULED");
       setSetReminder(true);
-      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!nextDate) setNextDate(defaultReminderDate());
     }
     if (action === "NO_RESPONSE") {
       setStatus("NOT_REACHABLE");
       setSetReminder(true);
-      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!nextDate) setNextDate(defaultReminderDate());
     }
     if (action === "COMPLETED") {
       setStatus("COMPLETED");
@@ -2079,7 +1977,7 @@ function ActionPanel({
     if (outcome.response && !customerResponse) setCustomerResponse(outcome.response);
     if (outcome.value === "PAYMENT_PROMISED" || outcome.value === "CALLBACK" || outcome.value === "NOT_REACHABLE") {
       setSetReminder(true);
-      if (!nextDate) setNextDate(nextReminderDate(undefined, 10));
+      if (!nextDate) setNextDate(defaultReminderDate());
     }
   };
 
@@ -2362,123 +2260,20 @@ function ActionPanel({
                   <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-slate-500 shadow-sm dark:bg-slate-900">IST</span>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <div className="relative min-w-0">
-                    <label className="text-sm font-semibold">Reminder Date</label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDatePickerOpen((open) => !open);
-                        setTimePickerOpen(false);
-                      }}
-                      className="mt-2 flex min-h-12 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-3 text-left text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-                    >
-                      <span>{dateButtonLabel(nextDate)}</span>
-                      <CalendarClock className="h-4 w-4 text-brand-600" />
-                    </button>
-                    {datePickerOpen && (
-                      <div className="absolute left-0 top-full z-50 mt-2 w-full min-w-[280px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-80">
-                        <div className="flex items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
-                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
-                            aria-label="Previous month"
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </button>
-                          <p className="text-sm font-extrabold text-slate-900 dark:text-white">{monthLabel(visibleReminderMonth)}</p>
-                          <button
-                            type="button"
-                            onClick={() => setVisibleReminderMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
-                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-sm font-bold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
-                            aria-label="Next month"
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </button>
-                        </div>
-                        <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[11px] font-bold uppercase text-slate-400">
-                          {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
-                        </div>
-                        <div className="mt-2 grid grid-cols-7 gap-1">
-                          {visibleCalendarCells.map((day) => (
-                            <button
-                              key={day.value}
-                              type="button"
-                              onClick={() => updateReminderDate(day.value)}
-                              className={cn(
-                                "flex aspect-square min-h-9 items-center justify-center rounded-lg text-sm font-bold transition",
-                                day.value === selectedReminderDate
-                                  ? "bg-brand-600 text-white"
-                                  : day.value === todayValue
-                                    ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-200"
-                                    : "hover:bg-slate-100 dark:hover:bg-slate-800",
-                                day.muted && day.value !== selectedReminderDate ? "text-slate-300 dark:text-slate-600" : ""
-                              )}
-                            >
-                              {day.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="relative min-w-0">
-                    <label className="text-sm font-semibold">Reminder Time</label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTimePickerOpen((open) => !open);
-                        setDatePickerOpen(false);
-                      }}
-                      className="mt-2 flex min-h-12 w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-3 text-left text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
-                    >
-                      <span>{timeButtonLabel(nextDate)}</span>
-                      <Clock3 className="h-4 w-4 text-brand-600" />
-                    </button>
-                    {timePickerOpen && (
-                      <div className="absolute right-0 top-full z-50 mt-2 w-full min-w-[280px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:w-80">
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-bold uppercase text-slate-500">Pick callback time</p>
-                            <p className="mt-0.5 text-sm font-extrabold text-slate-900 dark:text-white">{timeButtonLabel(nextDate)}</p>
-                          </div>
-                          <Clock3 className="h-5 w-5 text-brand-600" />
-                        </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          {REMINDER_TIME_OPTIONS.map((time) => (
-                            <button
-                              key={time}
-                              type="button"
-                              onClick={() => updateReminderTime(time)}
-                              className={cn(
-                                "min-h-11 rounded-lg border px-3 text-sm font-bold transition",
-                                time === selectedReminderTime
-                                  ? "border-brand-500 bg-brand-600 text-white"
-                                  : "border-slate-200 bg-white text-slate-700 hover:border-brand-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                              )}
-                            >
-                              {timeButtonLabel(`2000-01-01T${time}`)}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <AppDatePicker label="Reminder Date" value={selectedReminderDate} onChange={updateReminderDate} min={todayValue} required />
+                  <AppTimePicker label="Reminder Time" value={selectedReminderTime} onChange={updateReminderTime} required />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {REMINDERS.map((reminder) => (
+                  {reminderPresets().map((reminder) => (
                     <button
-                      key={reminder.label}
+                      key={reminder.id}
                       type="button"
+                      disabled={reminder.disabled}
                       onClick={() => {
-                        const reminderDate = nextReminderDate(reminder.minutes, reminder.tomorrowHour);
-                        setNextDate(reminderDate);
-                        setVisibleReminderMonth(monthStart(reminderDate));
+                        setNextDate(reminder.value);
                         setSetReminder(true);
-                        setDatePickerOpen(false);
-                        setTimePickerOpen(false);
                       }}
-                      className="inline-flex min-h-9 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:text-brand-700 dark:bg-slate-900 dark:text-slate-200"
+                      className="ui-control inline-flex min-h-9 items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm transition disabled:cursor-not-allowed"
                     >
                       <Bell className="h-3.5 w-3.5" />
                       {reminder.label}

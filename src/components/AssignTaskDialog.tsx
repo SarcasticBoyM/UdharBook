@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ClipboardPlus, Search, X } from "lucide-react";
 import { taskPriorities, taskTypeLabels, taskTypes, type TaskType } from "@/lib/tasks";
 import { roleLabel } from "@/lib/operational-roles";
+import { AppDateTimePicker } from "@/components/AppDateTimePicker";
+import { istDateTimeToIso } from "@/lib/app-date-time";
 
 type StaffOption = {
   id: string;
@@ -43,7 +45,7 @@ function defaultDueDate() {
 }
 
 function toIstIso(value: string) {
-  return new Date(`${value}:00+05:30`).toISOString();
+  return istDateTimeToIso(value) ?? "";
 }
 
 function taskCreationKey() {
@@ -254,10 +256,7 @@ export function AssignTaskDialog({
             )}
           </label>
 
-          <label className="sm:col-span-2">
-            <span className="text-sm font-semibold">Due date</span>
-            <input type="datetime-local" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="mt-1 min-h-12 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" required />
-          </label>
+          <AppDateTimePicker className="sm:col-span-2" label="Due date" value={dueDate} onChange={setDueDate} required />
 
           <label className="sm:col-span-2">
             <span className="text-sm font-semibold">Notes</span>

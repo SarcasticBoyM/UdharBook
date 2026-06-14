@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CalendarDays, Clock3, Download, FileSpreadsheet, FileText, Landmark, MapPinned, Printer, Search, ShieldAlert, ShoppingBag, UserCheck, WalletCards } from "lucide-react";
 import type { ChequeStatus, UserRole } from "@prisma/client";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { AppDatePicker } from "@/components/AppDateTimePicker";
 
 type UserOption = { id: string; name: string; role: string };
 type DepositAccount = { id: string; accountName: string; bankName: string; lastFourDigits: string };
@@ -750,12 +751,7 @@ function Input({ label, value, onChange, placeholder, type = "text", icon = fals
 }
 
 function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="text-sm">
-      <span className="font-medium text-slate-600 dark:text-slate-300">{label}</span>
-      <input type="date" value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950" />
-    </label>
-  );
+  return <AppDatePicker label={label} value={value} onChange={onChange} />;
 }
 
 function SummaryCard({ label, value, icon: Icon, tone = "slate" }: { label: string; value: string | number; icon: typeof Landmark; tone?: "slate" | "yellow" | "green" | "red" }) {

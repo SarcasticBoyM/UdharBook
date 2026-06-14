@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
+import { AppDatePicker } from "@/components/AppDateTimePicker";
 import { formatCurrency, cn } from "@/lib/utils";
 
 type ReportRow = {
@@ -870,6 +871,9 @@ function Input({
   type?: string;
   placeholder?: string;
 }) {
+  if (type === "date") {
+    return <AppDatePicker label={label} value={value} onChange={onChange} />;
+  }
   return (
     <label className="text-sm">
       <span className="font-medium text-slate-600 dark:text-slate-300">{label}</span>

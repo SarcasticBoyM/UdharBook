@@ -13,6 +13,8 @@ import {
   Route,
   Sparkles,
 } from "lucide-react";
+import { AppDatePicker } from "@/components/AppDateTimePicker";
+import { currentIstDate } from "@/lib/app-date-time";
 
 type Visit = {
   id: string;
@@ -177,7 +179,7 @@ function groupByStaff<T extends { staffId: string }>(rows: T[]) {
 export default function DailyVisitsPage() {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(currentIstDate);
   const [staffId, setStaffId] = useState("");
   const [outcome, setOutcome] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("timeline");
@@ -300,10 +302,7 @@ export default function DailyVisitsPage() {
 
       <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
-          <label className="text-sm">
-            <span className="mb-1 block font-medium">Date</span>
-            <input value={date} onChange={(e) => setDate(e.target.value)} type="date" className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          </label>
+          <AppDatePicker label="Date" value={date} onChange={setDate} required />
           <label className="text-sm">
             <span className="mb-1 block font-medium">Staff</span>
             <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
