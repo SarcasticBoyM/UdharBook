@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Clock, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, Copy, Loader2, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
 import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
@@ -140,7 +140,9 @@ export default function OrderDeskPage() {
   const [batchFilter, setBatchFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [toast, setToast] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
   const [customerQuery, setCustomerQuery] = useState("");
@@ -156,6 +158,16 @@ export default function OrderDeskPage() {
   const canManageOrders = canUseOrders(role);
   const canCreateOrders = canManageOrders;
   const canAssignTasks = isShopAdminRole(role);
+
+  async function copyOrder(order: OrderRow) {
+    await navigator.clipboard.writeText([
+      order.customer.partyName,
+      order.customer.contactNumber,
+      order.orderDetails,
+    ].join("\n"));
+    setToast("Order copied");
+    window.setTimeout(() => setToast((current) => current === "Order copied" ? "" : current), 1800);
+  }
 
   async function load() {
     setLoading(true);
@@ -244,8 +256,10 @@ export default function OrderDeskPage() {
   }
 
   async function submitEditor() {
-    if (!editor) return;
+    if (!editor || savingOrder) return;
     setMessage("");
+    setSavingOrder(true);
+    const clientRequestId = crypto.randomUUID();
     const payload =
       editor.mode === "create"
         ? customerMode === "existing"
@@ -255,6 +269,7 @@ export default function OrderDeskPage() {
               orderDetails,
               preferredDeliveryDate: datePayload(deliveryDate),
               priority,
+              clientRequestId,
             }
           : {
               customerMode: "NEW_CUSTOMER",
@@ -262,6 +277,7 @@ export default function OrderDeskPage() {
               orderDetails,
               preferredDeliveryDate: datePayload(deliveryDate),
               priority,
+              clientRequestId,
             }
         : {
             orderId: editor.order?.id,
@@ -271,21 +287,27 @@ export default function OrderDeskPage() {
             priority,
           };
 
-    const res = await fetch("/api/orders", {
-      method: editor.mode === "create" ? "POST" : "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      if (res.status === 409 && data.existingCustomer) {
-        setDuplicateCustomer(data.existingCustomer);
+    try {
+      const res = await fetch("/api/orders", {
+        method: editor.mode === "create" ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && data.existingCustomer) {
+          setDuplicateCustomer(data.existingCustomer);
+        }
+        setMessage(data.error ?? "Could not save order.");
+        return;
       }
-      setMessage(data.error ?? "Could not save order.");
-      return;
+      setEditor(null);
+      await load();
+    } catch {
+      setMessage("Could not save order. Check your connection and retry.");
+    } finally {
+      setSavingOrder(false);
     }
-    setEditor(null);
-    await load();
   }
 
   async function runAction(orderId: string, action: "DISPATCH" | "DELIVER" | "CANCEL") {
@@ -330,6 +352,11 @@ export default function OrderDeskPage() {
       </div>
 
       {message && <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{message}</div>}
+      {toast && (
+        <div className="fixed bottom-20 left-4 right-4 z-50 rounded-lg bg-slate-950 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-auto sm:right-6 sm:w-72">
+          {toast}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Pending Orders" value={summary.pendingOrders} icon={<Clock className="h-5 w-5" />} />
@@ -392,6 +419,10 @@ export default function OrderDeskPage() {
             </div>
             {canManageOrders && (
               <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void copyOrder(order)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700">
+                  <Copy className="h-4 w-4" />
+                  Copy Order
+                </button>
                 {canAssignTasks && (
                   <AssignTaskButton
                     label="Assign Follow-up"
@@ -557,11 +588,12 @@ export default function OrderDeskPage() {
             </div>
 
             <div className="sticky bottom-0 z-10 flex gap-2 border-t border-slate-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dark:border-slate-800 dark:bg-slate-950">
-              <button type="button" onClick={() => setEditor(null)} className="min-h-12 flex-1 rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700">
+              <button type="button" onClick={() => setEditor(null)} disabled={savingOrder} className="min-h-12 flex-1 rounded-lg border border-slate-300 px-4 text-sm font-semibold disabled:opacity-50 dark:border-slate-700">
                 Cancel
               </button>
-              <button type="button" onClick={submitEditor} disabled={!orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="min-h-12 flex-1 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
-                Save Order
+              <button type="button" onClick={submitEditor} disabled={savingOrder || !orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+                {savingOrder && <Loader2 className="h-4 w-4 animate-spin" />}
+                {savingOrder ? "Saving..." : "Save Order"}
               </button>
             </div>
           </div>

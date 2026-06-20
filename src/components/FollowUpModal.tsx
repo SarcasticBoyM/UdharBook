@@ -74,6 +74,37 @@ function toIstDateTime(date: string, time: string) {
   return istDateTimeToIso(combineDateTimeValue(date, time));
 }
 
+async function schedulePwaReminder(input: {
+  followUpId?: string;
+  customerId: string;
+  customerName: string;
+  balance: number;
+  reminderAt: string | null;
+  note?: string;
+}) {
+  if (!input.reminderAt || typeof window === "undefined") return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (!("serviceWorker" in navigator)) return;
+  const scheduledAt = new Date(input.reminderAt).getTime();
+  if (!Number.isFinite(scheduledAt)) return;
+  const amount = new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(input.balance);
+  const registration = await navigator.serviceWorker.ready.catch(() => null);
+  const target = registration?.active ?? navigator.serviceWorker.controller;
+  target?.postMessage({
+    type: "UDHARBOOK_SCHEDULE_NOTIFY",
+    scheduledAt,
+    title: `Follow-up due: ${input.customerName}`,
+    body: `Call ${input.customerName} regarding ${amount} balance.${input.note ? ` Note: ${input.note}` : ""}`,
+    url: `/today-follow-ups?followUpId=${encodeURIComponent(input.followUpId ?? input.customerId)}`,
+    tag: `follow-up-${input.followUpId ?? input.customerId}-${scheduledAt}`,
+    requireInteraction: true,
+  });
+}
+
 type StaffOption = {
   id: string;
   name: string;
@@ -192,7 +223,18 @@ export function FollowUpModal({ customerId, customerName = "Customer", balance =
           },
         }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error("SAVE_FAILED");
+      if ((isOrderReminder || reminderEnabled) && reminderAt) {
+        await schedulePwaReminder({
+          followUpId: data?.followUp?.id ?? data?.data?.followUp?.id,
+          customerId,
+          customerName,
+          balance,
+          reminderAt,
+          note: details || computedSummary,
+        });
+      }
       onSaved();
       onClose();
     } catch {

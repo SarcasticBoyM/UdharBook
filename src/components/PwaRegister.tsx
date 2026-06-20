@@ -27,6 +27,7 @@ export function PwaRegister() {
 
     const check = async () => {
       if (Notification.permission !== "granted") return;
+      if (document.visibilityState === "hidden") return;
       try {
         const res = await fetch("/api/notifications/due", { credentials: "same-origin" });
         if (!res.ok) return;
@@ -62,7 +63,7 @@ export function PwaRegister() {
     };
 
     check();
-    const id = window.setInterval(check, 5 * 60 * 1000);
+    const id = window.setInterval(check, 60 * 1000);
     return () => window.clearInterval(id);
   }, []);
 

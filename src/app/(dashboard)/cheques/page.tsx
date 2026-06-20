@@ -9,6 +9,7 @@ import {
   CalendarClock,
   Camera,
   CheckCircle2,
+  Copy,
   History,
   ImagePlus,
   IndianRupee,
@@ -208,6 +209,7 @@ const quickFilters = [
   { label: "Deposit Due Today", value: "due_today" },
   { label: "Pending Deposit", value: "pending" },
   { label: "Deposited", value: "deposited" },
+  { label: "Cleared", value: "cleared" },
   { label: "Bounced", value: "bounced" },
   { label: "Returned", value: "returned" },
 ];
@@ -474,6 +476,7 @@ export default function ChequeCollectionsPage() {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState("");
   const [receiptUploading, setReceiptUploading] = useState(false);
+  const [toast, setToast] = useState("");
   const touchStart = useRef<Record<string, number>>({});
   const loadSequence = useRef(0);
 
@@ -904,6 +907,17 @@ export default function ChequeCollectionsPage() {
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
   };
 
+  async function copyChequeDetails(cheque: ChequeItem) {
+    await navigator.clipboard.writeText([
+      `Cheque Number: ${cheque.chequeNumber}`,
+      `Bank Name: ${cheque.bankName}`,
+      `Branch Name: ${cheque.branch ?? "-"}`,
+      `Cheque Date: ${formatDate(cheque.chequeDate)}`,
+    ].join("\n"));
+    setToast("Cheque details copied");
+    window.setTimeout(() => setToast((current) => current === "Cheque details copied" ? "" : current), 1800);
+  }
+
   const resetFilters = () => {
     setQuick("all");
     setCustomerQuery("");
@@ -1274,6 +1288,11 @@ export default function ChequeCollectionsPage() {
           <strong>Attention:</strong> {alertText(alerts)}
         </div>
       )}
+      {toast && (
+        <div className="fixed bottom-20 left-4 right-4 z-50 rounded-lg bg-slate-950 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-auto sm:right-6 sm:w-72">
+          {toast}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <main className="min-w-0">
@@ -1505,6 +1524,10 @@ export default function ChequeCollectionsPage() {
                         }}
                       />
                     )}
+                    <button type="button" onClick={(e) => { e.stopPropagation(); void copyChequeDetails(cheque); }} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
+                      <Copy className="h-4 w-4" />
+                      Copy Details
+                    </button>
                     {canEditCheque(currentRole, currentUserId, cheque) && (
                       <button type="button" onClick={(e) => { e.stopPropagation(); openEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
                         <Pencil className="h-4 w-4" />

@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Globe2, MapPin, Phone, UserPlus } from "lucide-react";
+import { Globe2, MapPin, MessageCircle, Phone, UserPlus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { ensureUrl, normalizePhone, publicVCardUrl, qrCodeUrl } from "@/lib/qrvcard";
 
@@ -56,6 +56,13 @@ export default async function PublicQRVCardPage({ params }: Params) {
   const pageUrl = publicVCardUrl(card.slug);
   const phone = normalizePhone(card.mobile1);
   const phone2 = normalizePhone(card.mobile2);
+  const whatsappUrl = buildWhatsappUrl({
+    businessName: card.businessName,
+    tagline: card.tagline,
+    whatsappNumber: card.whatsappNumber,
+    mobile1: card.mobile1,
+    mobile2: card.mobile2,
+  }, pageUrl);
   const theme = themeClasses(card.theme);
 
   return (
@@ -87,6 +94,7 @@ export default async function PublicQRVCardPage({ params }: Params) {
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <Action href={phone ? `tel:+${phone}` : "#"} icon={<Phone className="h-5 w-5" />} label="Call Now" primary />
+                {whatsappUrl && <Action href={whatsappUrl} icon={<MessageCircle className="h-5 w-5" />} label="WhatsApp" />}
                 <Action href={card.mapsLink || card.mapUrl || "#"} icon={<MapPin className="h-5 w-5" />} label="Navigate" />
                 <Action href={`/vcard/${card.slug}/contact.vcf`} icon={<UserPlus className="h-5 w-5" />} label="Save Contact" />
               </div>
@@ -146,12 +154,30 @@ export default async function PublicQRVCardPage({ params }: Params) {
                 </div>
               </InfoBlock>
               {phone2 && <a href={`tel:+${phone2}`} className="block rounded-2xl bg-slate-950 p-4 text-center font-bold text-white">Call Alternate Number</a>}
+              {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noreferrer" className="block rounded-2xl bg-green-600 p-4 text-center font-bold text-white">WhatsApp Now</a>}
             </aside>
           </div>
         </section>
       </div>
     </main>
   );
+}
+
+function buildWhatsappUrl(input: {
+  businessName: string;
+  tagline?: string | null;
+  whatsappNumber?: string | null;
+  mobile1?: string | null;
+  mobile2?: string | null;
+}, pageUrl: string) {
+  const phone = normalizePhone(input.whatsappNumber || input.mobile1 || input.mobile2 || "");
+  if (!phone) return "";
+  const message = [
+    `Hi ${input.businessName}`,
+    input.tagline ? `I saw your QRVCard: ${input.tagline}` : "I saw your QRVCard.",
+    `Link: ${pageUrl}`,
+  ].join("\n");
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 }
 
 function Action({ href, icon, label, primary = false }: { href: string; icon: React.ReactNode; label: string; primary?: boolean }) {

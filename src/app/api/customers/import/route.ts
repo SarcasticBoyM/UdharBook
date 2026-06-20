@@ -31,7 +31,12 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get("file");
     const rawBatchTag = formData.get("batchTag");
+    const rawBatchTagConfirmation = formData.get("batchTagConfirmation");
     const batchTag = normalizeBatchTag(typeof rawBatchTag === "string" ? rawBatchTag : null);
+    const batchTagConfirmation = normalizeBatchTag(typeof rawBatchTagConfirmation === "string" ? rawBatchTagConfirmation : null);
+    if (!batchTag || batchTagConfirmation !== batchTag) {
+      return NextResponse.json({ error: "Confirm the selected Batch / Firm code before uploading." }, { status: 400 });
+    }
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }

@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Download, Edit3, ExternalLink, Eye, Globe2, ImagePlus, Mail, MapPin, Phone, QrCode, Save, Share2 } from "lucide-react";
+import { Copy, Download, Edit3, ExternalLink, Eye, Globe2, ImagePlus, Mail, MapPin, MessageCircle, Phone, QrCode, Save, Share2 } from "lucide-react";
 import { normalizePhone, qrCodeUrl } from "@/lib/qrvcard";
 
 type CardForm = {
@@ -12,6 +12,7 @@ type CardForm = {
   ownerName: string;
   mobile1: string;
   mobile2: string;
+  whatsappNumber: string;
   email: string;
   address: string;
   mapUrl: string;
@@ -40,6 +41,7 @@ const emptyForm: CardForm = {
   ownerName: "",
   mobile1: "",
   mobile2: "",
+  whatsappNumber: "",
   email: "",
   address: "",
   mapUrl: "",
@@ -108,6 +110,7 @@ export default function QRVCardPage() {
           ownerName: data.card.ownerName ?? "",
           mobile1: data.card.mobile1 ?? "",
           mobile2: data.card.mobile2 ?? "",
+          whatsappNumber: data.card.whatsappNumber ?? "",
           email: data.card.email ?? "",
           address: data.card.address ?? "",
           mapUrl: data.card.mapsLink ?? data.card.mapUrl ?? "",
@@ -212,6 +215,8 @@ export default function QRVCardPage() {
     await copyPublicLink();
   }
 
+  const whatsappUrl = useMemo(() => buildWhatsappUrl(form, publicUrl), [form, publicUrl]);
+
   if (loading) {
     return <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">Loading QRVCard...</div>;
   }
@@ -262,6 +267,11 @@ export default function QRVCardPage() {
                 <button type="button" onClick={sharePublicLink} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white">
                   <Share2 className="h-4 w-4" /> Share
                 </button>
+                {whatsappUrl && (
+                  <a href={whatsappUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-green-600 px-3 text-sm font-semibold text-white">
+                    <MessageCircle className="h-4 w-4" /> WhatsApp
+                  </a>
+                )}
                 <a href={qrCodeUrl(publicUrl, 600)} download="qrvcard-qr.png" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white">
                   <Download className="h-4 w-4" /> QR
                 </a>
@@ -291,6 +301,7 @@ export default function QRVCardPage() {
             <h2 className="font-bold">Quick Actions</h2>
             <div className="mt-3 grid gap-2">
               <a href={`/vcard/${form.slug}/contact.vcf`} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold">Download Contact</a>
+              {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noreferrer" className="rounded-lg bg-green-600 px-3 py-3 text-center text-sm font-semibold text-white">WhatsApp</a>}
             </div>
           </section>
         </aside>
@@ -342,6 +353,7 @@ export default function QRVCardPage() {
             <Input label="GST Number" value={form.gstNumber} onChange={(v) => setValue("gstNumber", v)} />
             <Input label="Mobile Number 1" value={form.mobile1} onChange={(v) => setValue("mobile1", v)} />
             <Input label="Mobile Number 2" value={form.mobile2} onChange={(v) => setValue("mobile2", v)} />
+            <Input label="WhatsApp Number" value={form.whatsappNumber} onChange={(v) => setValue("whatsappNumber", v)} />
             <Input label="Email" value={form.email} onChange={(v) => setValue("email", v)} />
             <Input label="Website" value={form.website} onChange={(v) => setValue("website", v)} />
             <Input label="Google Maps Link" value={form.mapsLink || form.mapUrl} onChange={(v) => { setValue("mapsLink", v); setValue("mapUrl", v); }} />
@@ -465,6 +477,7 @@ function UploadBox({ label, image, onFile, onUrl }: { label: string; image: stri
 
 function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string }) {
   const phone = normalizePhone(form.mobile1);
+  const whatsappUrl = buildWhatsappUrl(form, publicUrl);
   return (
     <section className={`overflow-hidden rounded-lg border bg-white shadow-sm dark:border-slate-700 ${themeClass(form.theme)}`}>
       <div className="relative h-36 bg-slate-900">
@@ -483,6 +496,7 @@ function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string })
       <div className="space-y-4 p-4">
         <div className="grid grid-cols-2 gap-2">
           <a href={phone ? `tel:+${phone}` : undefined} className="rounded-lg bg-slate-950 px-3 py-3 text-center text-sm font-semibold text-white"><Phone className="mx-auto mb-1 h-4 w-4" />Call Now</a>
+          {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noreferrer" className="rounded-lg bg-green-600 px-3 py-3 text-center text-sm font-semibold text-white"><MessageCircle className="mx-auto mb-1 h-4 w-4" />WhatsApp</a>}
           <a href={form.mapsLink || form.mapUrl || undefined} target="_blank" rel="noreferrer" className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><MapPin className="mx-auto mb-1 h-4 w-4" />Navigate</a>
           <a href={form.email ? `mailto:${form.email}` : undefined} className="rounded-lg border px-3 py-3 text-center text-sm font-semibold"><Mail className="mx-auto mb-1 h-4 w-4" />Email</a>
         </div>
@@ -499,6 +513,17 @@ function CardPreview({ form, publicUrl }: { form: CardForm; publicUrl: string })
       </div>
     </section>
   );
+}
+
+function buildWhatsappUrl(form: CardForm, publicUrl: string) {
+  const phone = normalizePhone(form.whatsappNumber || form.mobile1 || form.mobile2);
+  if (!phone) return "";
+  const message = [
+    `Hi ${form.businessName || "there"}`,
+    form.tagline ? `I saw your QRVCard: ${form.tagline}` : "I saw your QRVCard.",
+    publicUrl ? `Link: ${publicUrl}` : "",
+  ].filter(Boolean).join("\n");
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 }
 
 function themeClass(theme: string) {

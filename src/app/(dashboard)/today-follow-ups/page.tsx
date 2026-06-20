@@ -321,6 +321,32 @@ function combineReminderDateTime(date: string, time: string) {
   return combineDateTimeValue(date, time || "10:00");
 }
 
+async function schedulePwaFollowUpNotification(input: {
+  followUpId?: string;
+  customerId: string;
+  partyName: string;
+  amount: number;
+  scheduledAt: string | null;
+  note?: string;
+}) {
+  if (!input.scheduledAt || typeof window === "undefined") return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (!("serviceWorker" in navigator)) return;
+  const timestamp = new Date(input.scheduledAt).getTime();
+  if (!Number.isFinite(timestamp)) return;
+  const registration = await navigator.serviceWorker.ready.catch(() => null);
+  const target = registration?.active ?? navigator.serviceWorker.controller;
+  target?.postMessage({
+    type: "UDHARBOOK_SCHEDULE_NOTIFY",
+    scheduledAt: timestamp,
+    title: `Follow-up due: ${input.partyName}`,
+    body: `Call ${input.partyName} regarding ${formatCurrency(input.amount)} balance.${input.note ? ` Note: ${input.note}` : ""}`,
+    url: `/today-follow-ups?followUpId=${encodeURIComponent(input.followUpId ?? input.customerId)}`,
+    tag: `follow-up-${input.followUpId ?? input.customerId}-${timestamp}`,
+    requireInteraction: true,
+  });
+}
+
 function defaultReminderDate() {
   return reminderPresets().find((preset) => preset.id === "tomorrow-10-am")?.value ?? "";
 }
@@ -992,7 +1018,7 @@ export default function TodayFollowUpsPage() {
       </div>
 
       <div className="mt-4 grid w-full min-w-0 gap-5 overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)] lg:items-start">
-        <main ref={listRef} className="min-w-0 space-y-5 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+        <main ref={listRef} className="min-w-0 space-y-5 overscroll-y-contain scroll-smooth lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pr-1">
           <ScheduledQueueSection
             customers={visibleScheduled}
             total={scheduled.length}
@@ -1710,7 +1736,7 @@ function CustomerCard({
       }}
       onTouchEnd={handleTouchEnd}
       className={cn(
-        "cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition dark:bg-slate-900",
+        "min-h-[244px] cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition [content-visibility:auto] [contain-intrinsic-size:260px] dark:bg-slate-900 sm:p-4",
         active && "ring-2 ring-brand-500",
         tone === "red" && "border-red-200 dark:border-red-900",
         tone === "yellow" && "border-amber-200 dark:border-amber-900",
@@ -1751,19 +1777,19 @@ function CustomerCard({
             <Info label="Timing" value={followUpTimingLabel(customer.nextFollowupDate ?? latest?.nextFollowupDate, latest?.status === "PAYMENT_PROMISED")} />
           </div>
 
-          <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800/70">
+          <div className="mt-3 min-h-[86px] rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800/70">
             <p className="line-clamp-2">
               <span className="font-semibold">Last notes: </span>
               {latest?.notes || customer.notes || "No follow-up notes yet."}
             </p>
             <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3">
               <span>Status: {statusLabel(customer.optimisticStatus ?? latest?.status)}</span>
-              <span>Promise: {latest?.customerResponse || "-"}</span>
+              <span className="truncate">Promise: {latest?.customerResponse || "-"}</span>
               <span>Staff: {latest?.createdBy.name || "Unassigned"}</span>
             </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid min-h-[44px] grid-cols-2 gap-2">
             <button
               type="button"
               onClick={(event) => {
@@ -2040,6 +2066,16 @@ function ActionPanel({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Could not save follow-up");
+      if (setReminder && scheduledAt) {
+        await schedulePwaFollowUpNotification({
+          followUpId: data?.followUp?.id ?? data?.data?.followUp?.id,
+          customerId: customer.id,
+          partyName: customer.partyName,
+          amount: customer.outstandingBalance,
+          scheduledAt,
+          note: customerResponse || finalNotes,
+        });
+      }
       if (!orderFollowUp) onOptimistic(customer, status, finalNotes, scheduledAt, amount);
       else onOptimistic(customer, "COMPLETED", finalNotes, scheduledAt, 0, false);
       await onSaved(customer.id);

@@ -13,10 +13,12 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [batchTag, setBatchTag] = useState("");
+  const [firmConfirmation, setFirmConfirmation] = useState("");
   const [existingTags, setExistingTags] = useState<string[]>([]);
   const [tagQuery, setTagQuery] = useState("");
   const [showTagOptions, setShowTagOptions] = useState(false);
   const normalizedTag = normalizeBatchTag(batchTag);
+  const normalizedConfirmation = normalizeBatchTag(firmConfirmation);
   const normalizedQuery = normalizeBatchTag(tagQuery || batchTag);
   const visibleTags = useMemo(() => {
     const query = normalizedQuery.toLowerCase();
@@ -42,6 +44,10 @@ export default function UploadPage() {
   const upload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file || !normalizedTag) return;
+    if (normalizedConfirmation !== normalizedTag) {
+      setError(`Type ${normalizedTag} to confirm this upload belongs to the selected Batch / Firm.`);
+      return;
+    }
     setLoading(true);
     setError("");
     setSummary(null);
@@ -49,6 +55,7 @@ export default function UploadPage() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("batchTag", normalizedTag);
+    formData.append("batchTagConfirmation", normalizedConfirmation);
 
     try {
       const res = await fetch("/api/customers/import", {
@@ -124,6 +131,7 @@ export default function UploadPage() {
               onChange={(event) => {
                 setTagQuery(event.target.value);
                 setBatchTag(event.target.value);
+                setFirmConfirmation("");
                 setShowTagOptions(true);
               }}
               onFocus={() => setShowTagOptions(true)}
@@ -146,6 +154,7 @@ export default function UploadPage() {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       setBatchTag(tag);
+                      setFirmConfirmation("");
                       setTagQuery("");
                       setShowTagOptions(false);
                     }}
@@ -160,6 +169,7 @@ export default function UploadPage() {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       setBatchTag(normalizedQuery);
+                      setFirmConfirmation("");
                       setTagQuery("");
                       setShowTagOptions(false);
                     }}
@@ -179,6 +189,7 @@ export default function UploadPage() {
                   type="button"
                   onClick={() => {
                     setBatchTag(tag);
+                    setFirmConfirmation("");
                     setTagQuery("");
                   }}
                   className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold dark:border-slate-700"
@@ -199,10 +210,25 @@ export default function UploadPage() {
           Existing customers are updated by name; new rows are created with Pending status. Empty rows
           with no usable data are ignored. Matching is scoped to the Batch / Firm tag.
         </p>
+        {normalizedTag && (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <p className="font-bold">Confirm firm before upload</p>
+            <p className="mt-1">
+              Selected Batch / Firm: <strong>{normalizedTag}</strong>. Type <strong>{normalizedTag}</strong> below to prevent uploading this Excel into the wrong ledger.
+            </p>
+            <input
+              value={firmConfirmation}
+              onChange={(event) => setFirmConfirmation(event.target.value)}
+              placeholder={`Type ${normalizedTag}`}
+              className="mt-3 min-h-11 w-full rounded-lg border border-amber-300 bg-white px-3 text-sm font-bold uppercase dark:border-amber-800 dark:bg-slate-950"
+              autoComplete="off"
+            />
+          </div>
+        )}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <button
           type="submit"
-          disabled={!file || !normalizedTag || loading}
+          disabled={!file || !normalizedTag || normalizedConfirmation !== normalizedTag || loading}
           className="mt-4 rounded-lg bg-brand-600 px-6 py-2 text-sm text-white disabled:opacity-50"
         >
           {loading ? "Importing customers..." : "Import"}

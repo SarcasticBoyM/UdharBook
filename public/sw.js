@@ -48,20 +48,46 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "UDHARBOOK_SCHEDULE_NOTIFY") {
+    const scheduledAt = Number(event.data.scheduledAt);
+    if (!Number.isFinite(scheduledAt)) return;
+    const delay = scheduledAt - Date.now();
+    if (delay <= 0) {
+      event.waitUntil(showUdharBookNotification(event.data));
+      return;
+    }
+    const showTrigger = self.TimestampTrigger ? new self.TimestampTrigger(scheduledAt) : undefined;
+    if (showTrigger) {
+      event.waitUntil(showUdharBookNotification({ ...event.data, showTrigger }));
+      return;
+    }
+    if (delay <= 24 * 60 * 60 * 1000) {
+      setTimeout(() => {
+        showUdharBookNotification(event.data);
+      }, delay);
+    }
+    return;
+  }
   if (event.data?.type !== "UDHARBOOK_NOTIFY") return;
-  const title = event.data.title || "UdharBook reminder";
-  const body = event.data.body || "A follow-up is due.";
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
-      requireInteraction: event.data.requireInteraction ?? true,
-      tag: event.data.tag,
-      data: { url: event.data.url || "/follow-ups" },
-    })
-  );
+  event.waitUntil(showUdharBookNotification(event.data));
 });
+
+function showUdharBookNotification(data) {
+  const title = data.title || "UdharBook reminder";
+  const body = data.body || "A follow-up is due.";
+  const options = {
+    body,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    requireInteraction: data.requireInteraction ?? true,
+    tag: data.tag,
+    data: { url: data.url || "/follow-ups" },
+  };
+  if (data.showTrigger) options.showTrigger = data.showTrigger;
+  return self.registration.showNotification(title, options);
+}
+
+self.addEventListener("messageerror", () => undefined);
 
 self.addEventListener("push", (event) => {
   let data = {};

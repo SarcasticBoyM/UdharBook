@@ -27,6 +27,7 @@ const createSchema = z.object({
   orderDetails: z.string().trim().min(1),
   preferredDeliveryDate: z.string().optional().nullable(),
   priority: prioritySchema.default("Normal"),
+  clientRequestId: z.string().trim().min(8).max(120).optional(),
 });
 
 const patchSchema = z.object({
@@ -45,12 +46,6 @@ const statusRank: Record<string, number> = {
   PROCESSING: 1,
   DELIVERED: 3,
   CANCELLED: 4,
-};
-
-const priorityRank: Record<string, number> = {
-  High: 0,
-  Urgent: 1,
-  Normal: 2,
 };
 
 function parseOptionalDate(value?: string | null) {
@@ -88,18 +83,7 @@ function isActiveStatus(status: string) {
 }
 
 function sortOrders<T extends { status: OrderStatus; priority: string; preferredDeliveryDate: Date | null; createdAt: Date }>(orders: T[]) {
-  return orders.sort((a, b) => {
-    const statusDiff = (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9);
-    if (statusDiff) return statusDiff;
-    if (isActiveStatus(a.status)) {
-      const priorityDiff = (priorityRank[a.priority] ?? 2) - (priorityRank[b.priority] ?? 2);
-      if (priorityDiff) return priorityDiff;
-      const aDelivery = a.preferredDeliveryDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      const bDelivery = b.preferredDeliveryDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      if (aDelivery !== bDelivery) return aDelivery - bDelivery;
-    }
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
+  return orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
 function transitionStatus(current: OrderStatus, action: string) {
@@ -139,6 +123,7 @@ function clientOrderError(error: unknown) {
   if (error.message === "CUSTOMER_NOT_FOUND") return "Customer was not found for this shop.";
   if (error.message === "CUSTOMER_REQUIRED") return "Select an existing customer or enter a new customer name and contact number.";
   if (error.message === "DUPLICATE_CUSTOMER") return "A customer with this contact number already exists. Use the existing customer or change the contact number.";
+  if (error.message === "DUPLICATE_RAPID_ORDER") return "This order was already submitted. Please wait before saving it again.";
   if (error.message === "INVALID_DATE") return "Preferred delivery date is invalid.";
   if (error.message.includes("invalid input value for enum") || error.message.includes("Invalid enum value")) {
     return "Order status setup is not fully migrated. Saved using backward-compatible order status.";
@@ -384,6 +369,21 @@ export async function POST(request: Request) {
         throw new Error("CUSTOMER_REQUIRED");
       }
 
+      const duplicateWindowStart = new Date(Date.now() - 15_000);
+      const rapidDuplicate = await tx.order.findFirst({
+        where: {
+          shopId,
+          customerId: customer.id,
+          createdById: session.id,
+          orderDetails: body.orderDetails,
+          preferredDeliveryDate,
+          priority: body.priority,
+          createdAt: { gte: duplicateWindowStart },
+        },
+        select: { id: true },
+      });
+      if (rapidDuplicate) throw new Error("DUPLICATE_RAPID_ORDER");
+
       const created = await tx.order.create({
         data: {
           shopId,
@@ -456,7 +456,9 @@ export async function POST(request: Request) {
     const existingCustomer = error instanceof Error && "existingCustomer" in error
       ? (error as Error & { existingCustomer?: unknown }).existingCustomer
       : undefined;
-    return NextResponse.json({ error: clientOrderError(error), existingCustomer }, { status: error instanceof Error && error.message === "DUPLICATE_CUSTOMER" ? 409 : 400 });
+    return NextResponse.json({ error: clientOrderError(error), existingCustomer }, {
+      status: error instanceof Error && (error.message === "DUPLICATE_CUSTOMER" || error.message === "DUPLICATE_RAPID_ORDER") ? 409 : 400,
+    });
   }
 }
 

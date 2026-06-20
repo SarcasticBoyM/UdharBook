@@ -106,6 +106,7 @@ function dateFieldForQuick(quick: string, status?: ChequeStatus | null) {
   if (quick === "due_today") return "chequeDate";
   if (quick === "deposited") return "depositDateTime";
   if (quick === "bounced") return "bouncedAt";
+  if (quick === "cleared") return "clearedAt";
   if (quick === "returned") return "cancelledAt";
   return "collectionDateTime";
 }
@@ -458,7 +459,7 @@ export async function GET(request: Request) {
   if (bankName) conditions.push({ bankName: { contains: bankName, mode: "insensitive" } });
 
   const quickStatus: ChequeStatus | undefined =
-    quick === "bounced" ? "BOUNCED" : quick === "deposited" ? "DEPOSITED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
+    quick === "bounced" ? "BOUNCED" : quick === "deposited" ? "DEPOSITED" : quick === "cleared" ? "CLEARED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
   const dateField = dateFieldForQuick(quick, status || quickStatus);
   if (from || to) {
     conditions.push(dateRangeCondition(dateField, from, to));
@@ -491,10 +492,8 @@ export async function GET(request: Request) {
         where,
         include,
         orderBy: [
-          { status: "desc" },
-          { depositDateTime: { sort: "asc", nulls: "first" } },
-          { amount: "desc" },
-          { chequeDate: "asc" },
+          { chequeDate: "desc" },
+          { createdAt: "desc" },
         ],
         skip: format ? 0 : skip,
         take: format ? 1000 : limit,
