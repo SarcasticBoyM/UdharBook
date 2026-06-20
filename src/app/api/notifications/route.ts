@@ -36,6 +36,20 @@ const runtimeRecipientRules = {
   CHEQUE_BOUNCED: "Same-shop Shop Admin, Account Staff, Sales Person Cum Accounts, and relevant assigned user",
 };
 
+const notificationListSelect = {
+  id: true,
+  type: true,
+  title: true,
+  message: true,
+  entityType: true,
+  entityId: true,
+  actionUrl: true,
+  priority: true,
+  isRead: true,
+  readByUserIds: true,
+  createdAt: true,
+} satisfies Prisma.NotificationSelect;
+
 function notificationApiError() {
   return "Notifications could not be loaded. Please retry.";
 }
@@ -123,8 +137,36 @@ export async function GET(request: Request) {
   const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? 20)));
   const visible = visibleWhere(shopId, session.id, session.role);
   const resolveId = searchParams.get("resolveId");
+  const countOnly = searchParams.get("mode") === "count";
 
   try {
+    if (countOnly) {
+      const [unreadCount, criticalUnreadCount, latestCritical] = await Promise.all([
+        prisma.notification.count({
+          where: { AND: [visible, unreadWhere(session.id)] },
+        }),
+        prisma.notification.count({
+          where: { AND: [visible, unreadWhere(session.id), { priority: "CRITICAL" }] },
+        }),
+        prisma.notification.findFirst({
+          where: { AND: [visible, unreadWhere(session.id), { priority: "CRITICAL" }] },
+          orderBy: { createdAt: "desc" },
+          select: notificationListSelect,
+        }),
+      ]);
+      return NextResponse.json({
+        success: true,
+        unreadCount,
+        criticalUnreadCount,
+        notifications: latestCritical
+          ? [{
+              ...latestCritical,
+              isRead: latestCritical.isRead || latestCritical.readByUserIds.includes(session.id),
+            }]
+          : [],
+      });
+    }
+
     await generateTaskOverdueNotifications(shopId);
     await processDueOrderFollowUpReminders({ shopId, recipientUserId: session.id, limit: 20 });
     await processNotificationRetries({ shopId, limit: 5 });
@@ -199,12 +241,14 @@ export async function GET(request: Request) {
       prisma.notification.findMany({
         where: visible,
         orderBy: { createdAt: "desc" },
-        take: 200,
+        take: Math.max(limit, 20),
+        select: notificationListSelect,
       }),
       prisma.notification.findMany({
         where: { AND: [visible, unreadWhere(session.id), { priority: "CRITICAL" }] },
         orderBy: { createdAt: "desc" },
         take: 50,
+        select: notificationListSelect,
       }),
       prisma.notification.count({
         where: { AND: [visible, unreadWhere(session.id)] },

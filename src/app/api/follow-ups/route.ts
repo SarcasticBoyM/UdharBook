@@ -12,6 +12,7 @@ import { normalizeTaskType, taskTypeLabels } from "@/lib/tasks";
 import { isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
 import { isOrderFollowUp } from "@/lib/follow-up-types";
 import { cancelLinkedTaskFromFollowUp, syncLinkedTaskFromFollowUp } from "@/lib/task-follow-up-sync";
+import { logger } from "@/lib/logger";
 
 const schema = z.object({
   customerId: z.string(),
@@ -77,6 +78,9 @@ async function findScopedUser(userId: string, shopId: string) {
 }
 
 export async function POST(request: Request) {
+  const routeStartedAt = performance.now();
+  let transactionMs = 0;
+  let notificationMs = 0;
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!canUseFollowUps(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -118,6 +122,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "The selected order does not belong to this customer and shop." }, { status: 400 });
     }
 
+    const transactionStartedAt = performance.now();
     const result = await prisma.$transaction(async (tx) => {
       const recorded = await recordFollowUpActivity(tx, {
         shopId,
@@ -163,6 +168,7 @@ export async function POST(request: Request) {
       });
       return { ...recorded, linkedTask };
     });
+    transactionMs = Math.round(performance.now() - transactionStartedAt);
 
     await logActivity({
       action: "follow_up_created",
@@ -172,6 +178,7 @@ export async function POST(request: Request) {
       details: `${body.status} ${result.followUp.nextFollowupDate?.toISOString() ?? ""}`.trim(),
     });
 
+    const notificationStartedAt = performance.now();
     const notification = body.status === "COMPLETED"
       ? await notifyFollowUpCompleted({
         shopId,
@@ -194,6 +201,20 @@ export async function POST(request: Request) {
           completedByName: session.name,
         })
       : undefined;
+    notificationMs = Math.round(performance.now() - notificationStartedAt);
+
+    if (process.env.NODE_ENV === "development") {
+      logger.info("api_followups_post_timing", {
+        route: "/api/follow-ups",
+        durationMs: Math.round(performance.now() - routeStartedAt),
+        transactionMs,
+        notificationMs,
+        shopPresent: Boolean(shopId),
+        status: body.status,
+        sourceModule: body.sourceModule ?? "TODAY_FOLLOWUPS",
+        hasLinkedTask: Boolean(result.linkedTask),
+      });
+    }
 
     return NextResponse.json({
       ...result,

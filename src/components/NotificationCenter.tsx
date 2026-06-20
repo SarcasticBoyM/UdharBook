@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Bell,
@@ -54,8 +54,6 @@ type NotificationFilter =
   | "CHEQUES"
   | "FOLLOW_UPS";
 
-const mutationMethods = new Set(["POST", "PATCH", "PUT", "DELETE"]);
-const businessApiPattern = /^\/api\/(orders|tasks|cheques|customers|follow-ups|field-staff\/attendance)\b/;
 const CRITICAL_DISMISS_KEY = "udharbook-critical-alert-dismissed-v1";
 
 const filters: { value: NotificationFilter; label: string }[] = [
@@ -90,14 +88,6 @@ function firstMessageLine(message: string) {
   return message.split("\n").find(Boolean) ?? message;
 }
 
-function shouldRefreshForFetch(input: RequestInfo | URL, init?: RequestInit) {
-  const method = String(init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-  if (!mutationMethods.has(method)) return false;
-  const rawUrl = input instanceof Request ? input.url : String(input);
-  const url = rawUrl.startsWith("http") ? new URL(rawUrl).pathname : rawUrl;
-  return businessApiPattern.test(url);
-}
-
 function priorityTone(priority: NotificationPriorityValue) {
   if (priority === "CRITICAL") {
     return {
@@ -129,7 +119,6 @@ function actionLabel(notification: AppNotification) {
 }
 
 export function NotificationCenter() {
-  const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<NotificationFilter>("ALL");
@@ -144,7 +133,9 @@ export function NotificationCenter() {
   const knownIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
   const refreshTimer = useRef<number | null>(null);
-  const refreshInFlight = useRef(false);
+  const fullRefreshInFlight = useRef(false);
+  const countRefreshInFlight = useRef(false);
+  const fullPanelLoaded = useRef(false);
 
   const unreadLabel = useMemo(() => (unreadCount > 99 ? "99+" : String(unreadCount)), [unreadCount]);
   const unreadCritical = useMemo(
@@ -184,9 +175,67 @@ export function NotificationCenter() {
     }
   }, []);
 
+  const mergeIncomingNotifications = useCallback((incoming: AppNotification[], showNew: boolean) => {
+    setNotifications((current) => {
+      const map = new Map(current.map((notification) => [notification.id, notification]));
+      for (const notification of incoming) map.set(notification.id, notification);
+      return [...map.values()].sort((left, right) => {
+        if (left.isRead !== right.isRead) return left.isRead ? 1 : -1;
+        const priorityDifference = priorityRank(left.priority) - priorityRank(right.priority);
+        if (priorityDifference !== 0) return priorityDifference;
+        return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      });
+    });
+
+    const freshUnread = incoming
+      .filter((item) => !item.isRead && !knownIds.current.has(item.id))
+      .sort((left, right) => {
+        const priorityDifference = priorityRank(left.priority) - priorityRank(right.priority);
+        if (priorityDifference !== 0) return priorityDifference;
+        return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      });
+
+    for (const item of incoming) knownIds.current.add(item.id);
+    if (!initialized.current) {
+      initialized.current = true;
+      return;
+    }
+    const next = freshUnread.find((notification) => shouldToastNotification(notification.type));
+    if (showNew && next) {
+      setToast(next);
+      showPwaNotification(next);
+      window.clearTimeout(refreshTimer.current ?? undefined);
+      refreshTimer.current = window.setTimeout(
+        () => setToast(null),
+        next.priority === "CRITICAL" ? 7000 : 4500,
+      );
+    }
+  }, [showPwaNotification]);
+
+  const loadNotificationCounts = useCallback(async (showNew = true) => {
+    if (countRefreshInFlight.current || document.visibilityState === "hidden") return;
+    countRefreshInFlight.current = true;
+    try {
+      const response = await fetch("/api/notifications?mode=count", { credentials: "same-origin", cache: "no-store" });
+      const data = await response.json().catch(() => ({})) as Partial<NotificationResponse>;
+      if (!response.ok || data.success === false) {
+        setLoadError(data.error ?? "Notifications could not be loaded. Please retry.");
+        return;
+      }
+      setLoadError("");
+      setUnreadCount(data.unreadCount ?? 0);
+      setCriticalUnreadCount(data.criticalUnreadCount ?? 0);
+      mergeIncomingNotifications(data.notifications ?? [], showNew);
+    } catch {
+      setLoadError("Notifications could not be loaded. Check your connection and retry.");
+    } finally {
+      countRefreshInFlight.current = false;
+    }
+  }, [mergeIncomingNotifications]);
+
   const loadNotifications = useCallback(async (showNew = true, forceStorageCheck = false) => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
+    if (fullRefreshInFlight.current) return;
+    fullRefreshInFlight.current = true;
     setLoadingNotifications(true);
     try {
       const search = new URLSearchParams({ limit: "50" });
@@ -201,37 +250,15 @@ export function NotificationCenter() {
       setUnreadCount(data.unreadCount ?? 0);
       setCriticalUnreadCount(data.criticalUnreadCount ?? 0);
       setNotifications(data.notifications ?? []);
-
-      const freshUnread = (data.notifications ?? [])
-        .filter((item) => !item.isRead && !knownIds.current.has(item.id))
-        .sort((left, right) => {
-          const priorityDifference = priorityRank(left.priority) - priorityRank(right.priority);
-          if (priorityDifference !== 0) return priorityDifference;
-          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
-        });
-
-      for (const item of data.notifications ?? []) knownIds.current.add(item.id);
-      if (!initialized.current) {
-        initialized.current = true;
-        return;
-      }
-      const next = freshUnread.find((notification) => shouldToastNotification(notification.type));
-      if (showNew && next) {
-        setToast(next);
-        showPwaNotification(next);
-        window.clearTimeout(refreshTimer.current ?? undefined);
-        refreshTimer.current = window.setTimeout(
-          () => setToast(null),
-          next.priority === "CRITICAL" ? 7000 : 4500,
-        );
-      }
+      fullPanelLoaded.current = true;
+      mergeIncomingNotifications(data.notifications ?? [], showNew);
     } catch {
       setLoadError("Notifications could not be loaded. Check your connection and retry.");
     } finally {
-      refreshInFlight.current = false;
+      fullRefreshInFlight.current = false;
       setLoadingNotifications(false);
     }
-  }, [showPwaNotification]);
+  }, [mergeIncomingNotifications]);
 
   const mutateNotification = useCallback(async (body: { action: "MARK_READ" | "MARK_ALL_READ" | "DELETE"; id?: string }) => {
     setActionError("");
@@ -261,13 +288,12 @@ export function NotificationCenter() {
           notification.id === body.id ? { ...notification, isRead: true } : notification,
         );
       });
-      await loadNotifications(false);
       return true;
     } catch {
       setActionError("Notification could not be updated. Check your connection and retry.");
       return false;
     }
-  }, [loadNotifications]);
+  }, []);
 
   const openRecord = useCallback(async (notification: AppNotification) => {
     setActionError("");
@@ -301,10 +327,11 @@ export function NotificationCenter() {
   }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => void loadNotifications(true), 60000);
-    const onFocus = () => void loadNotifications(true);
+    void loadNotificationCounts(true);
+    const interval = window.setInterval(() => void loadNotificationCounts(true), 90000);
+    const onFocus = () => void loadNotificationCounts(true);
     const onVisible = () => {
-      if (document.visibilityState === "visible") void loadNotifications(true);
+      if (document.visibilityState === "visible") void loadNotificationCounts(true);
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
@@ -313,25 +340,11 @@ export function NotificationCenter() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [loadNotifications]);
+  }, [loadNotificationCounts]);
 
   useEffect(() => {
-    void loadNotifications(true);
-  }, [pathname, loadNotifications]);
-
-  useEffect(() => {
-    const nativeFetch = window.fetch.bind(window);
-    window.fetch = async (input, init) => {
-      const response = await nativeFetch(input, init);
-      if (response.ok && shouldRefreshForFetch(input, init)) {
-        window.setTimeout(() => void loadNotifications(true), 350);
-      }
-      return response;
-    };
-    return () => {
-      window.fetch = nativeFetch;
-    };
-  }, [loadNotifications]);
+    if (open && !fullPanelLoaded.current) void loadNotifications(false);
+  }, [loadNotifications, open]);
 
   function dismissCriticalBanner() {
     const next = new Set(dismissedCriticalIds);

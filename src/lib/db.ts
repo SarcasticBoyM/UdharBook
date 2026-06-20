@@ -11,8 +11,13 @@ function createPrismaClient() {
     }
   }
 
+  const enableQueryTiming = process.env.NODE_ENV === "development" && process.env.PRISMA_QUERY_TIMING === "1";
   return new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+    log: enableQueryTiming
+      ? [{ level: "query", emit: "event" }, "error", "warn"]
+      : process.env.NODE_ENV === "development"
+        ? ["error", "warn"]
+        : ["error"],
     datasources: process.env.DATABASE_URL ? { db: { url: normalizeDatabaseUrl(process.env.DATABASE_URL) } } : undefined,
     transactionOptions: {
       maxWait: Number(process.env.PRISMA_TRANSACTION_MAX_WAIT_MS ?? 5000),
@@ -28,6 +33,22 @@ const globalForPrisma = globalThis as unknown as { prisma: PrismaClientSingleton
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+if (process.env.NODE_ENV === "development" && process.env.PRISMA_QUERY_TIMING === "1") {
+  const queryLoggerAttached = globalThis as unknown as { prismaQueryLoggerAttached?: boolean };
+  if (!queryLoggerAttached.prismaQueryLoggerAttached) {
+    prisma.$on("query", (event) => {
+      const duration = event.duration;
+      if (duration >= Number(process.env.PRISMA_SLOW_QUERY_MS ?? 75)) {
+        logger.info("prisma_query_timing", {
+          durationMs: duration,
+          modelAction: event.query.split(" ").slice(0, 3).join(" "),
+        });
+      }
+    });
+    queryLoggerAttached.prismaQueryLoggerAttached = true;
+  }
+}
 
 export async function withPrismaRetry<T>(operation: () => Promise<T>, meta?: Record<string, unknown>): Promise<T> {
   try {

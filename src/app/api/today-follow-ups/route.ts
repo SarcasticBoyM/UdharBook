@@ -6,6 +6,7 @@ import { requireShopId } from "@/lib/tenant";
 import { isOrderFollowUp } from "@/lib/follow-up-types";
 import { canAssignTasks } from "@/lib/operational-roles";
 import { normalizeTaskType, taskTypeLabels } from "@/lib/tasks";
+import { logger } from "@/lib/logger";
 
 const HIGH_AMOUNT = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
 const LIGHTWEIGHT_THRESHOLD = Number(process.env.TODAY_FOLLOWUPS_LIGHTWEIGHT_THRESHOLD ?? 200);
@@ -351,6 +352,7 @@ async function seedMissingFollowUps(shopId: string, userId: string, limit = 100)
 }
 
 export async function GET(request: Request) {
+  const routeStartedAt = performance.now();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -628,7 +630,7 @@ export async function GET(request: Request) {
     return action?.status === "CONTACTED" || action?.status === "PAYMENT_PROMISED" ? count + 1 : count;
   }, 0);
 
-  return NextResponse.json({
+  const payload = {
     scheduled,
     pending,
     done,
@@ -669,5 +671,22 @@ export async function GET(request: Request) {
       threshold: LIGHTWEIGHT_THRESHOLD,
       totalActiveCustomers,
     },
-  });
+  };
+
+  if (process.env.NODE_ENV === "development") {
+    logger.info("api_today_followups_timing", {
+      route: "/api/today-follow-ups",
+      durationMs: Math.round(performance.now() - routeStartedAt),
+      shopPresent: Boolean(shopId),
+      skip,
+      take,
+      lightweightMode,
+      pendingRows: pending.length,
+      scheduledRows: scheduled.length,
+      doneRows: done.length,
+      totalActiveCustomers,
+    });
+  }
+
+  return NextResponse.json(payload);
 }

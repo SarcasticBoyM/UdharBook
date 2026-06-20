@@ -447,6 +447,8 @@ export default function TodayFollowUpsPage() {
   const [linkedFollowUpId, setLinkedFollowUpId] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLElement | null>(null);
+  const loadAbortRef = useRef<AbortController | null>(null);
+  const dueAbortRef = useRef<AbortController | null>(null);
   const sheetHistoryActiveRef = useRef(false);
   const restoreFocusIdRef = useRef<string | null>(null);
   const [mobileSheet, setMobileSheet] = useState(false);
@@ -584,6 +586,9 @@ export default function TodayFollowUpsPage() {
 
   const loadPage = useCallback(
     async (skip: number, reset = false) => {
+      if (reset) loadAbortRef.current?.abort();
+      const controller = new AbortController();
+      loadAbortRef.current = controller;
       if (reset) setLoading(true);
       else setLoadingMore(true);
       try {
@@ -595,54 +600,24 @@ export default function TodayFollowUpsPage() {
           search: debouncedQuery,
         });
         if (batchTag.trim()) params.set("batchTag", batchTag.trim());
-        const res = await fetch(`/api/today-follow-ups?${params.toString()}`);
+        const res = await fetch(`/api/today-follow-ups?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error("Could not load follow-up queue.");
         const data = (await res.json()) as TodayResponse;
+        if (controller.signal.aborted) return;
         mergeQueue(data, reset);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("today_followups_load_failed", error);
       } finally {
+        if (loadAbortRef.current === controller) loadAbortRef.current = null;
         setLoading(false);
         setLoadingMore(false);
       }
     },
     [batchTag, debouncedQuery, filter, mergeQueue, sort]
-  );
-
-  const refreshAffectedCustomer = useCallback(
-    async (customerId: string) => {
-      const params = new URLSearchParams({
-        take: String(Math.max(PAGE_SIZE, pending.length)),
-        skip: "0",
-        sort,
-        filter,
-        search: debouncedQuery,
-      });
-      if (batchTag.trim()) params.set("batchTag", batchTag.trim());
-      const res = await fetch(`/api/today-follow-ups?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) return;
-      const data = (await res.json()) as TodayResponse;
-      const nextScheduled = data.scheduled.find((item) => item.id === customerId);
-      const nextPending = data.pending.find((item) => item.id === customerId);
-      const nextDone = data.done.find((item) => item.id === customerId);
-
-      setScheduled((current) => {
-        const withoutCustomer = current.filter((item) => item.id !== customerId);
-        return nextScheduled ? [nextScheduled, ...withoutCustomer] : withoutCustomer;
-      });
-      setPending((current) => {
-        if (!nextPending) return current.filter((item) => item.id !== customerId);
-        const found = current.some((item) => item.id === customerId);
-        return found
-          ? current.map((item) => (item.id === customerId ? nextPending : item))
-          : [nextPending, ...current];
-      });
-      setDone((current) => {
-        const withoutCustomer = current.filter((item) => item.id !== customerId);
-        return nextDone ? [nextDone, ...withoutCustomer] : withoutCustomer;
-      });
-      setSummary(data.summary);
-      setSections(data.sections);
-      setHasMore(data.pagination.hasMore);
-    },
-    [batchTag, debouncedQuery, filter, pending.length, sort]
   );
 
   useEffect(() => {
@@ -738,38 +713,51 @@ export default function TodayFollowUpsPage() {
 
   useEffect(() => {
     const checkDue = async () => {
-      if (!("Notification" in window) || Notification.permission !== "granted") return;
-      const res = await fetch("/api/notifications/due");
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        reminders: { id: string; customerId: string; partyName: string; amount: number; scheduledAt: string | null; callbackNote?: string | null; missed: boolean }[];
-      };
-      const now = Date.now();
-      for (const reminder of data.reminders) {
-        if (!reminder.scheduledAt || new Date(reminder.scheduledAt).getTime() > now) continue;
-        if (notifiedIds.current.has(reminder.id)) continue;
-        notifiedIds.current.add(reminder.id);
-        playAlert();
-        const notification = new Notification(`Follow-up due: ${reminder.partyName}`, {
-          body: `${reminder.missed ? "Missed callback." : "Callback time."} Balance ${formatCurrency(reminder.amount)}${reminder.callbackNote ? `. ${reminder.callbackNote}` : ""}`,
-          icon: "/icon.svg",
-        });
-        notification.onclick = () => {
-          window.focus();
-          openCustomer(reminder.customerId);
-          window.setTimeout(() => {
-            const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(reminder.customerId)}"]`) ?? null;
-            scrollListElementIntoView(target);
-          }, 100);
+      try {
+        if (!("Notification" in window) || Notification.permission !== "granted") return;
+        if (document.visibilityState === "hidden") return;
+        dueAbortRef.current?.abort();
+        const controller = new AbortController();
+        dueAbortRef.current = controller;
+        const res = await fetch("/api/notifications/due", { signal: controller.signal });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          reminders: { id: string; customerId: string; partyName: string; amount: number; scheduledAt: string | null; callbackNote?: string | null; missed: boolean }[];
         };
+        const now = Date.now();
+        for (const reminder of data.reminders) {
+          if (!reminder.scheduledAt || new Date(reminder.scheduledAt).getTime() > now) continue;
+          if (notifiedIds.current.has(reminder.id)) continue;
+          notifiedIds.current.add(reminder.id);
+          playAlert();
+          const notification = new Notification(`Follow-up due: ${reminder.partyName}`, {
+            body: `${reminder.missed ? "Missed callback." : "Callback time."} Balance ${formatCurrency(reminder.amount)}${reminder.callbackNote ? `. ${reminder.callbackNote}` : ""}`,
+            icon: "/icon.svg",
+          });
+          notification.onclick = () => {
+            window.focus();
+            openCustomer(reminder.customerId);
+            window.setTimeout(() => {
+              const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(reminder.customerId)}"]`) ?? null;
+              scrollListElementIntoView(target);
+            }, 100);
+          };
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.error("today_followups_due_check_failed", error);
+        }
       }
     };
     checkDue();
     const timer = window.setInterval(checkDue, 60000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      dueAbortRef.current?.abort();
+    };
   }, [openCustomer, playAlert, scrollListElementIntoView]);
 
-  const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0) => {
+  const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0, addToDone = true) => {
     const now = new Date().toISOString();
     const action: FollowUpItem = {
       id: `optimistic-${now}`,
@@ -806,11 +794,12 @@ export default function TodayFollowUpsPage() {
 
     setPending((current) => (shouldLeaveQueue ? current.filter((item) => item.id !== customer.id) : current.map((item) => (item.id === customer.id ? updated : item))));
     setScheduled((current) => current.filter((item) => item.id !== customer.id));
-    setDone((current) => [updated, ...current.filter((item) => item.id !== customer.id)]);
+    setDone((current) => addToDone ? [updated, ...current.filter((item) => item.id !== customer.id)] : current.filter((item) => item.id !== customer.id));
     setSummary((current) => ({
       ...current,
       pending: shouldLeaveQueue ? Math.max(0, current.pending - 1) : current.pending,
-      completed: current.completed + 1,
+      completed: addToDone ? current.completed + 1 : current.completed,
+      actionedToday: addToDone ? current.actionedToday + 1 : current.actionedToday,
       recoveryToday: current.recoveryToday + paidAmount,
     }));
   };
@@ -818,8 +807,7 @@ export default function TodayFollowUpsPage() {
   const quickSave = async (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => {
     const nextDate = status === "RESCHEDULED" ? reminderInputToIso(defaultReminderDate()) : customer.nextFollowupDate;
     const paidAmount = status === "PAID" ? customer.outstandingBalance : 0;
-    applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
-    await fetch("/api/follow-ups", {
+    const response = await fetch("/api/follow-ups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -833,10 +821,11 @@ export default function TodayFollowUpsPage() {
         paidAmount,
       }),
     });
+    if (!response.ok) throw new Error("Could not save follow-up");
+    applyOptimisticAction(customer, status, notes, nextDate, paidAmount);
   };
 
   const cancelScheduled = async (followUpId: string) => {
-    const customerId = scheduled.find((customer) => customer.scheduledFollowUp.id === followUpId)?.id;
     const response = await fetch("/api/follow-ups", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -844,7 +833,12 @@ export default function TodayFollowUpsPage() {
     });
     if (!response.ok) throw new Error("Could not cancel follow-up");
     setScheduled((current) => current.filter((customer) => customer.scheduledFollowUp.id !== followUpId));
-    if (customerId) await refreshAffectedCustomer(customerId);
+    setSummary((current) => ({
+      ...current,
+      pending: Math.max(0, current.pending - 1),
+      scheduled: Math.max(0, current.scheduled - 1),
+      totalPendingCustomers: Math.max(0, current.totalPendingCustomers - 1),
+    }));
   };
 
   const updateLinkedTask = async (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => {
@@ -856,14 +850,30 @@ export default function TodayFollowUpsPage() {
       body: JSON.stringify({ id: task.id, status }),
     });
     if (!response.ok) throw new Error("Could not update linked task");
-    await refreshAffectedCustomer(customer.id);
+    setScheduled((current) =>
+      current.map((item) =>
+        item.scheduledFollowUp.task?.id === task.id
+          ? {
+              ...item,
+              scheduledFollowUp: {
+                ...item.scheduledFollowUp,
+                task: item.scheduledFollowUp.task
+                  ? { ...item.scheduledFollowUp.task, status }
+                  : item.scheduledFollowUp.task,
+              },
+            }
+          : item,
+      ),
+    );
+    if (status === "COMPLETED" || status === "CANCELLED") {
+      setScheduled((current) => current.filter((item) => item.scheduledFollowUp.task?.id !== task.id));
+    }
   };
 
   const handleSaved = useCallback(
     async (customerId: string) => {
       const currentIndex = queueOrder.indexOf(customerId);
       const nextId = queueOrder[currentIndex + 1] ?? queueOrder[currentIndex - 1] ?? null;
-      await refreshAffectedCustomer(customerId);
       if (nextId) openCustomer(nextId);
       else closeCustomer();
       if (nextId) {
@@ -873,7 +883,7 @@ export default function TodayFollowUpsPage() {
         }, 0);
       }
     },
-    [closeCustomer, openCustomer, queueOrder, refreshAffectedCustomer, scrollListElementIntoView]
+    [closeCustomer, openCustomer, queueOrder, scrollListElementIntoView]
   );
 
   return (
@@ -1852,7 +1862,7 @@ function ActionPanel({
   canAssignFollowUp: boolean;
   staffOptions: StaffOption[];
   onClose: () => void;
-  onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number) => void;
+  onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number, addToDone?: boolean) => void;
   onSaved: (customerId: string) => Promise<void>;
 }) {
   const [primaryAction, setPrimaryAction] = useState<PrimaryFollowUpAction>("PAYMENT_UPDATE");
@@ -1865,6 +1875,7 @@ function ActionPanel({
   const [assignedToId, setAssignedToId] = useState("");
   const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [whatsAppMessage, setWhatsAppMessage] = useState("");
 
   useEffect(() => {
@@ -1880,6 +1891,7 @@ function ActionPanel({
     setPaidAmount("");
     setAssignedToId(editingOrderFollowUp ? scheduledSource?.assignedToId ?? "" : "");
     setSetReminder(false);
+    setSaveError("");
     setPriority(derivedPriority(customer));
     const existingDate = reminderInputFromDate(editingOrderFollowUp ? scheduledSource?.scheduledAt : customer.nextFollowupDate);
     setNextDate(existingDate);
@@ -1983,6 +1995,8 @@ function ActionPanel({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (saving) return;
+    setSaveError("");
     setSaving(true);
     const closesQueue = COMPLETE_STATUSES.includes(status);
     const scheduledAt = !closesQueue && nextDate ? reminderInputToIso(nextDate) : null;
@@ -1995,7 +2009,6 @@ function ActionPanel({
       (status === "PAYMENT_PROMISED" ? "Customer promised payment." : "") ||
       (status === "NOT_REACHABLE" ? "Customer was not reachable." : "") ||
       "Follow-up action recorded.";
-    if (!orderFollowUp) onOptimistic(customer, status, finalNotes, scheduledAt, amount);
     try {
       const res = await fetch("/api/follow-ups", {
         method: "POST",
@@ -2025,8 +2038,13 @@ function ActionPanel({
           supersedesFollowUpId: orderFollowUp ? scheduledSource?.id : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Could not save follow-up");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not save follow-up");
+      if (!orderFollowUp) onOptimistic(customer, status, finalNotes, scheduledAt, amount);
+      else onOptimistic(customer, "COMPLETED", finalNotes, scheduledAt, 0, false);
       await onSaved(customer.id);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save follow-up");
     } finally {
       setSaving(false);
     }
@@ -2094,6 +2112,11 @@ function ActionPanel({
               </button>
             </div>
             {whatsAppMessage && <p className="-mt-2 text-xs font-semibold text-amber-700">{whatsAppMessage}</p>}
+            {saveError && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
+                {saveError}
+              </div>
+            )}
 
             <div className="ui-surface-muted rounded-xl border p-3">
               <p className="mb-3 text-sm font-bold text-slate-900 dark:text-white">Choose the follow-up outcome</p>
