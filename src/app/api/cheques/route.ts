@@ -476,7 +476,7 @@ export async function GET(request: Request) {
   else if (quick === "pending") conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
   else if (quick === "due_today") {
     conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
-    conditions.push({ chequeDate: { gte: todayStart, lte: todayEnd } });
+    conditions.push({ chequeDate: { lte: todayEnd } });
   } else if (quickStatus) {
     conditions.push({ status: quickStatus });
   }
@@ -676,7 +676,7 @@ export async function GET(request: Request) {
   }
   if (quick === "due_today") {
     const chequeDateMatches = await prisma.cheque.findMany({
-      where: { shopId, chequeDate: { gte: todayStart, lte: todayEnd } },
+      where: { shopId, chequeDate: { lte: todayEnd }, status: { in: PENDING_DEPOSIT_STATUSES } },
       select: { id: true, chequeDate: true, status: true },
       take: 5,
     });

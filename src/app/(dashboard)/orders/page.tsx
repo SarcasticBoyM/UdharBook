@@ -70,6 +70,12 @@ const filters = [
 
 const safeText = (value: unknown) => value ? String(value).trim() : "";
 
+function safeContactText(value: unknown) {
+  const contact = safeText(value);
+  if (!contact || contact.toUpperCase().startsWith("NO-PH-")) return "";
+  return contact;
+}
+
 function normalizedStatus(status: OrderStatus) {
   if (status === "PENDING") return "ORDER_RECEIVED";
   if (status === "PROCESSING") return "DISPATCHED";
@@ -162,15 +168,10 @@ export default function OrderDeskPage() {
   const canAssignTasks = isShopAdminRole(role);
 
   async function copyOrder(order: OrderRow) {
-    const customerName = safeText(order.customer.partyName);
-    const contactNumber = safeText(order.customer.contactNumber);
-    const orderText = safeText(order.orderDetails);
-    const lines = [
-      `Customer Name: ${customerName}`,
-      contactNumber ? `Contact No: ${contactNumber}` : "Contact No:",
-      `Order: ${orderText}`,
-    ];
-    await navigator.clipboard.writeText(lines.join("\n"));
+    const customerName = safeText(order.customer.partyName).toUpperCase();
+    const contactNumber = safeContactText(order.customer.contactNumber).toUpperCase();
+    const orderText = safeText(order.orderDetails).toUpperCase();
+    await navigator.clipboard.writeText([customerName, contactNumber, orderText].filter(Boolean).join(", "));
     setToast("Order copied");
     window.setTimeout(() => setToast((current) => current === "Order copied" ? "" : current), 1800);
   }
