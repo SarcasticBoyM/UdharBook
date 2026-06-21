@@ -74,10 +74,19 @@ const filters = [
 
 const safeText = (value: unknown) => value ? String(value).trim() : "";
 
-function safeContactText(value: unknown) {
-  const contact = safeText(value);
-  if (!contact || contact.toUpperCase().startsWith("NO-PH-")) return "";
-  return contact;
+function cleanContact(contact: unknown) {
+  const value = String(contact || "").trim();
+  if (!value) return "";
+  if (value.toUpperCase().startsWith("NO-PH-")) return "";
+  if (["undefined", "null", "nan"].includes(value.toLowerCase())) return "";
+  return value;
+}
+
+function buildOrderCopyText(order: OrderRow) {
+  const customerName = String(order.customer?.partyName || "").trim();
+  const contact = cleanContact(order.customer?.contactNumber);
+  const orderText = String(order.orderDetails || "").trim();
+  return [customerName, contact, orderText].filter(Boolean).join("\n");
 }
 
 function normalizedStatus(status: OrderStatus) {
@@ -281,10 +290,7 @@ export default function OrderDeskPage() {
   const canAssignTasks = isShopAdminRole(role);
 
   async function copyOrder(order: OrderRow) {
-    const customerName = safeText(order.customer.partyName).toUpperCase();
-    const contactNumber = safeContactText(order.customer.contactNumber).toUpperCase();
-    const orderText = safeText(order.orderDetails).toUpperCase();
-    await navigator.clipboard.writeText([customerName, contactNumber, orderText].filter(Boolean).join(", "));
+    await navigator.clipboard.writeText(buildOrderCopyText(order));
     setToast("Order copied");
     window.setTimeout(() => setToast((current) => current === "Order copied" ? "" : current), 1800);
   }
@@ -805,7 +811,7 @@ export default function OrderDeskPage() {
                           <h3 className="font-bold">{order.customer.partyName}</h3>
                           <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${statusClass(order.status)}`}>{displayStatus(order.status)}</span>
                         </div>
-                        {safeContactText(order.customer.contactNumber) && <p className="mt-1 text-xs text-slate-500">{safeContactText(order.customer.contactNumber)}</p>}
+                        {cleanContact(order.customer.contactNumber) && <p className="mt-1 text-xs text-slate-500">{cleanContact(order.customer.contactNumber)}</p>}
                         <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{order.orderDetails}</p>
                         <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
                           <span>Qty: {orderQuantity(order)}</span>
