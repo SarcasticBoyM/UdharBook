@@ -28,6 +28,7 @@ export async function processDueOrderFollowUpReminders(options: {
       ...(options.shopId ? { shopId: options.shopId } : {}),
       followUpType: ORDER_FOLLOW_UP,
       linkedTask: null,
+      manualReminder: true,
       reminderEnabled: true,
       reminderSentAt: null,
       supersededAt: null,
@@ -43,7 +44,7 @@ export async function processDueOrderFollowUpReminders(options: {
             ],
           }
         : {}),
-      customer: { isArchived: false },
+      customer: { isArchived: false, outstandingBalance: { gt: 0 } },
     },
     select: {
       id: true,
@@ -73,6 +74,7 @@ export async function processDueOrderFollowUpReminders(options: {
   for (const followUp of due) {
     const reminderAt = followUp.nextFollowUpDateTime;
     if (!reminderAt) continue;
+    if (followUp.customer.outstandingBalance <= 0) continue;
     const recipientUserId =
       followUp.assignedTo && !followUp.assignedTo.disabledAt
         ? followUp.assignedTo.id
@@ -103,6 +105,8 @@ export async function processDueOrderFollowUpReminders(options: {
       const marked = await prisma.followUp.updateMany({
         where: {
           id: followUp.id,
+          manualReminder: true,
+          reminderEnabled: true,
           reminderSentAt: null,
           nextFollowUpDateTime: reminderAt,
           supersededAt: null,

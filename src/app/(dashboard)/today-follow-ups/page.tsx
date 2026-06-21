@@ -330,6 +330,7 @@ async function schedulePwaFollowUpNotification(input: {
   note?: string;
 }) {
   if (!input.scheduledAt || typeof window === "undefined") return;
+  if (input.amount <= 0) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if (!("serviceWorker" in navigator)) return;
   const timestamp = new Date(input.scheduledAt).getTime();

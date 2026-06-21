@@ -76,6 +76,12 @@ function asNumber(value: string | null) {
   return Number.isFinite(amount) ? amount : undefined;
 }
 
+function asPositiveInt(value: string | null, fallback: number, max?: number) {
+  const parsed = Number(value ?? fallback);
+  const bounded = Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : fallback;
+  return max ? Math.min(max, bounded) : bounded;
+}
+
 function safeText(value: unknown, fallback = "-") {
   if (value === null || value === undefined) return fallback;
   const text = String(value).trim();
@@ -388,8 +394,8 @@ export async function GET(request: Request) {
   const isTrackerReport = report === "tracker";
   const reportTitle = isTrackerReport ? "Cheque Tracker Report" : "Cheques Report";
   const exportFileName = isTrackerReport ? "cheque-tracker-report" : "cheque-collections";
-  const page = Math.max(1, Number(searchParams.get("page") ?? 1));
-  const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 30)));
+  const page = asPositiveInt(searchParams.get("page"), 1);
+  const limit = asPositiveInt(searchParams.get("limit"), 30, 100);
   const skip = (page - 1) * limit;
   const todayStart = startOfToday();
   const todayEnd = endOfToday();

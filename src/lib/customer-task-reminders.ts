@@ -19,14 +19,17 @@ export async function processDueCustomerTaskReminders(options: {
       ...(options.recipientUserId ? { assignedToId: options.recipientUserId } : {}),
       status: { in: ACTIVE_TASK_STATUSES },
       dueDate: { lte: now },
-      customer: { isArchived: false },
+      customer: { isArchived: false, outstandingBalance: { gt: 0 } },
       linkedFollowUp: {
         is: {
           completedAt: null,
           cancelledAt: null,
           supersededAt: null,
           status: { notIn: [...CLOSED_FOLLOW_UP_STATUSES] },
+          manualReminder: true,
           reminderEnabled: true,
+          reminderSentAt: null,
+          nextFollowUpDateTime: { lte: now },
         },
       },
       assignedTo: { disabledAt: null },
@@ -40,7 +43,7 @@ export async function processDueCustomerTaskReminders(options: {
       progressNotes: true,
       dueDate: true,
       assignedToId: true,
-      customer: { select: { id: true, partyName: true } },
+      customer: { select: { id: true, partyName: true, outstandingBalance: true } },
       linkedFollowUp: { select: { id: true, nextFollowUpDateTime: true } },
     },
     orderBy: { dueDate: "asc" },
@@ -53,6 +56,7 @@ export async function processDueCustomerTaskReminders(options: {
   for (const task of tasks) {
     const followUp = task.linkedFollowUp;
     if (!task.customer || !followUp || !followUp.nextFollowUpDateTime) continue;
+    if (task.customer.outstandingBalance <= 0) continue;
     if (followUp.nextFollowUpDateTime.getTime() !== task.dueDate.getTime()) {
       failed += 1;
       logger.warn("customer_task_due_timestamp_mismatch", {
@@ -76,18 +80,33 @@ export async function processDueCustomerTaskReminders(options: {
       notes: task.progressNotes ?? task.notes,
     });
     if (result.success || result.retryQueued) {
-      queued += 1;
-      reminders.push({
-        id: followUp.id,
-        taskId: task.id,
-        customerId: task.customer.id,
-        partyName: task.customer.partyName,
-        amount: 0,
-        scheduledAt: task.dueDate,
-        callbackNote: task.progressNotes ?? task.notes,
-        missed: task.dueDate < now,
-        notificationQueued: result.success,
+      const marked = await prisma.followUp.updateMany({
+        where: {
+          id: followUp.id,
+          manualReminder: true,
+          reminderEnabled: true,
+          reminderSentAt: null,
+          nextFollowUpDateTime: task.dueDate,
+          completedAt: null,
+          cancelledAt: null,
+          supersededAt: null,
+        },
+        data: { reminderSentAt: now, remindedAt: now },
       });
+      if (marked.count) {
+        queued += 1;
+        reminders.push({
+          id: followUp.id,
+          taskId: task.id,
+          customerId: task.customer.id,
+          partyName: task.customer.partyName,
+          amount: task.customer.outstandingBalance,
+          scheduledAt: task.dueDate,
+          callbackNote: task.progressNotes ?? task.notes,
+          missed: task.dueDate < now,
+          notificationQueued: result.success,
+        });
+      }
     } else {
       failed += 1;
     }
