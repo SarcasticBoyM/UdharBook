@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Clock, Copy, Loader2, PackageCheck, Plus, RefreshCw, Search, Truck, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, Copy, Loader2, PackageCheck, Plus, RefreshCw, Search, Share2, Truck, XCircle } from "lucide-react";
 import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
@@ -50,6 +50,15 @@ type Summary = {
 
 type ClubFilter = "all" | "pending" | "dispatched";
 type StructuredOrderItem = { material: string; qty: string };
+type OrderShareSource = Partial<OrderRow> & {
+  customerName?: string | null;
+  partyName?: string | null;
+  contactNumber?: string | null;
+  mobile?: string | null;
+  orderText?: string | null;
+  itemsText?: string | null;
+  description?: string | null;
+};
 
 const emptySummary: Summary = {
   pendingOrders: 0,
@@ -82,10 +91,10 @@ function cleanContact(contact: unknown) {
   return value;
 }
 
-function buildOrderCopyText(order: OrderRow) {
-  const customerName = String(order.customer?.partyName || "").trim();
-  const contact = cleanContact(order.customer?.contactNumber);
-  const orderText = String(order.orderDetails || "").trim();
+function buildOrderShareText(order: OrderShareSource) {
+  const customerName = String(order.customerName || order.customer?.partyName || order.partyName || "").trim();
+  const contact = cleanContact(order.contactNumber || order.mobile || order.customer?.contactNumber);
+  const orderText = String(order.orderText || order.itemsText || order.description || order.orderDetails || "").trim();
   return [customerName, contact, orderText].filter(Boolean).join("\n");
 }
 
@@ -266,6 +275,7 @@ export default function OrderDeskPage() {
   const [savingOrder, setSavingOrder] = useState(false);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
+  const [sharePromptOrder, setSharePromptOrder] = useState<OrderRow | null>(null);
   const [clubOpen, setClubOpen] = useState(false);
   const [clubOrders, setClubOrders] = useState<OrderRow[]>([]);
   const [clubSelected, setClubSelected] = useState<Set<string>>(new Set());
@@ -289,10 +299,33 @@ export default function OrderDeskPage() {
   const canCreateOrders = canManageOrders;
   const canAssignTasks = isShopAdminRole(role);
 
+  function showToast(text: string, duration = 1800) {
+    setToast(text);
+    window.setTimeout(() => setToast((current) => current === text ? "" : current), duration);
+  }
+
   async function copyOrder(order: OrderRow) {
-    await navigator.clipboard.writeText(buildOrderCopyText(order));
-    setToast("Order copied");
-    window.setTimeout(() => setToast((current) => current === "Order copied" ? "" : current), 1800);
+    await navigator.clipboard.writeText(buildOrderShareText(order));
+    showToast("Order copied");
+  }
+
+  async function shareOrderToWhatsApp(order: OrderRow) {
+    const text = buildOrderShareText(order);
+    if (!text) {
+      showToast("Nothing to share");
+      return;
+    }
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+        showToast("Share options opened");
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    const opened = window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    showToast(opened ? "WhatsApp opened" : "Could not open WhatsApp");
   }
 
   async function load() {
@@ -581,6 +614,7 @@ export default function OrderDeskPage() {
           return orderMatchesFilter(savedOrder, filter) ? [savedOrder, ...current] : current;
         });
         setSummary((current) => editor.mode === "create" ? applySummaryChange(current, null, savedOrder) : current);
+        if (editor.mode === "create") setSharePromptOrder(savedOrder);
       } else {
         await load();
       }
@@ -652,6 +686,21 @@ export default function OrderDeskPage() {
           {toast}
         </div>
       )}
+      {sharePromptOrder && (
+        <div className="fixed bottom-20 left-4 right-4 z-40 rounded-lg border border-emerald-200 bg-white p-3 shadow-lg dark:border-emerald-900 dark:bg-slate-950 sm:left-auto sm:right-6 sm:w-80">
+          <p className="text-sm font-semibold">Order saved</p>
+          <p className="mt-1 text-xs text-slate-500">Share this order manually to a WhatsApp group or contact.</p>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={() => void shareOrderToWhatsApp(sharePromptOrder)} className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white">
+              <Share2 className="h-4 w-4" />
+              Share to WhatsApp Group
+            </button>
+            <button type="button" onClick={() => setSharePromptOrder(null)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Pending Orders" value={summary.pendingOrders} icon={<Clock className="h-5 w-5" />} />
@@ -718,6 +767,10 @@ export default function OrderDeskPage() {
                 <button type="button" onClick={() => void copyOrder(order)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700">
                   <Copy className="h-4 w-4" />
                   Copy Order
+                </button>
+                <button type="button" onClick={() => void shareOrderToWhatsApp(order)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-300 px-3 text-xs font-semibold text-emerald-700 dark:border-emerald-800 dark:text-emerald-300">
+                  <Share2 className="h-4 w-4" />
+                  Share WhatsApp
                 </button>
                 {canAssignTasks && (
                   <AssignTaskButton
