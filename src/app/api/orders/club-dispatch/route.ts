@@ -13,6 +13,7 @@ const payloadSchema = z.object({
 
 type ChangedOrder = {
   id: string;
+  customerId: string;
   previousStatus: OrderStatus;
 };
 
@@ -57,10 +58,10 @@ export async function POST(request: Request) {
         where: { shopId, id: { in: uniqueOrderIds } },
         select: { id: true, customerId: true, status: true },
       });
-      const foundIds = new Set(existing.map((order) => order.id));
-      const skipped = uniqueOrderIds
-        .filter((id) => !foundIds.has(id))
-        .map((id) => ({ id, reason: "NOT_FOUND" }));
+      if (existing.length !== uniqueOrderIds.length) {
+        throw new Error("ORDER_NOT_FOUND_FOR_SHOP");
+      }
+      const skipped: { id: string; reason: string }[] = [];
       const finalOrders = existing.filter((order) => {
         const normalized = normalizeStatus(order.status);
         return normalized === "DELIVERED" || normalized === "CANCELLED";
@@ -69,21 +70,18 @@ export async function POST(request: Request) {
 
       const pending = existing.filter((order) => isPendingDispatch(order.status));
       const alreadyDispatched = existing.filter((order) => isAlreadyDispatched(order.status));
-      changedOrders = pending.map((order) => ({ id: order.id, previousStatus: order.status }));
+      const handledIds = new Set([...pending, ...alreadyDispatched, ...finalOrders].map((order) => order.id));
+      skipped.push(
+        ...existing
+          .filter((order) => !handledIds.has(order.id))
+          .map((order) => ({ id: order.id, reason: `INVALID_STATUS_${order.status}` })),
+      );
+      changedOrders = pending.map((order) => ({ id: order.id, customerId: order.customerId, previousStatus: order.status }));
 
       if (pending.length) {
         await tx.order.updateMany({
           where: { shopId, id: { in: pending.map((order) => order.id) }, status: { in: ["ORDER_RECEIVED", "PENDING"] } },
           data: { status: "DISPATCHED" },
-        });
-        await tx.activityLog.createMany({
-          data: pending.map((order) => ({
-            shopId,
-            userId: session.id,
-            customerId: order.customerId,
-            action: "order_status_updated",
-            details: "Dispatched via Club Dispatch",
-          })),
         });
       }
 
@@ -105,6 +103,15 @@ export async function POST(request: Request) {
 
     for (const order of changedOrders) {
       try {
+        await prisma.activityLog.create({
+          data: {
+            shopId,
+            userId: session.id,
+            customerId: order.customerId,
+            action: "order_status_updated",
+            details: "Dispatched via Club Dispatch",
+          },
+        });
         await prisma.orderActivity.create({
           data: {
             shopId,
@@ -146,7 +153,12 @@ export async function POST(request: Request) {
       error: detail,
       stack: error instanceof Error ? error.stack : undefined,
     });
-    const message = error instanceof z.ZodError ? "Select at least one order to dispatch." : "Could not dispatch selected orders.";
+    const message =
+      error instanceof z.ZodError
+        ? "Select at least one order to dispatch."
+        : error instanceof Error && error.message === "ORDER_NOT_FOUND_FOR_SHOP"
+          ? "One or more selected orders were not found for this shop."
+          : "Could not dispatch selected orders.";
     return NextResponse.json({
       success: false,
       error: process.env.NODE_ENV === "production" ? message : `${message} ${detail}`,

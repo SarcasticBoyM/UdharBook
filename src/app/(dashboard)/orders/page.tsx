@@ -453,7 +453,16 @@ export default function OrderDeskPage() {
         return next;
       });
       setClubOpen(false);
-      setToast(data.skipped?.length || data.alreadyDispatchedCount ? "Some orders were already dispatched or skipped" : "Selected orders dispatched");
+      const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      const updatedCount = Number(data.updatedCount ?? 0);
+      const alreadyDispatchedCount = Number(data.alreadyDispatchedCount ?? 0);
+      setToast(
+        skippedCount > 0
+          ? "Some orders were skipped"
+          : updatedCount === 0 && alreadyDispatchedCount > 0
+            ? "Selected orders are already dispatched"
+            : "Selected orders dispatched"
+      );
       window.setTimeout(() => setToast((current) => current ? "" : current), 2200);
     } catch {
       setClubError("Could not dispatch selected orders. Check your connection and retry.");
