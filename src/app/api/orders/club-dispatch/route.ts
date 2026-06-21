@@ -11,6 +11,11 @@ const payloadSchema = z.object({
   orderIds: z.array(z.string().min(1)).min(1).max(100),
 });
 
+type ChangedOrder = {
+  id: string;
+  previousStatus: OrderStatus;
+};
+
 const responseInclude = {
   customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
   createdBy: { select: { name: true } },
@@ -45,6 +50,7 @@ export async function POST(request: Request) {
   try {
     const body = payloadSchema.parse(await request.json());
     const uniqueOrderIds = Array.from(new Set(body.orderIds));
+    let changedOrders: ChangedOrder[] = [];
 
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.order.findMany({
@@ -59,22 +65,11 @@ export async function POST(request: Request) {
         const normalized = normalizeStatus(order.status);
         return normalized === "DELIVERED" || normalized === "CANCELLED";
       });
-      if (finalOrders.length) {
-        return {
-          success: false,
-          status: 400,
-          updatedCount: 0,
-          alreadyDispatchedCount: 0,
-          skipped: [
-            ...skipped,
-            ...finalOrders.map((order) => ({ id: order.id, reason: normalizeStatus(order.status) ?? order.status })),
-          ],
-          orders: [],
-        };
-      }
+      skipped.push(...finalOrders.map((order) => ({ id: order.id, reason: normalizeStatus(order.status) ?? order.status })));
 
       const pending = existing.filter((order) => isPendingDispatch(order.status));
       const alreadyDispatched = existing.filter((order) => isAlreadyDispatched(order.status));
+      changedOrders = pending.map((order) => ({ id: order.id, previousStatus: order.status }));
 
       if (pending.length) {
         await tx.order.updateMany({
@@ -88,17 +83,6 @@ export async function POST(request: Request) {
             customerId: order.customerId,
             action: "order_status_updated",
             details: "Dispatched via Club Dispatch",
-          })),
-        });
-        await tx.orderActivity.createMany({
-          data: pending.map((order) => ({
-            shopId,
-            orderId: order.id,
-            userId: session.id,
-            action: "DISPATCH",
-            previousStatus: order.status,
-            newStatus: "DISPATCHED",
-            notes: "Dispatched via Club Dispatch",
           })),
         });
       }
@@ -119,6 +103,30 @@ export async function POST(request: Request) {
       };
     });
 
+    for (const order of changedOrders) {
+      try {
+        await prisma.orderActivity.create({
+          data: {
+            shopId,
+            orderId: order.id,
+            userId: session.id,
+            action: "DISPATCH",
+            previousStatus: order.previousStatus,
+            newStatus: "DISPATCHED",
+            notes: "Dispatched via Club Dispatch",
+          },
+        });
+      } catch (activityError) {
+        logger.error("club_dispatch_order_activity_failed_non_blocking", {
+          requestId,
+          shopId,
+          orderId: order.id,
+          userId: session.id,
+          error: activityError instanceof Error ? activityError.message : String(activityError),
+        });
+      }
+    }
+
     logger.info("club_dispatch_completed", {
       requestId,
       shopId,
@@ -130,14 +138,23 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result, { status: result.status });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
     logger.error("club_dispatch_failed", {
       requestId,
       shopId,
       userId: session.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: detail,
       stack: error instanceof Error ? error.stack : undefined,
     });
     const message = error instanceof z.ZodError ? "Select at least one order to dispatch." : "Could not dispatch selected orders.";
-    return NextResponse.json({ success: false, error: message, updatedCount: 0, alreadyDispatchedCount: 0, skipped: [], orders: [] }, { status: 400 });
+    return NextResponse.json({
+      success: false,
+      error: process.env.NODE_ENV === "production" ? message : `${message} ${detail}`,
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+      updatedCount: 0,
+      alreadyDispatchedCount: 0,
+      skipped: [],
+      orders: [],
+    }, { status: 400 });
   }
 }

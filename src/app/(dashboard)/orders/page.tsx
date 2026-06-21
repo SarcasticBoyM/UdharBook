@@ -9,6 +9,7 @@ import { isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker } from "@/components/AppDateTimePicker";
 import { istDateTimeToIso } from "@/lib/app-date-time";
+import { extractOrderQuantity } from "@/lib/order-quantity";
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
@@ -48,6 +49,7 @@ type Summary = {
 };
 
 type ClubFilter = "all" | "pending" | "dispatched";
+type StructuredOrderItem = { material: string; qty: string };
 
 const emptySummary: Summary = {
   pendingOrders: 0,
@@ -200,16 +202,36 @@ function isClubEligible(order: OrderRow) {
   return normalized === "ORDER_RECEIVED" || normalized === "DISPATCHED";
 }
 
-function orderQuantity(_order: OrderRow) {
-  const order = _order as OrderRow & { quantity?: unknown; items?: { quantity?: unknown }[] };
-  if (Array.isArray(order.items)) {
-    return order.items.reduce((total, item) => {
+function orderQuantity(order: OrderRow) {
+  const structuredOrder = order as OrderRow & { quantity?: unknown; items?: { quantity?: unknown }[] };
+  if (Array.isArray(structuredOrder.items)) {
+    return structuredOrder.items.reduce((total, item) => {
       const quantity = Number(item.quantity);
       return total + (Number.isFinite(quantity) ? quantity : 0);
     }, 0);
   }
-  const quantity = Number(order.quantity);
-  return Number.isFinite(quantity) ? quantity : 0;
+  const quantity = Number(structuredOrder.quantity);
+  if (Number.isFinite(quantity) && quantity > 0) return quantity;
+  return extractOrderQuantity(order.orderDetails);
+}
+
+function cleanQty(value: string) {
+  return value.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1");
+}
+
+function structuredItemsToText(items: StructuredOrderItem[]) {
+  return items
+    .map((item) => {
+      const material = safeText(item.material);
+      const qty = cleanQty(item.qty);
+      return material && qty ? `${material} - ${qty}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function emptyStructuredItems(): StructuredOrderItem[] {
+  return [{ material: "", qty: "" }];
 }
 
 function canDeliver(order: OrderRow) {
@@ -251,6 +273,7 @@ export default function OrderDeskPage() {
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [duplicateCustomer, setDuplicateCustomer] = useState<CustomerSuggestion | null>(null);
   const [orderDetails, setOrderDetails] = useState("");
+  const [structuredItems, setStructuredItems] = useState<StructuredOrderItem[]>(emptyStructuredItems);
   const [deliveryDate, setDeliveryDate] = useState("");
   const [priority, setPriority] = useState("Normal");
   const canManageOrders = canUseOrders(role);
@@ -351,6 +374,7 @@ export default function OrderDeskPage() {
     () => selectedClubOrders.reduce((total, order) => total + orderQuantity(order), 0),
     [selectedClubOrders]
   );
+  const orderDetailsQty = useMemo(() => extractOrderQuantity(orderDetails), [orderDetails]);
 
   async function openClubDispatch(seedOrder: OrderRow) {
     setClubOpen(true);
@@ -406,7 +430,7 @@ export default function OrderDeskPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) {
-        setClubError(data.error ?? "Could not dispatch selected orders.");
+        setClubError(data.detail ?? data.error ?? "Could not dispatch selected orders.");
         return;
       }
       const updatedOrders = (data.orders ?? []) as OrderRow[];
@@ -438,6 +462,28 @@ export default function OrderDeskPage() {
     }
   }
 
+  function updateStructuredItem(index: number, patch: Partial<StructuredOrderItem>) {
+    setStructuredItems((current) => {
+      const next = current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
+      const generated = structuredItemsToText(next);
+      if (generated) setOrderDetails(generated);
+      return next;
+    });
+  }
+
+  function addStructuredItem() {
+    setStructuredItems((current) => [...current, { material: "", qty: "" }]);
+  }
+
+  function removeStructuredItem(index: number) {
+    setStructuredItems((current) => {
+      const next = current.length > 1 ? current.filter((_, itemIndex) => itemIndex !== index) : emptyStructuredItems();
+      const generated = structuredItemsToText(next);
+      if (generated) setOrderDetails(generated);
+      return next;
+    });
+  }
+
   function openCreate() {
     setMessage("");
     setSelectedCustomer(null);
@@ -448,6 +494,7 @@ export default function OrderDeskPage() {
     setMoreDetailsOpen(false);
     setDuplicateCustomer(null);
     setOrderDetails("");
+    setStructuredItems(emptyStructuredItems());
     setDeliveryDate("");
     setPriority("Normal");
     setEditor({ mode: "create" });
@@ -456,6 +503,7 @@ export default function OrderDeskPage() {
   function openEdit(order: OrderRow) {
     setMessage("");
     setOrderDetails(order.orderDetails);
+    setStructuredItems(emptyStructuredItems());
     setDeliveryDate(toInputDate(order.preferredDeliveryDate));
     setPriority(order.priority);
     setMoreDetailsOpen(false);
@@ -642,7 +690,8 @@ export default function OrderDeskPage() {
               </div>
             </div>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{order.orderDetails}</p>
-            <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-6">
+              <span>Qty: {orderQuantity(order)}</span>
               <span>Delivery: {formatDate(order.preferredDeliveryDate)}</span>
               <span>Created By: {order.createdBy.name}</span>
               <span>Last Updated By: {order.activities?.[0]?.user.name ?? order.createdBy.name}</span>
@@ -750,7 +799,7 @@ export default function OrderDeskPage() {
                         {safeContactText(order.customer.contactNumber) && <p className="mt-1 text-xs text-slate-500">{safeContactText(order.customer.contactNumber)}</p>}
                         <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{order.orderDetails}</p>
                         <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
-                          <span>Qty: -</span>
+                          <span>Qty: {orderQuantity(order)}</span>
                           <span>Created: {formatDateTime(order.createdAt)}</span>
                         </div>
                       </div>
@@ -884,9 +933,32 @@ export default function OrderDeskPage() {
                   )}
                 </div>
               )}
+              <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">Item rows</p>
+                    <p className="text-xs text-slate-500">Optional. These rows fill the order text below.</p>
+                  </div>
+                  <button type="button" onClick={addStructuredItem} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold dark:border-slate-700">
+                    Add Item
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {structuredItems.map((item, index) => (
+                    <div key={index} className="grid grid-cols-[1fr_7rem_auto] gap-2">
+                      <input value={item.material} onChange={(e) => updateStructuredItem(index, { material: e.target.value })} placeholder="Material / size" className="min-h-10 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-900" />
+                      <input value={item.qty} onChange={(e) => updateStructuredItem(index, { qty: cleanQty(e.target.value) })} placeholder="Qty" inputMode="decimal" className="min-h-10 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-900" />
+                      <button type="button" onClick={() => removeStructuredItem(index)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700" aria-label="Remove item">
+                        X
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="text-sm font-semibold">Order Details</label>
                 <textarea value={orderDetails} onChange={(e) => setOrderDetails(e.target.value)} rows={3} placeholder="Example: 100 bags cement + 20 steel rods" className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+                <p className="mt-1 text-xs font-semibold text-slate-500">Total Qty: {orderDetailsQty}</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <AppDatePicker label="Delivery Preferred Date" value={deliveryDate} onChange={setDeliveryDate} />
