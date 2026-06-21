@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 const notified = new Set<string>();
 
@@ -16,6 +16,8 @@ function timingLabel(scheduledAt: string | null, missed: boolean) {
 }
 
 export function PwaRegister() {
+  const dueCheckInFlight = useRef(false);
+
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").then((registration) => registration.update()).catch(() => undefined);
@@ -26,8 +28,10 @@ export function PwaRegister() {
     if (!("Notification" in window)) return;
 
     const check = async () => {
+      if (dueCheckInFlight.current) return;
       if (Notification.permission !== "granted") return;
       if (document.visibilityState === "hidden") return;
+      dueCheckInFlight.current = true;
       try {
         const res = await fetch("/api/notifications/due", { credentials: "same-origin" });
         if (!res.ok) return;
@@ -59,6 +63,8 @@ export function PwaRegister() {
         }
       } catch {
         // Notification polling should never interrupt the app.
+      } finally {
+        dueCheckInFlight.current = false;
       }
     };
 

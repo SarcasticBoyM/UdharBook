@@ -138,8 +138,10 @@ export default function ReportsPage() {
   const [maxAmount, setMaxAmount] = useState("");
   const [chequePage, setChequePage] = useState(1);
   const [data, setData] = useState<ChequeResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [chequeError, setChequeError] = useState<string | null>(null);
+  const [chequeReportApplied, setChequeReportApplied] = useState(false);
+  const [chequeRunId, setChequeRunId] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [attendancePreset, setAttendancePreset] = useState("today");
   const [attendanceFrom, setAttendanceFrom] = useState("");
@@ -148,15 +150,17 @@ export default function ReportsPage() {
   const [attendanceRole, setAttendanceRole] = useState("");
   const [attendanceActive, setAttendanceActive] = useState("");
   const [attendanceData, setAttendanceData] = useState<StaffAttendanceResponse | null>(null);
-  const [attendanceLoading, setAttendanceLoading] = useState(true);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [attendanceApplied, setAttendanceApplied] = useState(false);
+  const [attendanceRunId, setAttendanceRunId] = useState(0);
 
   const chequeFilterKey = useMemo(
     () => JSON.stringify({ from, to, status, partyName, batchTag, bankName, query, staffId, minAmount, maxAmount }),
     [bankName, batchTag, from, maxAmount, minAmount, partyName, query, staffId, status, to]
   );
 
-  const chequeParams = useMemo(() => {
+  const chequeFilterParams = useMemo(() => {
     const params = new URLSearchParams();
     const addText = (key: string, value: string) => {
       const trimmed = value.trim();
@@ -176,10 +180,14 @@ export default function ReportsPage() {
     if (staffId) params.set("staffId", staffId);
     addAmount("minAmount", minAmount);
     addAmount("maxAmount", maxAmount);
+    return params;
+  }, [bankName, batchTag, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
+  const chequeParams = useMemo(() => {
+    const params = new URLSearchParams(chequeFilterParams);
     params.set("page", String(chequePage));
     params.set("limit", "50");
     return params;
-  }, [bankName, batchTag, chequePage, from, maxAmount, minAmount, partyName, query, staffId, status, to]);
+  }, [chequeFilterParams, chequePage]);
   const attendanceParams = useMemo(() => {
     const params = new URLSearchParams({ preset: attendancePreset });
     if (attendancePreset === "custom") {
@@ -192,14 +200,26 @@ export default function ReportsPage() {
     if (attendanceActive) params.set("active", attendanceActive);
     return params;
   }, [attendanceActive, attendanceFrom, attendancePreset, attendanceRole, attendanceStaff, attendanceTo]);
+  const attendanceFilterKey = attendanceParams.toString();
 
   useEffect(() => {
     setChequePage(1);
     setExpandedId(null);
+    setChequeReportApplied(false);
+    setData(null);
+    setLoading(false);
   }, [chequeFilterKey]);
 
   useEffect(() => {
+    setAttendanceApplied(false);
+    setAttendanceData(null);
+    setAttendanceLoading(false);
+  }, [attendanceFilterKey]);
+
+  useEffect(() => {
+    if (!chequeReportApplied) return;
     let alive = true;
+    const controller = new AbortController();
     setLoading(true);
     setChequeError(null);
     const url = `/api/cheques?${chequeParams.toString()}`;
@@ -207,7 +227,7 @@ export default function ReportsPage() {
       params: Object.fromEntries(chequeParams.entries()),
       page: chequePage,
     });
-    fetch(url, { cache: "no-store" })
+    fetch(url, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = response.headers.get("content-type")?.includes("application/json") ? await response.json() : await response.text();
         if (!response.ok) {
@@ -236,6 +256,7 @@ export default function ReportsPage() {
       })
       .catch((error: unknown) => {
         if (!alive) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         const message = error instanceof Error ? error.message : "Cheque report could not be loaded";
         console.error("reports_cheque_query_failed", {
           message,
@@ -249,17 +270,20 @@ export default function ReportsPage() {
       });
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [chequeParams, chequePage]);
+  }, [chequeParams, chequePage, chequeReportApplied, chequeRunId]);
   useEffect(() => {
+    if (!attendanceApplied) return;
     let alive = true;
+    const controller = new AbortController();
     setAttendanceLoading(true);
     setAttendanceError(null);
     const url = `/api/reports/staff-attendance?${attendanceParams.toString()}`;
     console.info("reports_attendance_filter_payload", {
       params: Object.fromEntries(attendanceParams.entries()),
     });
-    fetch(url, { cache: "no-store" })
+    fetch(url, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = response.headers.get("content-type")?.includes("application/json") ? await response.json() : await response.text();
         if (!response.ok) {
@@ -287,6 +311,7 @@ export default function ReportsPage() {
       })
       .catch((error: unknown) => {
         if (!alive) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         const message = error instanceof Error ? error.message : "Attendance report could not be loaded";
         console.error("reports_attendance_query_failed", {
           message,
@@ -300,8 +325,9 @@ export default function ReportsPage() {
       });
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [attendanceParams]);
+  }, [attendanceApplied, attendanceParams, attendanceRunId]);
 
   const downloadBase = (type: string, format: "xlsx" | "csv" | "pdf") => {
     const params = new URLSearchParams({ format });
@@ -330,6 +356,18 @@ export default function ReportsPage() {
     setMaxAmount("");
     setChequePage(1);
     setExpandedId(null);
+    setChequeReportApplied(false);
+    setData(null);
+  };
+  const applyChequeFilters = () => {
+    setChequePage(1);
+    setExpandedId(null);
+    setChequeReportApplied(true);
+    setChequeRunId((current) => current + 1);
+  };
+  const applyAttendanceFilters = () => {
+    setAttendanceApplied(true);
+    setAttendanceRunId((current) => current + 1);
   };
   const downloadAttendance = (format: "xlsx" | "csv") => {
     const params = new URLSearchParams(attendanceParams);
@@ -407,11 +445,16 @@ export default function ReportsPage() {
 
         <div className="mt-3 flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
           <p className="text-slate-500">
-            Showing {data?.items.length ?? 0} of {data?.pagination.total ?? 0} cheques
+            {chequeReportApplied ? `Showing ${data?.items.length ?? 0} of ${data?.pagination.total ?? 0} cheques` : "Set filters, then apply to load cheque rows."}
           </p>
-          <button type="button" onClick={resetChequeFilters} className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 font-semibold dark:border-slate-700">
-            Reset Filters
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button type="button" onClick={applyChequeFilters} disabled={loading} className="inline-flex min-h-10 items-center justify-center rounded-lg bg-brand-600 px-3 font-semibold text-white disabled:opacity-60">
+              {loading ? "Loading..." : "Apply Filters"}
+            </button>
+            <button type="button" onClick={resetChequeFilters} className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 font-semibold dark:border-slate-700">
+              Reset Filters
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
@@ -426,6 +469,8 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
+              ) : !chequeReportApplied ? (
+                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Apply filters to load cheque report rows.</td></tr>
               ) : chequeError ? (
                 <tr><td colSpan={15} className="px-3 py-8 text-center text-red-600">{chequeError}</td></tr>
               ) : data?.items.length ? (
@@ -457,7 +502,9 @@ export default function ReportsPage() {
           <div className="space-y-3 p-3 lg:hidden">
             {loading ? (
               <p className="py-6 text-center text-sm text-slate-500">Loading cheque report...</p>
-              ) : chequeError ? (
+              ) : !chequeReportApplied ? (
+              <p className="py-6 text-center text-sm text-slate-500">Apply filters to load cheque report rows.</p>
+            ) : chequeError ? (
               <p className="py-6 text-center text-sm text-red-600">{chequeError}</p>
             ) : data?.items.length ? (
               data.items.map((cheque) => (
@@ -564,6 +611,11 @@ export default function ReportsPage() {
               <DateInput label="To" value={attendanceTo} onChange={setAttendanceTo} />
             </div>
           )}
+          <div className="flex items-end">
+            <button type="button" onClick={applyAttendanceFilters} disabled={attendanceLoading} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white disabled:opacity-60">
+              {attendanceLoading ? "Loading..." : "Apply Attendance"}
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 rounded-lg border border-slate-200 dark:border-slate-800">
@@ -605,6 +657,8 @@ export default function ReportsPage() {
                 <tbody>
                   {attendanceLoading ? (
                     <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading attendance report...</td></tr>
+                  ) : !attendanceApplied ? (
+                    <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Apply filters to load attendance rows.</td></tr>
                   ) : attendanceError ? (
                     <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{attendanceError}</td></tr>
                   ) : attendanceData?.rows.length ? (
@@ -636,6 +690,8 @@ export default function ReportsPage() {
           <div className="space-y-3 p-3 lg:hidden">
             {attendanceLoading ? (
               <p className="py-6 text-center text-sm text-slate-500">Loading attendance report...</p>
+            ) : !attendanceApplied ? (
+              <p className="py-6 text-center text-sm text-slate-500">Apply filters to load attendance rows.</p>
             ) : attendanceError ? (
               <p className="py-6 text-center text-sm text-red-600">{attendanceError}</p>
             ) : showRawAttendanceFallback ? (

@@ -397,7 +397,7 @@ export async function POST(request: Request) {
           visitSource: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "New Customer Order" : "Order Desk",
         },
         include: {
-          customer: { select: { partyName: true, contactNumber: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
           createdBy: { select: { name: true } },
         },
       });

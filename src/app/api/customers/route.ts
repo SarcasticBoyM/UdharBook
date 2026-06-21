@@ -27,6 +27,12 @@ function normalizeSearch(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function positiveInt(value: string | null, fallback: number, max?: number) {
+  const parsed = Number(value ?? fallback);
+  const bounded = Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : fallback;
+  return max ? Math.min(max, bounded) : bounded;
+}
+
 function textContains(field: "partyName" | "geoAddress", value: string): Prisma.CustomerWhereInput {
   return { [field]: { contains: value, mode: "insensitive" } };
 }
@@ -64,8 +70,8 @@ export async function GET(request: Request) {
   const includeArchived = searchParams.get("includeArchived") === "true" || view === "all_with_archived";
   const sort = searchParams.get("sort") ?? "balance";
   const order = searchParams.get("order") === "asc" ? "asc" : "desc";
-  const page = Math.max(1, Number(searchParams.get("page") ?? 1));
-  const limit = Math.min(100, Math.max(1, Number(searchParams.get("limit") ?? 20)));
+  const page = positiveInt(searchParams.get("page"), 1);
+  const limit = positiveInt(searchParams.get("limit"), 20, 100);
   const skip = (page - 1) * limit;
   const shopId = requireShopId(request, session);
   const phoneSearch = search.replace(/\D/g, "");

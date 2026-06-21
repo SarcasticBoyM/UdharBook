@@ -1,4 +1,4 @@
-const CACHE_NAME = "udharbook-v5";
+const CACHE_NAME = "udharbook-v6";
 const APP_SHELL = [
   "/manifest.webmanifest",
   "/icon.svg",

@@ -16,7 +16,6 @@ import {
   notificationEntityAvailable,
   processNotificationRetries,
 } from "@/lib/notifications";
-import { processDueOrderFollowUpReminders } from "@/lib/order-follow-up-reminders";
 import {
   canRoleSeeShopNotification,
   priorityRank,
@@ -168,7 +167,6 @@ export async function GET(request: Request) {
     }
 
     await generateTaskOverdueNotifications(shopId);
-    await processDueOrderFollowUpReminders({ shopId, recipientUserId: session.id, limit: 20 });
     await processNotificationRetries({ shopId, limit: 5 });
 
     if (debugRequested) {

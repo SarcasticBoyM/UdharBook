@@ -475,11 +475,9 @@ export default function TodayFollowUpsPage() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLElement | null>(null);
   const loadAbortRef = useRef<AbortController | null>(null);
-  const dueAbortRef = useRef<AbortController | null>(null);
   const sheetHistoryActiveRef = useRef(false);
   const restoreFocusIdRef = useRef<string | null>(null);
   const [mobileSheet, setMobileSheet] = useState(false);
-  const notifiedIds = useRef<Set<string>>(new Set());
 
   const restoreListFocus = useCallback(() => {
     const customerId = restoreFocusIdRef.current;
@@ -722,67 +720,6 @@ export default function TodayFollowUpsPage() {
     () => [...visibleScheduled.map((customer) => customer.id), ...pending.map((customer) => customer.id), ...done.map((customer) => customer.id)],
     [done, pending, visibleScheduled]
   );
-
-  const playAlert = useCallback(() => {
-    if (!soundEnabled) return;
-    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const audio = new AudioContextClass();
-    const oscillator = audio.createOscillator();
-    const gain = audio.createGain();
-    oscillator.frequency.value = 820;
-    gain.gain.value = 0.05;
-    oscillator.connect(gain);
-    gain.connect(audio.destination);
-    oscillator.start();
-    oscillator.stop(audio.currentTime + 0.18);
-  }, [soundEnabled]);
-
-  useEffect(() => {
-    const checkDue = async () => {
-      try {
-        if (!("Notification" in window) || Notification.permission !== "granted") return;
-        if (document.visibilityState === "hidden") return;
-        dueAbortRef.current?.abort();
-        const controller = new AbortController();
-        dueAbortRef.current = controller;
-        const res = await fetch("/api/notifications/due", { signal: controller.signal });
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          reminders: { id: string; customerId: string; partyName: string; amount: number; scheduledAt: string | null; callbackNote?: string | null; missed: boolean }[];
-        };
-        const now = Date.now();
-        for (const reminder of data.reminders) {
-          if (!reminder.scheduledAt || new Date(reminder.scheduledAt).getTime() > now) continue;
-          if (notifiedIds.current.has(reminder.id)) continue;
-          notifiedIds.current.add(reminder.id);
-          playAlert();
-          const notification = new Notification(`Follow-up due: ${reminder.partyName}`, {
-            body: `${reminder.missed ? "Missed callback." : "Callback time."} Balance ${formatCurrency(reminder.amount)}${reminder.callbackNote ? `. ${reminder.callbackNote}` : ""}`,
-            icon: "/icon.svg",
-          });
-          notification.onclick = () => {
-            window.focus();
-            openCustomer(reminder.customerId);
-            window.setTimeout(() => {
-              const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(reminder.customerId)}"]`) ?? null;
-              scrollListElementIntoView(target);
-            }, 100);
-          };
-        }
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          console.error("today_followups_due_check_failed", error);
-        }
-      }
-    };
-    checkDue();
-    const timer = window.setInterval(checkDue, 60000);
-    return () => {
-      window.clearInterval(timer);
-      dueAbortRef.current?.abort();
-    };
-  }, [openCustomer, playAlert, scrollListElementIntoView]);
 
   const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0, addToDone = true) => {
     const now = new Date().toISOString();

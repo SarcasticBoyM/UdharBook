@@ -108,6 +108,65 @@ function formatDateTime(value: string) {
   return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+function isReceivedOrder(status: OrderStatus) {
+  return normalizedStatus(status) === "ORDER_RECEIVED";
+}
+
+function isDispatchedOrder(status: OrderStatus) {
+  return normalizedStatus(status) === "DISPATCHED";
+}
+
+function isActiveOrder(status: OrderStatus) {
+  const normalized = normalizedStatus(status);
+  return normalized !== "DELIVERED" && normalized !== "CANCELLED";
+}
+
+function orderMatchesFilter(order: OrderRow, filter: string) {
+  if (filter === "pending") return isReceivedOrder(order.status);
+  if (filter === "dispatched") return isDispatchedOrder(order.status);
+  if (filter === "delivered") return normalizedStatus(order.status) === "DELIVERED";
+  if (filter === "cancelled") return normalizedStatus(order.status) === "CANCELLED";
+  if (filter === "high") return order.priority === "High";
+  if (filter === "sales") return order.visitSource === "Sales Visit";
+  if (filter === "lead") return order.visitSource === "New Lead Visit" || order.visitSource === "Prospect Visit";
+  if (filter === "upcoming") {
+    if (!order.preferredDeliveryDate || !isActiveOrder(order.status)) return false;
+    const delivery = new Date(order.preferredDeliveryDate).getTime();
+    const now = Date.now();
+    return delivery >= now && delivery <= now + 7 * 24 * 60 * 60 * 1000;
+  }
+  return true;
+}
+
+function orderSummaryContribution(order: OrderRow): Summary {
+  const deliveredAt = order.deliveredAt ? new Date(order.deliveredAt) : null;
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const delivery = order.preferredDeliveryDate ? new Date(order.preferredDeliveryDate).getTime() : null;
+  const now = Date.now();
+  return {
+    pendingOrders: isReceivedOrder(order.status) ? 1 : 0,
+    dispatchedOrders: isDispatchedOrder(order.status) ? 1 : 0,
+    highPriorityOrders: isActiveOrder(order.status) && order.priority === "High" ? 1 : 0,
+    deliveredToday: normalizedStatus(order.status) === "DELIVERED" && deliveredAt && deliveredAt.getTime() >= todayStart ? 1 : 0,
+    cancelledOrders: normalizedStatus(order.status) === "CANCELLED" ? 1 : 0,
+    upcomingDeliveries: isActiveOrder(order.status) && delivery !== null && delivery >= now && delivery <= now + 7 * 24 * 60 * 60 * 1000 ? 1 : 0,
+  };
+}
+
+function applySummaryChange(summary: Summary, before: OrderRow | null, after: OrderRow | null) {
+  const remove = before ? orderSummaryContribution(before) : emptySummary;
+  const add = after ? orderSummaryContribution(after) : emptySummary;
+  return {
+    pendingOrders: Math.max(0, summary.pendingOrders - remove.pendingOrders + add.pendingOrders),
+    dispatchedOrders: Math.max(0, summary.dispatchedOrders - remove.dispatchedOrders + add.dispatchedOrders),
+    highPriorityOrders: Math.max(0, summary.highPriorityOrders - remove.highPriorityOrders + add.highPriorityOrders),
+    deliveredToday: Math.max(0, summary.deliveredToday - remove.deliveredToday + add.deliveredToday),
+    cancelledOrders: Math.max(0, summary.cancelledOrders - remove.cancelledOrders + add.cancelledOrders),
+    upcomingDeliveries: Math.max(0, summary.upcomingDeliveries - remove.upcomingDeliveries + add.upcomingDeliveries),
+  };
+}
+
 function priorityClass(priority: string) {
   if (priority === "High") return "bg-red-100 text-red-800";
   if (priority === "Urgent") return "bg-amber-100 text-amber-800";
@@ -309,7 +368,18 @@ export default function OrderDeskPage() {
         return;
       }
       setEditor(null);
-      await load();
+      const savedOrder = data.order as OrderRow | undefined;
+      if (savedOrder) {
+        setOrders((current) => {
+          if (editor.mode === "edit") {
+            return current.map((order) => order.id === savedOrder.id ? { ...order, ...savedOrder, activities: order.activities } : order);
+          }
+          return orderMatchesFilter(savedOrder, filter) ? [savedOrder, ...current] : current;
+        });
+        setSummary((current) => editor.mode === "create" ? applySummaryChange(current, null, savedOrder) : current);
+      } else {
+        await load();
+      }
     } catch {
       setMessage("Could not save order. Check your connection and retry.");
     } finally {
@@ -333,8 +403,22 @@ export default function OrderDeskPage() {
       setMessage(data.error ?? "Could not update order.");
       return;
     }
-    setOrders((current) => current.map((order) => (order.id === orderId ? { ...order, ...data.order, activities: order.activities } : order)));
-    await load();
+    const updatedOrder = data.order as OrderRow | undefined;
+    if (!updatedOrder) {
+      await load();
+      return;
+    }
+    const previousOrder = orders.find((order) => order.id === orderId) ?? null;
+    setOrders((current) => {
+      const next = current
+        .map((order) => {
+          if (order.id !== orderId) return order;
+          return { ...order, ...updatedOrder, activities: order.activities };
+        })
+        .filter((order) => orderMatchesFilter(order, filter));
+      return next;
+    });
+    setSummary((current) => applySummaryChange(current, previousOrder, updatedOrder));
   }
 
   return (

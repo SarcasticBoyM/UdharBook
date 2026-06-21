@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Customer, CustomerStatus } from "@prisma/client";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -29,6 +29,7 @@ export default function CustomersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [role, setRole] = useState("");
+  const loadSequence = useRef(0);
   const isReadOnlySales = isSalesRole(role) && !isAccountsRole(role) && !isShopAdminRole(role);
   const selectableVisibleIds = items.filter((customer) => !customer.isArchived).map((customer) => customer.id);
   const selectedCount = selected.size;
@@ -36,6 +37,8 @@ export default function CustomersPage() {
     selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id));
 
   const load = useCallback(async () => {
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
     setLoading(true);
     const params = new URLSearchParams({
       search,
@@ -49,6 +52,7 @@ export default function CustomersPage() {
     if (batchTag.trim()) params.set("batchTag", batchTag.trim());
     const res = await fetch(`/api/customers?${params}`);
     const data = await res.json();
+    if (sequence !== loadSequence.current) return;
     setItems(data.items ?? []);
     setPages(data.pagination?.pages ?? 1);
     setTotal(data.pagination?.total ?? 0);
