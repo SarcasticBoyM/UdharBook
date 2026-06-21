@@ -47,6 +47,8 @@ type Summary = {
   upcomingDeliveries: number;
 };
 
+type ClubFilter = "all" | "pending" | "dispatched";
+
 const emptySummary: Summary = {
   pendingOrders: 0,
   dispatchedOrders: 0,
@@ -189,6 +191,27 @@ function canDispatch(order: OrderRow) {
   return normalizedStatus(order.status) === "ORDER_RECEIVED";
 }
 
+function canClubOrder(order: OrderRow) {
+  return normalizedStatus(order.status) === "ORDER_RECEIVED";
+}
+
+function isClubEligible(order: OrderRow) {
+  const normalized = normalizedStatus(order.status);
+  return normalized === "ORDER_RECEIVED" || normalized === "DISPATCHED";
+}
+
+function orderQuantity(_order: OrderRow) {
+  const order = _order as OrderRow & { quantity?: unknown; items?: { quantity?: unknown }[] };
+  if (Array.isArray(order.items)) {
+    return order.items.reduce((total, item) => {
+      const quantity = Number(item.quantity);
+      return total + (Number.isFinite(quantity) ? quantity : 0);
+    }, 0);
+  }
+  const quantity = Number(order.quantity);
+  return Number.isFinite(quantity) ? quantity : 0;
+}
+
 function canDeliver(order: OrderRow) {
   return normalizedStatus(order.status) === "DISPATCHED";
 }
@@ -212,6 +235,14 @@ export default function OrderDeskPage() {
   const [savingOrder, setSavingOrder] = useState(false);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
+  const [clubOpen, setClubOpen] = useState(false);
+  const [clubOrders, setClubOrders] = useState<OrderRow[]>([]);
+  const [clubSelected, setClubSelected] = useState<Set<string>>(new Set());
+  const [clubSearch, setClubSearch] = useState("");
+  const [clubFilter, setClubFilter] = useState<ClubFilter>("all");
+  const [clubLoading, setClubLoading] = useState(false);
+  const [clubSaving, setClubSaving] = useState(false);
+  const [clubError, setClubError] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSuggestion[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
@@ -296,6 +327,116 @@ export default function OrderDeskPage() {
     if (!tag) return visibleOrders;
     return visibleOrders.filter((order) => (order.customer.batchTag ?? "").toLowerCase().includes(tag));
   }, [batchFilter, visibleOrders]);
+
+  const clubVisibleOrders = useMemo(() => {
+    const needle = clubSearch.trim().toLowerCase();
+    return clubOrders.filter((order) => {
+      if (!isClubEligible(order)) return false;
+      const normalized = normalizedStatus(order.status);
+      if (clubFilter === "pending" && normalized !== "ORDER_RECEIVED") return false;
+      if (clubFilter === "dispatched" && normalized !== "DISPATCHED") return false;
+      if (!needle) return true;
+      return [order.customer.partyName, order.customer.contactNumber, order.orderDetails]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [clubFilter, clubOrders, clubSearch]);
+
+  const selectedClubOrders = useMemo(
+    () => clubOrders.filter((order) => clubSelected.has(order.id)),
+    [clubOrders, clubSelected]
+  );
+  const clubTotalQty = useMemo(
+    () => selectedClubOrders.reduce((total, order) => total + orderQuantity(order), 0),
+    [selectedClubOrders]
+  );
+
+  async function openClubDispatch(seedOrder: OrderRow) {
+    setClubOpen(true);
+    setClubError("");
+    setClubSearch("");
+    setClubFilter("all");
+    setClubSelected(new Set([seedOrder.id]));
+    setClubOrders((current) => {
+      const merged = new Map<string, OrderRow>();
+      for (const order of [...orders, ...current, seedOrder]) {
+        if (isClubEligible(order)) merged.set(order.id, order);
+      }
+      return Array.from(merged.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    });
+    setClubLoading(true);
+    try {
+      const res = await fetch("/api/orders?filter=all");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setClubError(data.error ?? "Could not load orders for club dispatch.");
+        return;
+      }
+      const eligible = ((data.orders ?? []) as OrderRow[])
+        .filter(isClubEligible)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setClubOrders(eligible);
+      setClubSelected((current) => new Set(current.has(seedOrder.id) ? current : [seedOrder.id]));
+    } catch {
+      setClubError("Could not load orders for club dispatch. Check your connection and retry.");
+    } finally {
+      setClubLoading(false);
+    }
+  }
+
+  function toggleClubOrder(orderId: string) {
+    setClubSelected((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }
+
+  async function submitClubDispatch() {
+    if (clubSaving || clubSelected.size === 0) return;
+    setClubSaving(true);
+    setClubError("");
+    try {
+      const res = await fetch("/api/orders/club-dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderIds: Array.from(clubSelected) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setClubError(data.error ?? "Could not dispatch selected orders.");
+        return;
+      }
+      const updatedOrders = (data.orders ?? []) as OrderRow[];
+      setOrders((current) =>
+        current
+          .map((order) => {
+            const updated = updatedOrders.find((item) => item.id === order.id);
+            return updated ? { ...order, ...updated, activities: order.activities } : order;
+          })
+          .filter((order) => orderMatchesFilter(order, filter))
+      );
+      setSummary((current) => {
+        let next = current;
+        for (const updated of updatedOrders) {
+          const before = clubOrders.find((order) => order.id === updated.id) ?? orders.find((order) => order.id === updated.id) ?? null;
+          if (before && isReceivedOrder(before.status) && isDispatchedOrder(updated.status)) {
+            next = applySummaryChange(next, before, updated);
+          }
+        }
+        return next;
+      });
+      setClubOpen(false);
+      setToast(data.skipped?.length || data.alreadyDispatchedCount ? "Some orders were already dispatched or skipped" : "Selected orders dispatched");
+      window.setTimeout(() => setToast((current) => current ? "" : current), 2200);
+    } catch {
+      setClubError("Could not dispatch selected orders. Check your connection and retry.");
+    } finally {
+      setClubSaving(false);
+    }
+  }
 
   function openCreate() {
     setMessage("");
@@ -537,6 +678,11 @@ export default function OrderDeskPage() {
                     Edit Order
                   </button>
                 )}
+                {canClubOrder(order) && (
+                  <button type="button" onClick={() => void openClubDispatch(order)} className="rounded-lg border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-700 dark:border-blue-800 dark:text-blue-300">
+                    Club
+                  </button>
+                )}
                 {canDispatch(order) && (
                   <button type="button" disabled={actionLoading === `${order.id}:DISPATCH`} onClick={() => runAction(order.id, "DISPATCH")} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
                     {actionLoading === `${order.id}:DISPATCH` ? "Dispatching..." : "Dispatch Order"}
@@ -557,6 +703,83 @@ export default function OrderDeskPage() {
           </article>
         ))}
       </div>
+
+      {clubOpen && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:items-center sm:justify-center sm:p-4">
+          <div className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl dark:bg-slate-950 sm:max-h-[calc(100dvh-2rem)] sm:max-w-3xl sm:rounded-2xl">
+            <div className="border-b border-slate-200 p-4 pt-[max(1rem,env(safe-area-inset-top))] dark:border-slate-800">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold">Club Dispatch</h2>
+                  <p className="text-sm text-slate-500">Select pending and dispatched orders for one vehicle/load plan.</p>
+                </div>
+                <button type="button" onClick={() => setClubOpen(false)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close club dispatch">
+                  <XCircle className="h-5 w-5" />
+                </button>
+              </div>
+              {clubError && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{clubError}</div>}
+              <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+                <div className="relative">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                  <input value={clubSearch} onChange={(e) => setClubSearch(e.target.value)} placeholder="Search customer, mobile, order" className="min-h-11 w-full rounded-lg border py-2 pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-900" />
+                </div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-900">
+                  {(["all", "pending", "dispatched"] as ClubFilter[]).map((item) => (
+                    <button key={item} type="button" onClick={() => setClubFilter(item)} className={`rounded-md px-2 py-2 ${clubFilter === item ? "bg-white text-brand-700 shadow-sm dark:bg-slate-800" : "text-slate-600 dark:text-slate-300"}`}>
+                      {item === "all" ? "All" : item === "pending" ? "Pending" : "Dispatched"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 pb-28 sm:p-4">
+              {clubLoading && <div className="rounded-lg border border-dashed p-5 text-center text-sm text-slate-500">Loading eligible orders...</div>}
+              {!clubLoading && clubVisibleOrders.length === 0 && <div className="rounded-lg border border-dashed p-5 text-center text-sm text-slate-500">No eligible orders found.</div>}
+              {clubVisibleOrders.map((order) => {
+                const selected = clubSelected.has(order.id);
+                return (
+                  <label key={order.id} className={`block rounded-lg border p-3 ${selected ? "border-brand-400 bg-brand-50/60 dark:border-brand-700 dark:bg-brand-950/30" : "border-slate-200 dark:border-slate-800"}`}>
+                    <div className="flex items-start gap-3">
+                      <input type="checkbox" checked={selected} onChange={() => toggleClubOrder(order.id)} className="mt-1 h-5 w-5 rounded border-slate-300" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-bold">{order.customer.partyName}</h3>
+                          <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${statusClass(order.status)}`}>{displayStatus(order.status)}</span>
+                        </div>
+                        {safeContactText(order.customer.contactNumber) && <p className="mt-1 text-xs text-slate-500">{safeContactText(order.customer.contactNumber)}</p>}
+                        <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{order.orderDetails}</p>
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+                          <span>Qty: -</span>
+                          <span>Created: {formatDateTime(order.createdAt)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="sticky bottom-0 border-t border-slate-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-950">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <p className="font-bold">Selected: {clubSelected.size} order{clubSelected.size === 1 ? "" : "s"}</p>
+                  <p className="text-slate-500">Total Qty: {clubTotalQty}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:flex">
+                  <button type="button" onClick={() => setClubOpen(false)} disabled={clubSaving} className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold disabled:opacity-60 dark:border-slate-700">
+                    Cancel
+                  </button>
+                  <button type="button" onClick={() => void submitClubDispatch()} disabled={clubSaving || clubSelected.size === 0} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white disabled:opacity-60">
+                    {clubSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {clubSaving ? "Dispatching..." : "Dispatch Selected"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editor && (
         <div className="fixed inset-0 z-50 flex items-start bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
