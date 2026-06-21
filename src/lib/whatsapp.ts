@@ -16,7 +16,6 @@ export function whatsappHref(phone: string, message: string): string {
   return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
 }
 
-export function whatsappShareText(phone: string, message: string): string {
-  const digits = whatsappPhoneDigits(phone);
-  return digits ? `${message}\n\nCustomer WhatsApp: +${digits}` : message;
+export function whatsappShareText(_phone: string, message: string): string {
+  return message;
 }
