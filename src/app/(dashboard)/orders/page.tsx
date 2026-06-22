@@ -82,6 +82,8 @@ const filters = [
   { label: "Lead Orders", value: "lead" },
 ];
 
+const filterValues = new Set(filters.map((item) => item.value));
+
 const dateFilterOptions: { label: string; value: DateFilter }[] = [
   { label: "All Dates", value: "all" },
   { label: "Today", value: "today" },
@@ -202,6 +204,18 @@ function orderMatchesFilter(order: OrderRow, filter: string) {
   return true;
 }
 
+function filterEmptyLabel(filter: string) {
+  if (filter === "pending") return "No pending orders found for selected date filter.";
+  if (filter === "dispatched") return "No dispatched orders found for selected date filter.";
+  if (filter === "delivered") return "No delivered orders found for selected date filter.";
+  if (filter === "cancelled") return "No cancelled orders found for selected date filter.";
+  if (filter === "high") return "No high priority orders found for selected date filter.";
+  if (filter === "upcoming") return "No upcoming delivery orders found for selected date filter.";
+  if (filter === "sales") return "No sales visit orders found for selected date filter.";
+  if (filter === "lead") return "No lead orders found for selected date filter.";
+  return "No orders found for selected date filter.";
+}
+
 function orderSummaryContribution(order: OrderRow): Summary {
   const deliveredAt = order.deliveredAt ? new Date(order.deliveredAt) : null;
   const today = new Date();
@@ -308,9 +322,12 @@ export default function OrderDeskPage() {
   const initialDateFilter = dateFilterOptions.some((option) => option.value === searchParams.get("dateFilter"))
     ? searchParams.get("dateFilter") as DateFilter
     : "all";
+  const initialFilter = filterValues.has(searchParams.get("filter") ?? "")
+    ? searchParams.get("filter")!
+    : "all";
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [summary, setSummary] = useState<Summary>(emptySummary);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(initialFilter);
   const [dateFilter, setDateFilter] = useState<DateFilter>(initialDateFilter);
   const [fromDate, setFromDate] = useState(searchParams.get("fromDate") ?? "");
   const [toDate, setToDate] = useState(searchParams.get("toDate") ?? "");
@@ -426,6 +443,8 @@ export default function OrderDeskPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (filter === "all") params.delete("filter");
+    else params.set("filter", filter);
     if (dateFilter === "all") {
       params.delete("dateFilter");
       params.delete("fromDate");
@@ -442,7 +461,7 @@ export default function OrderDeskPage() {
     }
     const queryString = params.toString();
     window.history.replaceState(window.history.state, "", queryString ? `/orders?${queryString}` : "/orders");
-  }, [dateFilter, fromDate, toDate]);
+  }, [dateFilter, filter, fromDate, toDate]);
 
   useEffect(() => {
     if (!highlightedId || !orders.some((order) => order.id === highlightedId)) return;
@@ -705,7 +724,9 @@ export default function OrderDeskPage() {
       if (savedOrder) {
         setOrders((current) => {
           if (editor.mode === "edit") {
-            return current.map((order) => order.id === savedOrder.id ? { ...order, ...savedOrder, activities: order.activities } : order);
+            return current
+              .map((order) => order.id === savedOrder.id ? { ...order, ...savedOrder, activities: order.activities } : order)
+              .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate));
           }
           return orderMatchesFilter(savedOrder, filter) && orderMatchesDateFilter(savedOrder, dateFilter, fromDate, toDate) ? [savedOrder, ...current] : current;
         });
@@ -909,7 +930,7 @@ export default function OrderDeskPage() {
         {loading && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">Loading orders...</div>}
         {!loading && filteredOrders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">
-            {dateFilter === "all" ? "No orders found." : "No orders found for selected date filter."}
+            {dateFilter === "all" ? "No orders found." : filterEmptyLabel(filter)}
           </div>
         )}
         {filteredOrders.map((order) => (

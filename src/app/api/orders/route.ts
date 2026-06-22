@@ -163,6 +163,23 @@ function orderDateRange(searchParams: URLSearchParams, now = new Date()) {
   return { gte, lte };
 }
 
+function orderFilterCondition(filter: string, now: Date, upcoming: Date): Prisma.OrderWhereInput | null {
+  if (filter === "pending") return { status: { in: ["ORDER_RECEIVED", "PENDING"] } };
+  if (filter === "dispatched") return { status: { in: ["DISPATCHED", "PROCESSING"] } };
+  if (filter === "delivered") return { status: "DELIVERED" };
+  if (filter === "cancelled") return { status: "CANCELLED" };
+  if (filter === "high") return { priority: "High" };
+  if (filter === "sales") return { visitSource: "Sales Visit" };
+  if (filter === "lead") return { visitSource: { in: ["New Lead Visit", "Prospect Visit"] } };
+  if (filter === "upcoming") {
+    return {
+      status: { in: ["ORDER_RECEIVED", "PENDING", "DISPATCHED", "PROCESSING"] },
+      preferredDeliveryDate: { gte: now, lte: upcoming },
+    };
+  }
+  return null;
+}
+
 function transitionStatus(current: OrderStatus, action: string) {
   const normalized = normalizeStatus(current);
   if (normalized && finalStatuses.includes(normalized)) throw new Error("ORDER_READ_ONLY");
@@ -276,13 +293,15 @@ export async function GET(request: Request) {
 
   try {
     logger.info("orders_fetch_start", { requestId, shopId, userId: session.id, role: session.role, filter });
-    const where: Prisma.OrderWhereInput = { shopId };
+    const conditions: Prisma.OrderWhereInput[] = [];
     const dateRange = orderDateRange(searchParams, now);
-    if (dateRange) where.createdAt = dateRange;
-    if (filter === "high") where.priority = "High";
-    if (filter === "sales") where.visitSource = "Sales Visit";
-    if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
-    if (filter === "upcoming") where.preferredDeliveryDate = { gte: now, lte: upcoming };
+    const filterCondition = orderFilterCondition(filter, now, upcoming);
+    if (filterCondition) conditions.push(filterCondition);
+    if (dateRange) conditions.push({ createdAt: dateRange });
+    const where: Prisma.OrderWhereInput = {
+      shopId,
+      ...(conditions.length > 0 ? { AND: conditions } : {}),
+    };
 
     const baseInclude = {
       customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
@@ -336,15 +355,6 @@ export async function GET(request: Request) {
       }, {}),
     });
 
-    const orders = rows.filter((order) => {
-      if (filter === "pending") return isReceivedStatus(order.status);
-      if (filter === "dispatched") return isDispatchedStatus(order.status);
-      if (filter === "delivered") return normalizeStatus(order.status) === "DELIVERED";
-      if (filter === "cancelled") return normalizeStatus(order.status) === "CANCELLED";
-      if (filter === "upcoming") return isActiveStatus(order.status);
-      return true;
-    });
-
     const pendingOrders = rows.filter((order) => isReceivedStatus(order.status)).length;
     const dispatchedOrders = rows.filter((order) => isDispatchedStatus(order.status)).length;
     const highPriorityOrders = rows.filter((order) => isActiveStatus(order.status) && order.priority === "High").length;
@@ -364,7 +374,7 @@ export async function GET(request: Request) {
       userId: session.id,
       filter,
       totalRows: rows.length,
-      returnedRows: orders.length,
+      returnedRows: rows.length,
       pendingOrders,
       dispatchedOrders,
       deliveredToday,
@@ -372,7 +382,7 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json({
-      orders: sortOrders(orders),
+      orders: sortOrders(rows),
       summary: { pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries },
     });
   } catch (error) {
