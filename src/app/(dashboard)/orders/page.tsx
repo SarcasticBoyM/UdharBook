@@ -418,7 +418,7 @@ export default function OrderDeskPage() {
       const res = await fetch(`/api/orders?${params.toString()}`, { signal: controller.signal });
       const data = await res.json().catch(() => ({}));
       if (controller.signal.aborted) return;
-      if (!res.ok) {
+      if (!res.ok || data.success === false) {
         console.error("[Order Desk] load failed", { status: res.status, data });
         setMessage(data.error ?? "Could not load orders.");
         setOrders([]);
@@ -426,10 +426,11 @@ export default function OrderDeskPage() {
         return;
       }
       console.info("[Order Desk] load success", { count: data.orders?.length ?? 0, summary: data.summary });
+      setMessage("");
       setOrders(data.orders ?? []);
       setSummary(data.summary ?? emptySummary);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
       setMessage("Could not load orders. Check your connection and retry.");
     } finally {
       if (loadAbortRef.current === controller) loadAbortRef.current = null;

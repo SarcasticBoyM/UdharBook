@@ -13,7 +13,10 @@ const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
 const legacyReceivedStatus = "PENDING" as OrderStatus;
 const dateFilters = ["all", "today", "yesterday", "last7days", "thisMonth", "custom"] as const;
+const orderFilters = ["all", "pending", "dispatched", "delivered", "cancelled", "high", "high-priority", "upcoming", "sales", "lead"] as const;
 const localOffsetMinutes = 330;
+const orderDateField = "createdAt" as const;
+type OrderFilter = (typeof orderFilters)[number];
 
 const createSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -88,13 +91,17 @@ function sortOrders<T extends { status: OrderStatus; priority: string; preferred
   return orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
-function filterFromStatus(status?: string | null) {
+function filterFromStatus(status?: string | null): OrderFilter | null {
   const normalized = normalizeStatus(status);
   if (normalized === "ORDER_RECEIVED") return "pending";
   if (normalized === "DISPATCHED") return "dispatched";
   if (normalized === "DELIVERED") return "delivered";
   if (normalized === "CANCELLED") return "cancelled";
   return null;
+}
+
+function normalizeOrderFilter(filter?: string | null): OrderFilter {
+  return orderFilters.includes(filter as OrderFilter) ? filter as OrderFilter : "all";
 }
 
 function parseDateOnly(value: string | null) {
@@ -163,12 +170,20 @@ function orderDateRange(searchParams: URLSearchParams, now = new Date()) {
   return { gte, lte };
 }
 
-function orderFilterCondition(filter: string, now: Date, upcoming: Date): Prisma.OrderWhereInput | null {
+function orderDateCondition(dateRange: NonNullable<ReturnType<typeof orderDateRange>>): Prisma.OrderWhereInput {
+  return { [orderDateField]: dateRange };
+}
+
+function latestOrderSort(): Prisma.OrderOrderByWithRelationInput[] {
+  return [{ [orderDateField]: "desc" }];
+}
+
+function orderFilterCondition(filter: OrderFilter, now: Date, upcoming: Date): Prisma.OrderWhereInput | null {
   if (filter === "pending") return { status: { in: ["ORDER_RECEIVED", "PENDING"] } };
-  if (filter === "dispatched") return { status: { in: ["DISPATCHED", "PROCESSING"] } };
+  if (filter === "dispatched") return { status: "DISPATCHED" };
   if (filter === "delivered") return { status: "DELIVERED" };
   if (filter === "cancelled") return { status: "CANCELLED" };
-  if (filter === "high") return { priority: "High" };
+  if (filter === "high" || filter === "high-priority") return { priority: "High" };
   if (filter === "sales") return { visitSource: "Sales Visit" };
   if (filter === "lead") return { visitSource: { in: ["New Lead Visit", "Prospect Visit"] } };
   if (filter === "upcoming") {
@@ -286,7 +301,7 @@ export async function GET(request: Request) {
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
-  const filter = searchParams.get("filter") ?? filterFromStatus(searchParams.get("status")) ?? "all";
+  const filter = normalizeOrderFilter(searchParams.get("filter") ?? filterFromStatus(searchParams.get("status")));
   const now = new Date();
   const upcoming = new Date(now);
   upcoming.setDate(upcoming.getDate() + 7);
@@ -297,7 +312,7 @@ export async function GET(request: Request) {
     const dateRange = orderDateRange(searchParams, now);
     const filterCondition = orderFilterCondition(filter, now, upcoming);
     if (filterCondition) conditions.push(filterCondition);
-    if (dateRange) conditions.push({ createdAt: dateRange });
+    if (dateRange) conditions.push(orderDateCondition(dateRange));
     const where: Prisma.OrderWhereInput = {
       shopId,
       ...(conditions.length > 0 ? { AND: conditions } : {}),
@@ -321,7 +336,7 @@ export async function GET(request: Request) {
       rows = await prisma.order.findMany({
         where,
         include: fullInclude,
-        orderBy: [{ createdAt: "desc" }],
+        orderBy: latestOrderSort(),
         take: 500,
       });
     } catch (error) {
@@ -337,7 +352,7 @@ export async function GET(request: Request) {
       const fallbackRows = await prisma.order.findMany({
         where,
         include: baseInclude,
-        orderBy: [{ createdAt: "desc" }],
+        orderBy: latestOrderSort(),
         take: 500,
       });
       rows = fallbackRows.map((order) => ({ ...order, activities: [] }));
@@ -382,12 +397,14 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json({
+      success: true,
       orders: sortOrders(rows),
+      total: rows.length,
       summary: { pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries },
     });
   } catch (error) {
     if (error instanceof Error && error.message === "INVALID_DATE_RANGE") {
-      return NextResponse.json({ error: "Invalid date range. Select a valid from and to date.", orders: [], summary: emptyOrderSummary() }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Invalid date range", orders: [], total: 0, summary: emptyOrderSummary() }, { status: 400 });
     }
     logger.error("orders_fetch_failed", {
       requestId,
@@ -398,7 +415,17 @@ export async function GET(request: Request) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return NextResponse.json({ error: "Could not load orders.", detail: error instanceof Error ? error.message : String(error), orders: [], summary: emptyOrderSummary() }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: process.env.NODE_ENV === "development" ? message : "Could not load orders.",
+        orders: [],
+        total: 0,
+        summary: emptyOrderSummary(),
+      },
+      { status: 500 },
+    );
   }
 }
 
