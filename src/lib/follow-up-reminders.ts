@@ -5,6 +5,38 @@ import { createNotification } from "@/lib/notifications";
 
 const CLOSED_STATUSES = ["PAID", "COMPLETED", "WRONG_NUMBER"] as const;
 
+async function supersedeIfNewerFollowUpExists(followUp: { id: string; shopId: string; customerId: string }, reminderAt: Date, now: Date) {
+  const newerFollowUp = await prisma.followUp.findFirst({
+    where: {
+      shopId: followUp.shopId,
+      customerId: followUp.customerId,
+      id: { not: followUp.id },
+      OR: [
+        { actionLoggedAt: { gt: reminderAt } },
+        { followupDate: { gt: reminderAt } },
+      ],
+    },
+    select: { id: true },
+    orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }],
+  });
+  if (!newerFollowUp) return false;
+  await prisma.followUp.updateMany({
+    where: {
+      id: followUp.id,
+      reminderEnabled: true,
+      manualReminder: true,
+      supersededAt: null,
+      cancelledAt: null,
+    },
+    data: {
+      supersededAt: now,
+      reminderEnabled: false,
+      manualReminder: false,
+    },
+  });
+  return true;
+}
+
 export async function processDueScheduledFollowUpReminders(options: {
   recipientUserId?: string;
   shopId?: string;
@@ -66,6 +98,7 @@ export async function processDueScheduledFollowUpReminders(options: {
     const reminderAt = followUp.nextFollowUpDateTime;
     if (!reminderAt) continue;
     if (followUp.customer.outstandingBalance <= 0) continue;
+    if (await supersedeIfNewerFollowUpExists(followUp, reminderAt, now)) continue;
     const recipientUserId =
       followUp.assignedTo && !followUp.assignedTo.disabledAt
         ? followUp.assignedTo.id

@@ -63,6 +63,7 @@ type FollowUpItem = {
   reminderNotes: string | null;
   customerResponse: string | null;
   nextFollowupDate: string | null;
+  nextFollowUpDateTime?: string | null;
   scheduledAt: string | null;
   completedAt: string | null;
   rescheduledAt?: string | null;
@@ -732,6 +733,7 @@ export default function TodayFollowUpsPage() {
       reminderNotes: nextDate ? `Reminder set for ${formatDateTime(nextDate)}` : null,
       customerResponse: null,
       nextFollowupDate: nextDate,
+      nextFollowUpDateTime: nextDate,
       scheduledAt: nextDate,
       completedAt: COMPLETE_STATUSES.includes(status) ? now : null,
       rescheduledAt: status === "RESCHEDULED" ? now : null,
@@ -739,6 +741,8 @@ export default function TodayFollowUpsPage() {
       createdBy: { name: "You" },
     };
     const nextBalance = status === "PAID" ? 0 : Math.max(0, customer.outstandingBalance - paidAmount);
+    const existingScheduled = (customer as Partial<ScheduledQueueCustomer>).scheduledFollowUp;
+    const wasScheduledOverdue = Boolean(existingScheduled?.overdue);
     const updated: QueueCustomer = {
       ...customer,
       outstandingBalance: nextBalance,
@@ -750,18 +754,47 @@ export default function TodayFollowUpsPage() {
       todayAction: action,
       followUps: [action, ...customer.followUps],
     };
+    const shouldShowScheduled = Boolean(nextDate && !COMPLETE_STATUSES.includes(status));
+    const scheduledUpdate: ScheduledQueueCustomer | null = shouldShowScheduled && nextDate
+      ? {
+          ...updated,
+          section: "today",
+          scheduledFollowUp: {
+            id: action.id,
+            scheduledAt: nextDate,
+            followUpType: status,
+            notes,
+            reminderNotes: action.reminderNotes,
+            customerResponse: null,
+            assignedTo: "You",
+            assignedToId: null,
+            reminderEnabled: true,
+            manualReminder: true,
+            promiseToPay: status === "PAYMENT_PROMISED",
+            overdue: isPastDue(nextDate),
+            task: null,
+          },
+        }
+      : null;
 
     const shouldLeaveQueue =
       COMPLETE_STATUSES.includes(status) ||
       status === "RESCHEDULED" ||
+      Boolean(nextDate) ||
       (nextDate ? new Date(nextDate) > endOfToday() : false);
 
     setPending((current) => (shouldLeaveQueue ? current.filter((item) => item.id !== customer.id) : current.map((item) => (item.id === customer.id ? updated : item))));
-    setScheduled((current) => current.filter((item) => item.id !== customer.id));
+    setScheduled((current) => {
+      const withoutCustomer = current.filter((item) => item.id !== customer.id);
+      return scheduledUpdate ? [scheduledUpdate, ...withoutCustomer].sort((a, b) => new Date(a.scheduledFollowUp.scheduledAt).getTime() - new Date(b.scheduledFollowUp.scheduledAt).getTime()) : withoutCustomer;
+    });
     setDone((current) => addToDone ? [updated, ...current.filter((item) => item.id !== customer.id)] : current.filter((item) => item.id !== customer.id));
     setSummary((current) => ({
       ...current,
       pending: shouldLeaveQueue ? Math.max(0, current.pending - 1) : current.pending,
+      scheduled: Math.max(0, current.scheduled - (existingScheduled ? 1 : 0) + (scheduledUpdate ? 1 : 0)),
+      scheduledOverdue: Math.max(0, current.scheduledOverdue - (wasScheduledOverdue ? 1 : 0) + (scheduledUpdate?.scheduledFollowUp.overdue ? 1 : 0)),
+      overdue: Math.max(0, current.overdue - (wasScheduledOverdue ? 1 : 0) + (scheduledUpdate?.scheduledFollowUp.overdue ? 1 : 0)),
       completed: addToDone ? current.completed + 1 : current.completed,
       actionedToday: addToDone ? current.actionedToday + 1 : current.actionedToday,
       recoveryToday: current.recoveryToday + paidAmount,
@@ -780,8 +813,11 @@ export default function TodayFollowUpsPage() {
         priority: derivedPriority(customer),
         notes,
         supersedesFollowUpId,
-        scheduledAt: nextDate,
-        nextFollowupDate: nextDate,
+        manualReminder: status === "RESCHEDULED",
+        reminderEnabled: status === "RESCHEDULED",
+        nextFollowUpDateTime: status === "RESCHEDULED" ? nextDate : null,
+        scheduledAt: status === "RESCHEDULED" ? nextDate : null,
+        nextFollowupDate: status === "RESCHEDULED" ? nextDate : null,
         paidAmount,
       }),
     });
@@ -1963,7 +1999,7 @@ function ActionPanel({
     setSaveError("");
     setSaving(true);
     const closesQueue = COMPLETE_STATUSES.includes(status);
-    const scheduledAt = !closesQueue && nextDate ? reminderInputToIso(nextDate) : null;
+    const scheduledAt = !closesQueue && setReminder && nextDate ? reminderInputToIso(nextDate) : null;
     const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
     const finalNotes =
       notes ||
@@ -1990,7 +2026,7 @@ function ActionPanel({
           customerResponse: customerResponse || undefined,
           manualReminder: setReminder,
           reminderEnabled: setReminder,
-          nextFollowUpDateTime: setReminder && scheduledAt ? scheduledAt : null,
+          nextFollowUpDateTime: scheduledAt,
           scheduledAt: setReminder ? scheduledAt : null,
           nextFollowupDate: scheduledAt,
           paidAmount: amount,

@@ -83,14 +83,6 @@ function priorityLabel(priority: FollowUpPriority) {
   return priority === "URGENT" ? "Critical" : priority[0] + priority.slice(1).toLowerCase();
 }
 
-function scheduledDateFor(followUp: {
-  nextFollowUpDateTime: Date | null;
-  nextFollowupDate: Date | null;
-  scheduledAt: Date | null;
-}) {
-  return followUp.nextFollowUpDateTime ?? followUp.scheduledAt ?? followUp.nextFollowupDate;
-}
-
 function isExplicitlyScheduled(followUp: {
   status: FollowUpStatus;
   notes: string | null;
@@ -103,21 +95,38 @@ function isExplicitlyScheduled(followUp: {
   cancelledAt?: Date | null;
 }) {
   if (followUp.supersededAt || followUp.cancelledAt) return false;
-  if (!scheduledDateFor(followUp)) return false;
+  if (!followUp.nextFollowUpDateTime) return false;
   if (CLOSED_STATUSES.includes(followUp.status)) return false;
   if (followUp.status === "PENDING" && followUp.notes === AUTO_QUEUE_NOTE) return false;
   return (
     ACTIVE_SCHEDULED_STATUSES.includes(followUp.status) &&
-    (followUp.manualReminder || followUp.reminderEnabled || Boolean(followUp.nextFollowUpDateTime) || Boolean(followUp.scheduledAt))
+    followUp.manualReminder &&
+    followUp.reminderEnabled
   );
+}
+
+function latestActionAt(followUp: {
+  actionLoggedAt?: Date | null;
+  followupDate: Date;
+  createdAt?: Date | null;
+}) {
+  return followUp.actionLoggedAt ?? followUp.followupDate ?? followUp.createdAt ?? null;
+}
+
+function hasNewerFollowUpAfterReminder(
+  customer: { followUps: { id: string; actionLoggedAt?: Date | null; followupDate: Date; createdAt?: Date | null }[] },
+  followUpId: string,
+  reminderAt: Date,
+) {
+  return customer.followUps.some((followUp) => {
+    if (followUp.id === followUpId) return false;
+    const actionAt = latestActionAt(followUp);
+    return Boolean(actionAt && actionAt.getTime() > reminderAt.getTime());
+  });
 }
 
 function latestFollowUpStatus(customer: { followUps: { id: string; status: FollowUpStatus }[] }) {
   return customer.followUps[0]?.status ?? null;
-}
-
-function latestFollowUpId(customer: { followUps: { id: string; status: FollowUpStatus }[] }) {
-  return customer.followUps[0]?.id ?? null;
 }
 
 function isClosedForActiveQueue(customer: { status: string; outstandingBalance: number; followUps: { id: string; status: FollowUpStatus }[] }) {
@@ -466,13 +475,9 @@ export async function GET(request: Request) {
             }]
           : []),
         {
-          OR: [
-            { manualReminder: true },
-            { reminderEnabled: true },
-            { nextFollowUpDateTime: { not: null } },
-            { scheduledAt: { not: null } },
-            { status: { in: ACTIVE_SCHEDULED_STATUSES }, nextFollowupDate: { not: null } },
-          ],
+          manualReminder: true,
+          reminderEnabled: true,
+          nextFollowUpDateTime: { not: null },
         },
       ],
     },
@@ -497,14 +502,14 @@ export async function GET(request: Request) {
     take: lightweightMode ? 100 : 300,
   }) : [];
 
-  const scheduledById = new Map<string, ScheduledFollowUp>();
+  const scheduledByCustomerId = new Map<string, ScheduledFollowUp>();
   for (const row of scheduledRows) {
     if (!isExplicitlyScheduled(row)) continue;
     const orderFollowUp = isOrderFollowUp(row.followUpType);
-    if (!orderFollowUp && !row.linkedTask && latestFollowUpId(row.customer) !== row.id) continue;
-    if (!orderFollowUp && !row.linkedTask && isClosedForActiveQueue(row.customer)) continue;
-    const scheduledAt = scheduledDateFor(row);
+    const scheduledAt = row.nextFollowUpDateTime;
     if (!scheduledAt) continue;
+    if (hasNewerFollowUpAfterReminder(row.customer, row.id, scheduledAt)) continue;
+    if (!orderFollowUp && !row.linkedTask && isClosedForActiveQueue(row.customer)) continue;
     const smart = smartPriority(row.customer);
     const candidate: ScheduledFollowUp = {
       ...row.customer,
@@ -544,10 +549,17 @@ export async function GET(request: Request) {
       },
     };
     candidate.queueScore = queueScore(candidate);
-    scheduledById.set(row.id, candidate);
+    const existing = scheduledByCustomerId.get(row.customerId);
+    const existingTime = existing?.scheduledFollowUp.scheduledAt.getTime() ?? 0;
+    const rowActionTime = latestActionAt(row)?.getTime() ?? scheduledAt.getTime();
+    const existingAction = existing?.followUps.find((followUp) => followUp.id === existing.scheduledFollowUp.id) ?? existing?.followUps[0] ?? null;
+    const existingActionTime = existingAction ? latestActionAt(existingAction)?.getTime() ?? existingTime : 0;
+    if (!existing || rowActionTime > existingActionTime || (rowActionTime === existingActionTime && scheduledAt.getTime() > existingTime)) {
+      scheduledByCustomerId.set(row.customerId, candidate);
+    }
   }
 
-  const scheduled = Array.from(scheduledById.values()).sort((a, b) => {
+  const scheduled = Array.from(scheduledByCustomerId.values()).sort((a, b) => {
     const now = Date.now();
     const aTime = a.scheduledFollowUp.scheduledAt.getTime();
     const bTime = b.scheduledFollowUp.scheduledAt.getTime();

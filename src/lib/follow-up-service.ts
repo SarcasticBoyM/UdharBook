@@ -1,4 +1,5 @@
 import type { FollowUpPriority, FollowUpStatus, Prisma } from "@prisma/client";
+import { ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
 
 export type FollowUpSourceModule =
   | "TODAY_FOLLOWUPS"
@@ -85,8 +86,9 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
   const requestedReminderAt = input.nextFollowUpDateTime ?? input.scheduledAt ?? input.nextFollowupDate;
   const reminderDateTime = isClosedFollowUp ? null : toDate(requestedReminderAt);
   const reminderStatusAllowed = REMINDER_ALLOWED_STATUSES.includes(input.status);
-  const shouldSchedule = Boolean(reminderDateTime && reminderStatusAllowed);
-  const reminderEnabled = Boolean(shouldSchedule && (input.manualReminder || input.reminderEnabled));
+  const explicitReminder = Boolean(input.manualReminder || input.reminderEnabled);
+  const shouldSchedule = Boolean(reminderDateTime && reminderStatusAllowed && explicitReminder);
+  const reminderEnabled = shouldSchedule;
   const scheduledAt = shouldSchedule ? reminderDateTime : null;
   const nextDate = shouldSchedule ? reminderDateTime : null;
   const now = toDate(input.actionLoggedAt) ?? new Date();
@@ -119,6 +121,32 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
       },
     });
     if (!superseded.count) throw new Error("FOLLOW_UP_TO_SUPERSEDE_NOT_FOUND");
+  }
+
+  if (input.followUpType !== ORDER_FOLLOW_UP) {
+    await tx.followUp.updateMany({
+      where: {
+        shopId: input.shopId,
+        customerId: input.customerId,
+        supersededAt: null,
+        cancelledAt: null,
+        completedAt: null,
+        reminderEnabled: true,
+        manualReminder: true,
+        nextFollowUpDateTime: { not: null },
+        NOT: {
+          OR: [
+            { followUpType: ORDER_FOLLOW_UP },
+            ...(input.supersedesFollowUpId ? [{ id: input.supersedesFollowUpId }] : []),
+          ],
+        },
+      },
+      data: {
+        supersededAt: now,
+        reminderEnabled: false,
+        manualReminder: false,
+      },
+    });
   }
 
   const followUp = await tx.followUp.create({
