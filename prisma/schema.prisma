@@ -14,6 +14,7 @@ enum UserRole {
   SALES_PERSON
   ACCOUNT_STAFF
   SALES_PERSON_CUM_ACCOUNTS
+  DRIVER
 }
 
 enum OperationalRole {
@@ -23,6 +24,12 @@ enum OperationalRole {
   CHEQUE_OPERATIONS
   ORDER_MANAGER
   FOLLOWUP_MANAGER
+  DRIVER
+}
+
+enum DriverTripStatus {
+  ACTIVE
+  ENDED
 }
 
 enum CustomerStatus {
@@ -190,6 +197,9 @@ model Shop {
   notifications      Notification[]
   notificationRetries NotificationRetry[]
   tasks              Task[]
+  driverTrackingLinks DriverTrackingLink[]
+  driverTrips        DriverTrip[]
+  driverLocationPoints DriverLocationPoint[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -340,6 +350,9 @@ model User {
   notificationRetries NotificationRetry[] @relation("NotificationRetryTargetUser")
   assignedTasks Task[] @relation("TaskAssignedTo")
   createdTasks Task[] @relation("TaskAssignedBy")
+  driverTrackingLink DriverTrackingLink? @relation("DriverTrackingLinkDriver")
+  driverTrips DriverTrip[] @relation("DriverTripDriver")
+  driverLocationPoints DriverLocationPoint[] @relation("DriverLocationPointDriver")
 
   @@index([shopId])
   @@index([role])
@@ -433,6 +446,70 @@ model Task {
   @@index([shopId, customerId, createdAt])
   @@index([shopId, sourceEntityType, sourceEntityId])
   @@index([shopId, linkedFollowUpId])
+}
+
+model DriverTrackingLink {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  driverId  String   @unique
+  driver    User     @relation("DriverTrackingLinkDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  isEnabled Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, driverId])
+  @@index([shopId, isEnabled])
+}
+
+model DriverTrip {
+  id             String           @id @default(cuid())
+  shopId         String
+  shop           Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  driverId       String
+  driver         User             @relation("DriverTripDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  status         DriverTripStatus @default(ACTIVE)
+  startedAt      DateTime         @default(now())
+  endedAt        DateTime?
+  startLat       Float?
+  startLng       Float?
+  endLat         Float?
+  endLng         Float?
+  lastLat        Float?
+  lastLng        Float?
+  lastAccuracy   Float?
+  lastSpeed      Float?
+  lastHeading    Float?
+  lastLocationAt DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  points         DriverLocationPoint[]
+
+  @@index([shopId, driverId])
+  @@index([shopId, driverId, status])
+  @@index([shopId, status, updatedAt])
+}
+
+model DriverLocationPoint {
+  id         String      @id @default(cuid())
+  shopId     String
+  shop       Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  driverId   String
+  driver     User        @relation("DriverLocationPointDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  tripId     String?
+  trip       DriverTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  speed      Float?
+  heading    Float?
+  capturedAt DateTime
+  createdAt  DateTime    @default(now())
+
+  @@index([shopId, driverId])
+  @@index([shopId, driverId, capturedAt])
+  @@index([tripId, capturedAt])
 }
 
 model UserRoleAssignment {

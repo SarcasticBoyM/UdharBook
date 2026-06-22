@@ -23,6 +23,7 @@ import {
   WalletCards,
   Store,
   ShieldCheck,
+  Truck,
   UserRoundCheck,
   Upload,
   X,
@@ -58,6 +59,8 @@ const links: SidebarLink[] = [
   { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
   { href: "/field-staff", label: "Sales Person", icon: UserRoundCheck, section: "Team" },
   { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
+  { href: "/driver-tracking", label: "Driver Tracking", icon: Truck, adminOnly: true, section: "Team" },
+  { href: "/driver-trip", label: "My Trip", icon: Truck, section: "Driver" },
   taskLink,
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
@@ -82,7 +85,10 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const [mobileOpen, setMobileOpen] = useState(false);
   const isAdmin = role === "SHOP_ADMIN";
   const isSuperAdmin = role === "SUPER_ADMIN";
+  const isDriver = role === "DRIVER";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
+    if (isDriver) return link.href === "/driver-trip";
+    if (link.href === "/driver-trip") return false;
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly && isAdmin) return true;
     return canAccessModule(role, link.href);

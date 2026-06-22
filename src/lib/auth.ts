@@ -43,7 +43,7 @@ function sessionLogMeta(user: SessionUser) {
 
 function sessionRole(role: string | null | undefined) {
   const normalized = normalizeFixedRole(role || "ACCOUNT_STAFF");
-  return (["SUPER_ADMIN", "SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(String(normalized))
+  return (["SUPER_ADMIN", "SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS", "DRIVER"].includes(String(normalized))
     ? normalized
     : "ACCOUNT_STAFF") as SessionUser["role"];
 }

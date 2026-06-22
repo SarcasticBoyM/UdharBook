@@ -1,6 +1,6 @@
 import type { UserRole } from "@prisma/client";
 
-export type FixedShopRole = "SHOP_ADMIN" | "SALES_PERSON" | "ACCOUNT_STAFF" | "SALES_PERSON_CUM_ACCOUNTS";
+export type FixedShopRole = "SHOP_ADMIN" | "SALES_PERSON" | "ACCOUNT_STAFF" | "SALES_PERSON_CUM_ACCOUNTS" | "DRIVER";
 export type AppRole = UserRole | FixedShopRole | string;
 
 export const fixedRoleLabels: Record<FixedShopRole, string> = {
@@ -8,6 +8,7 @@ export const fixedRoleLabels: Record<FixedShopRole, string> = {
   SALES_PERSON: "Sales Person",
   ACCOUNT_STAFF: "Account Staff",
   SALES_PERSON_CUM_ACCOUNTS: "Sales Person Cum Accounts",
+  DRIVER: "Driver",
 };
 
 export const assignableFixedRoles: FixedShopRole[] = [
@@ -15,11 +16,13 @@ export const assignableFixedRoles: FixedShopRole[] = [
   "SALES_PERSON",
   "ACCOUNT_STAFF",
   "SALES_PERSON_CUM_ACCOUNTS",
+  "DRIVER",
 ];
 
 export function normalizeFixedRole(role: AppRole): AppRole {
   const value = String(role);
   if (value === "SALES_PERSON_CUM_ACCOUNTS" || (value.includes("SALES") && (value.includes("ACCOUNT") || value.includes("ACCOUNTING")))) return "SALES_PERSON_CUM_ACCOUNTS";
+  if (value === "DRIVER") return "DRIVER";
   if (value === "SALES_PERSON" || value === "SALES" || value.includes("FIELD")) return "SALES_PERSON";
   if (value === "ACCOUNT_STAFF" || value === "STAFF" || value === "ACCOUNTING" || value === "ACCOUNTS" || value.includes("ACCOUNTING")) return "ACCOUNT_STAFF";
   if (value === "SHOP_OWNER_ADMIN" || value === "ADMIN") return "SHOP_ADMIN";
@@ -59,6 +62,7 @@ export function canAssignTasks(role: AppRole) {
 export function canAccessModule(role: AppRole, href: string) {
   const normalized = normalizeFixedRole(role);
   if (href === "/tasks") return canAccessTasks(normalized);
+  if (normalized === "DRIVER") return href === "/driver-trip";
   if (normalized === "SUPER_ADMIN") return href === "/" || href === "/shops" || href === "/staff" || href === "/trade-calculator";
   if (normalized === "SHOP_ADMIN") return true;
   if (normalized === "SALES_PERSON") {

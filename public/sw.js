@@ -27,6 +27,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/track/driver/")) return;
+  if (url.pathname.startsWith("/driver-trip") || url.pathname.startsWith("/driver-tracking")) return;
   if (url.pathname === "/tasks" || url.pathname.startsWith("/tasks/")) return;
   if (url.pathname.startsWith("/_next/")) return;
   if (request.mode === "navigate" || request.destination === "document") return;
