@@ -12,6 +12,8 @@ import { notifyCustomerAdded, notifyOrderCreated, notifyOrderStatusChanged } fro
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
 const legacyReceivedStatus = "PENDING" as OrderStatus;
+const dateFilters = ["all", "today", "yesterday", "last7days", "thisMonth", "custom"] as const;
+const localOffsetMinutes = 330;
 
 const createSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -84,6 +86,81 @@ function isActiveStatus(status: string) {
 
 function sortOrders<T extends { status: OrderStatus; priority: string; preferredDeliveryDate: Date | null; createdAt: Date }>(orders: T[]) {
   return orders.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+function filterFromStatus(status?: string | null) {
+  const normalized = normalizeStatus(status);
+  if (normalized === "ORDER_RECEIVED") return "pending";
+  if (normalized === "DISPATCHED") return "dispatched";
+  if (normalized === "DELIVERED") return "delivered";
+  if (normalized === "CANCELLED") return "cancelled";
+  return null;
+}
+
+function parseDateOnly(value: string | null) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return null;
+  return { year, month: month - 1, day };
+}
+
+function localDayBoundary(parts: { year: number; month: number; day: number }, end = false) {
+  const hour = end ? 23 : 0;
+  const minute = end ? 59 : 0;
+  const second = end ? 59 : 0;
+  const millisecond = end ? 999 : 0;
+  return new Date(Date.UTC(parts.year, parts.month, parts.day, hour, minute, second, millisecond) - localOffsetMinutes * 60 * 1000);
+}
+
+function localDateParts(date: Date) {
+  const shifted = new Date(date.getTime() + localOffsetMinutes * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+}
+
+function addLocalDays(parts: { year: number; month: number; day: number }, days: number) {
+  const shifted = new Date(Date.UTC(parts.year, parts.month, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+}
+
+function orderDateRange(searchParams: URLSearchParams, now = new Date()) {
+  const requested = searchParams.get("dateFilter") ?? "all";
+  const dateFilter = dateFilters.includes(requested as (typeof dateFilters)[number])
+    ? requested as (typeof dateFilters)[number]
+    : "all";
+  if (dateFilter === "all") return null;
+
+  const today = localDateParts(now);
+  if (dateFilter === "today") {
+    return { gte: localDayBoundary(today), lte: localDayBoundary(today, true) };
+  }
+  if (dateFilter === "yesterday") {
+    const yesterday = addLocalDays(today, -1);
+    return { gte: localDayBoundary(yesterday), lte: localDayBoundary(yesterday, true) };
+  }
+  if (dateFilter === "last7days") {
+    return { gte: localDayBoundary(addLocalDays(today, -6)), lte: localDayBoundary(today, true) };
+  }
+  if (dateFilter === "thisMonth") {
+    const start = { year: today.year, month: today.month, day: 1 };
+    return { gte: localDayBoundary(start), lte: localDayBoundary(today, true) };
+  }
+
+  const from = parseDateOnly(searchParams.get("fromDate"));
+  const to = parseDateOnly(searchParams.get("toDate"));
+  if (!from || !to) throw new Error("INVALID_DATE_RANGE");
+  const gte = localDayBoundary(from);
+  const lte = localDayBoundary(to, true);
+  if (gte.getTime() > lte.getTime()) throw new Error("INVALID_DATE_RANGE");
+  return { gte, lte };
 }
 
 function transitionStatus(current: OrderStatus, action: string) {
@@ -192,7 +269,7 @@ export async function GET(request: Request) {
 
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
-  const filter = searchParams.get("filter") ?? "all";
+  const filter = searchParams.get("filter") ?? filterFromStatus(searchParams.get("status")) ?? "all";
   const now = new Date();
   const upcoming = new Date(now);
   upcoming.setDate(upcoming.getDate() + 7);
@@ -200,6 +277,8 @@ export async function GET(request: Request) {
   try {
     logger.info("orders_fetch_start", { requestId, shopId, userId: session.id, role: session.role, filter });
     const where: Prisma.OrderWhereInput = { shopId };
+    const dateRange = orderDateRange(searchParams, now);
+    if (dateRange) where.createdAt = dateRange;
     if (filter === "high") where.priority = "High";
     if (filter === "sales") where.visitSource = "Sales Visit";
     if (filter === "lead") where.visitSource = { in: ["New Lead Visit", "Prospect Visit"] };
@@ -223,7 +302,7 @@ export async function GET(request: Request) {
       rows = await prisma.order.findMany({
         where,
         include: fullInclude,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }],
         take: 500,
       });
     } catch (error) {
@@ -239,7 +318,7 @@ export async function GET(request: Request) {
       const fallbackRows = await prisma.order.findMany({
         where,
         include: baseInclude,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }],
         take: 500,
       });
       rows = fallbackRows.map((order) => ({ ...order, activities: [] }));
@@ -297,6 +376,9 @@ export async function GET(request: Request) {
       summary: { pendingOrders, dispatchedOrders, highPriorityOrders, deliveredToday, cancelledOrders, upcomingDeliveries },
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_DATE_RANGE") {
+      return NextResponse.json({ error: "Invalid date range. Select a valid from and to date.", orders: [], summary: emptyOrderSummary() }, { status: 400 });
+    }
     logger.error("orders_fetch_failed", {
       requestId,
       shopId,

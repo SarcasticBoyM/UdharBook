@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Clock, Copy, Loader2, PackageCheck, Plus, RefreshCw, Search, Share2, Truck, XCircle } from "lucide-react";
@@ -49,6 +49,7 @@ type Summary = {
 };
 
 type ClubFilter = "all" | "pending" | "dispatched";
+type DateFilter = "all" | "today" | "yesterday" | "last7days" | "thisMonth" | "custom";
 type StructuredOrderItem = { material: string; qty: string };
 type OrderShareSource = Partial<OrderRow> & {
   customerName?: string | null;
@@ -79,6 +80,15 @@ const filters = [
   { label: "Upcoming Delivery", value: "upcoming" },
   { label: "Sales Visits", value: "sales" },
   { label: "Lead Orders", value: "lead" },
+];
+
+const dateFilterOptions: { label: string; value: DateFilter }[] = [
+  { label: "All Dates", value: "all" },
+  { label: "Today", value: "today" },
+  { label: "Yesterday", value: "yesterday" },
+  { label: "Last 7 Days", value: "last7days" },
+  { label: "This Month", value: "thisMonth" },
+  { label: "Custom Range", value: "custom" },
 ];
 
 const safeText = (value: unknown) => value ? String(value).trim() : "";
@@ -124,6 +134,38 @@ function toInputDate(value?: string | null) {
 
 function datePayload(value: string) {
   return value ? istDateTimeToIso(`${value}T00:00`) : null;
+}
+
+function todayInputDate() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset();
+  return new Date(now.getTime() - offset * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function addInputDays(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day + days);
+  const offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function monthStartInputDate(value: string) {
+  return `${value.slice(0, 8)}01`;
+}
+
+function isDateBetween(value: string, from: string, to: string) {
+  return value >= from && value <= to;
+}
+
+function orderMatchesDateFilter(order: OrderRow, dateFilter: DateFilter, fromDate: string, toDate: string) {
+  if (dateFilter === "all") return true;
+  const orderDate = toInputDate(order.createdAt);
+  const today = todayInputDate();
+  if (dateFilter === "today") return orderDate === today;
+  if (dateFilter === "yesterday") return orderDate === addInputDays(today, -1);
+  if (dateFilter === "last7days") return isDateBetween(orderDate, addInputDays(today, -6), today);
+  if (dateFilter === "thisMonth") return isDateBetween(orderDate, monthStartInputDate(today), today);
+  return Boolean(fromDate && toDate && isDateBetween(orderDate, fromDate, toDate));
 }
 
 function formatDateTime(value: string) {
@@ -263,9 +305,18 @@ function canCancel(order: OrderRow) {
 export default function OrderDeskPage() {
   const searchParams = useSearchParams();
   const highlightedId = searchParams.get("highlight");
+  const initialDateFilter = dateFilterOptions.some((option) => option.value === searchParams.get("dateFilter"))
+    ? searchParams.get("dateFilter") as DateFilter
+    : "all";
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [summary, setSummary] = useState<Summary>(emptySummary);
   const [filter, setFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>(initialDateFilter);
+  const [fromDate, setFromDate] = useState(searchParams.get("fromDate") ?? "");
+  const [toDate, setToDate] = useState(searchParams.get("toDate") ?? "");
+  const [draftFromDate, setDraftFromDate] = useState(searchParams.get("fromDate") ?? "");
+  const [draftToDate, setDraftToDate] = useState(searchParams.get("toDate") ?? "");
+  const [customDateOpen, setCustomDateOpen] = useState(initialDateFilter === "custom");
   const [query, setQuery] = useState("");
   const [batchFilter, setBatchFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -295,6 +346,7 @@ export default function OrderDeskPage() {
   const [structuredItems, setStructuredItems] = useState<StructuredOrderItem[]>(emptyStructuredItems);
   const [deliveryDate, setDeliveryDate] = useState("");
   const [priority, setPriority] = useState("Normal");
+  const loadAbortRef = useRef<AbortController | null>(null);
   const canManageOrders = canUseOrders(role);
   const canCreateOrders = canManageOrders;
   const canAssignTasks = isShopAdminRole(role);
@@ -328,25 +380,69 @@ export default function OrderDeskPage() {
     showToast(opened ? "WhatsApp opened" : "Could not open WhatsApp");
   }
 
-  async function load() {
+  const activeDateLabel = useMemo(() => {
+    if (dateFilter === "custom" && fromDate && toDate) return `Date: ${formatDate(fromDate)} - ${formatDate(toDate)}`;
+    const option = dateFilterOptions.find((item) => item.value === dateFilter);
+    return `Date: ${option?.label ?? "All Dates"}`;
+  }, [dateFilter, fromDate, toDate]);
+
+  const load = useCallback(async () => {
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
     setLoading(true);
-    const res = await fetch(`/api/orders?filter=${filter}`);
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    if (!res.ok) {
-      console.error("[Order Desk] load failed", { status: res.status, data });
-      setMessage(data.error ?? "Could not load orders.");
-      return;
+    setMessage("");
+    try {
+      const params = new URLSearchParams({ filter, dateFilter });
+      if (dateFilter === "custom") {
+        params.set("fromDate", fromDate);
+        params.set("toDate", toDate);
+      }
+      const res = await fetch(`/api/orders?${params.toString()}`, { signal: controller.signal });
+      const data = await res.json().catch(() => ({}));
+      if (controller.signal.aborted) return;
+      if (!res.ok) {
+        console.error("[Order Desk] load failed", { status: res.status, data });
+        setMessage(data.error ?? "Could not load orders.");
+        setOrders([]);
+        setSummary(data.summary ?? emptySummary);
+        return;
+      }
+      console.info("[Order Desk] load success", { count: data.orders?.length ?? 0, summary: data.summary });
+      setOrders(data.orders ?? []);
+      setSummary(data.summary ?? emptySummary);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setMessage("Could not load orders. Check your connection and retry.");
+    } finally {
+      if (loadAbortRef.current === controller) loadAbortRef.current = null;
+      if (!controller.signal.aborted) setLoading(false);
     }
-    console.info("[Order Desk] load success", { count: data.orders?.length ?? 0, summary: data.summary });
-    setOrders(data.orders ?? []);
-    setSummary(data.summary ?? emptySummary);
-  }
+  }, [dateFilter, filter, fromDate, toDate]);
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
+  }, [load]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (dateFilter === "all") {
+      params.delete("dateFilter");
+      params.delete("fromDate");
+      params.delete("toDate");
+    } else {
+      params.set("dateFilter", dateFilter);
+      if (dateFilter === "custom") {
+        params.set("fromDate", fromDate);
+        params.set("toDate", toDate);
+      } else {
+        params.delete("fromDate");
+        params.delete("toDate");
+      }
+    }
+    const queryString = params.toString();
+    window.history.replaceState(window.history.state, "", queryString ? `/orders?${queryString}` : "/orders");
+  }, [dateFilter, fromDate, toDate]);
 
   useEffect(() => {
     if (!highlightedId || !orders.some((order) => order.id === highlightedId)) return;
@@ -479,7 +575,7 @@ export default function OrderDeskPage() {
             const updated = updatedOrders.find((item) => item.id === order.id);
             return updated ? { ...order, ...updated, activities: order.activities } : order;
           })
-          .filter((order) => orderMatchesFilter(order, filter))
+          .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate))
       );
       setSummary((current) => {
         let next = current;
@@ -611,9 +707,13 @@ export default function OrderDeskPage() {
           if (editor.mode === "edit") {
             return current.map((order) => order.id === savedOrder.id ? { ...order, ...savedOrder, activities: order.activities } : order);
           }
-          return orderMatchesFilter(savedOrder, filter) ? [savedOrder, ...current] : current;
+          return orderMatchesFilter(savedOrder, filter) && orderMatchesDateFilter(savedOrder, dateFilter, fromDate, toDate) ? [savedOrder, ...current] : current;
         });
-        setSummary((current) => editor.mode === "create" ? applySummaryChange(current, null, savedOrder) : current);
+        setSummary((current) =>
+          editor.mode === "create" && orderMatchesDateFilter(savedOrder, dateFilter, fromDate, toDate)
+            ? applySummaryChange(current, null, savedOrder)
+            : current
+        );
         if (editor.mode === "create") setSharePromptOrder(savedOrder);
       } else {
         await load();
@@ -653,10 +753,48 @@ export default function OrderDeskPage() {
           if (order.id !== orderId) return order;
           return { ...order, ...updatedOrder, activities: order.activities };
         })
-        .filter((order) => orderMatchesFilter(order, filter));
+        .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate));
       return next;
     });
     setSummary((current) => applySummaryChange(current, previousOrder, updatedOrder));
+  }
+
+  function selectDateFilter(value: DateFilter) {
+    if (value === "custom") {
+      setCustomDateOpen(true);
+      return;
+    }
+    setDateFilter(value);
+    setFromDate("");
+    setToDate("");
+    setDraftFromDate("");
+    setDraftToDate("");
+    setCustomDateOpen(false);
+  }
+
+  function applyCustomDateFilter() {
+    if (!draftFromDate || !draftToDate) {
+      setMessage("Select both from and to dates.");
+      return;
+    }
+    if (draftFromDate > draftToDate) {
+      setMessage("From date cannot be after to date.");
+      return;
+    }
+    setMessage("");
+    setFromDate(draftFromDate);
+    setToDate(draftToDate);
+    setDateFilter("custom");
+    setCustomDateOpen(false);
+  }
+
+  function clearDateFilter() {
+    setDateFilter("all");
+    setFromDate("");
+    setToDate("");
+    setDraftFromDate("");
+    setDraftToDate("");
+    setCustomDateOpen(false);
   }
 
   return (
@@ -722,6 +860,45 @@ export default function OrderDeskPage() {
         ))}
       </div>
 
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="grid gap-2 sm:grid-cols-[minmax(12rem,16rem)_auto] sm:items-end">
+            <label className="block">
+              <span className="text-xs font-bold uppercase text-slate-500">Order date</span>
+              <select
+                value={customDateOpen && dateFilter !== "custom" ? "custom" : dateFilter}
+                onChange={(event) => selectDateFilter(event.target.value as DateFilter)}
+                className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold dark:border-slate-700 dark:bg-slate-950"
+              >
+                {dateFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-brand-50 px-3 py-2 text-xs font-bold text-brand-700 dark:bg-brand-950 dark:text-brand-200">{activeDateLabel}</span>
+              {dateFilter !== "all" && (
+                <button type="button" onClick={clearDateFilter} className="min-h-9 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700">
+                  Clear Date Filter
+                </button>
+              )}
+            </div>
+          </div>
+          {customDateOpen && (
+            <div className="grid gap-2 rounded-lg bg-slate-50 p-2 dark:bg-slate-950 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
+              <AppDatePicker label="From Date" value={draftFromDate} onChange={setDraftFromDate} />
+              <AppDatePicker label="To Date" value={draftToDate} onChange={setDraftToDate} />
+              <button type="button" onClick={applyCustomDateFilter} className="min-h-11 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">
+                Apply
+              </button>
+              <button type="button" onClick={clearDateFilter} className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700">
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="relative mt-4">
         <Search className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search orders, customers, mobile, staff" className="min-h-12 w-full rounded-lg border py-3 pl-10 pr-3 dark:border-slate-700 dark:bg-slate-900" />
@@ -730,7 +907,11 @@ export default function OrderDeskPage() {
 
       <div className="mt-4 space-y-3">
         {loading && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">Loading orders...</div>}
-        {!loading && filteredOrders.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No orders found.</div>}
+        {!loading && filteredOrders.length === 0 && (
+          <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">
+            {dateFilter === "all" ? "No orders found." : "No orders found for selected date filter."}
+          </div>
+        )}
         {filteredOrders.map((order) => (
           <article
             id={`order-${order.id}`}
