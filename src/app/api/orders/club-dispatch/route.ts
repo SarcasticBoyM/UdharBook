@@ -9,7 +9,20 @@ import { requireShopId } from "@/lib/tenant";
 type ChangedOrder = {
   id: string;
   customerId: string;
-  previousStatus: OrderStatus;
+  previousStatus: OrderStatus | null;
+};
+
+type BodyType = "array" | "object" | "invalid";
+
+type ClubDispatchDebug = {
+  bodyType: BodyType;
+  receivedIdsCount: number;
+  normalizedIdsCount: number;
+  foundOrdersCount: number;
+  foundStatuses: string[];
+  dispatchableCount: number;
+  alreadyDispatchedCount: number;
+  skippedCount: number;
 };
 
 const responseInclude = {
@@ -22,24 +35,41 @@ const responseInclude = {
   },
 } satisfies Prisma.OrderInclude;
 
-function normalizeStatus(status: OrderStatus) {
-  if (status === "PENDING") return "ORDER_RECEIVED";
-  if (status === "PROCESSING") return "DISPATCHED";
+const emptyDebug: ClubDispatchDebug = {
+  bodyType: "invalid",
+  receivedIdsCount: 0,
+  normalizedIdsCount: 0,
+  foundOrdersCount: 0,
+  foundStatuses: [],
+  dispatchableCount: 0,
+  alreadyDispatchedCount: 0,
+  skippedCount: 0,
+};
+
+function normalizeStatus(status: string) {
+  if (["ORDER_RECEIVED", "PENDING", "RECEIVED", "ORDERED", "PENDING_ORDER"].includes(status)) return "ORDER_RECEIVED";
+  if (["DISPATCHED", "PROCESSING"].includes(status)) return "DISPATCHED";
+  if (["CANCELLED", "CANCELLED_ORDER"].includes(status)) return "CANCELLED";
   return status;
 }
 
-function isPendingDispatch(status: OrderStatus) {
+function isPendingDispatch(status: string) {
   return normalizeStatus(status) === "ORDER_RECEIVED";
 }
 
-function isAlreadyDispatched(status: OrderStatus) {
+function isAlreadyDispatched(status: string) {
   return normalizeStatus(status) === "DISPATCHED";
 }
 
-function validationError(error: string, status = 400) {
+function isOrderStatus(status: string): status is OrderStatus {
+  return ["ORDER_RECEIVED", "DISPATCHED", "PENDING", "PROCESSING", "DELIVERED", "CANCELLED"].includes(status);
+}
+
+function validationError(error: string, status = 400, debug: Partial<ClubDispatchDebug> = {}) {
   return NextResponse.json({
     success: false,
     error,
+    debug: { ...emptyDebug, ...debug },
     updatedCount: 0,
     alreadyDispatchedCount: 0,
     skipped: [],
@@ -56,6 +86,7 @@ export async function POST(request: Request) {
   const shopId = requireShopId(request, session);
   try {
     const body = await request.json().catch(() => ({}));
+    const bodyType: BodyType = Array.isArray(body) ? "array" : body && typeof body === "object" ? "object" : "invalid";
     const payloadOrderIds = body?.orderIds || body?.ids || body?.selectedOrderIds;
     const rawOrderIds = Array.isArray(body) ? body : Array.isArray(payloadOrderIds) ? payloadOrderIds : [];
     const uniqueOrderIds = Array.from(
@@ -67,7 +98,10 @@ export async function POST(request: Request) {
       ),
     ).slice(0, 100);
     if (!uniqueOrderIds.length) {
-      return validationError("No orders selected for club dispatch.");
+      return validationError("No orders selected for club dispatch.", 400, {
+        bodyType,
+        receivedIdsCount: rawOrderIds.length,
+      });
     }
 
     let changedOrders: ChangedOrder[] = [];
@@ -77,46 +111,60 @@ export async function POST(request: Request) {
         where: { shopId, id: { in: uniqueOrderIds } },
         select: { id: true, customerId: true, status: true },
       });
-      if (!existing.length) {
-        return {
-          success: false,
-          status: 400,
-          error: "No matching orders found.",
-          updatedCount: 0,
-          alreadyDispatchedCount: 0,
-          skipped: uniqueOrderIds.map((id) => ({ id, reason: "ORDER_NOT_FOUND_FOR_SHOP" })),
-          orders: [],
-        };
-      }
-
-      const skipped: { id: string; reason: string }[] = [];
+      const foundStatuses = Array.from(new Set(existing.map((order) => String(order.status))));
       const existingIds = new Set(existing.map((order) => order.id));
-      skipped.push(
-        ...uniqueOrderIds
-          .filter((id) => !existingIds.has(id))
-          .map((id) => ({ id, reason: "ORDER_NOT_FOUND_FOR_SHOP" })),
-      );
-
+      const missingOrderIds = uniqueOrderIds.filter((id) => !existingIds.has(id));
       const finalOrders = existing.filter((order) => {
-        const normalized = normalizeStatus(order.status);
+        const normalized = normalizeStatus(String(order.status));
         return normalized === "DELIVERED" || normalized === "CANCELLED";
       });
-      skipped.push(...finalOrders.map((order) => ({ id: order.id, reason: normalizeStatus(order.status) })));
-
-      const pending = existing.filter((order) => isPendingDispatch(order.status));
-      const alreadyDispatched = existing.filter((order) => isAlreadyDispatched(order.status));
+      const pending = existing.filter((order) => isPendingDispatch(String(order.status)));
+      const alreadyDispatched = existing.filter((order) => isAlreadyDispatched(String(order.status)));
+      const skipped: { id: string; reason: string }[] = [
+        ...missingOrderIds.map((id) => ({ id, reason: "ORDER_NOT_FOUND_FOR_SHOP" })),
+        ...finalOrders.map((order) => ({ id: order.id, reason: normalizeStatus(String(order.status)) })),
+      ];
       const handledIds = new Set([...pending, ...alreadyDispatched, ...finalOrders].map((order) => order.id));
       skipped.push(
         ...existing
           .filter((order) => !handledIds.has(order.id))
-          .map((order) => ({ id: order.id, reason: `INVALID_STATUS_${order.status}` })),
+          .map((order) => ({ id: order.id, reason: `INVALID_STATUS_${String(order.status)}` })),
       );
-      changedOrders = pending.map((order) => ({ id: order.id, customerId: order.customerId, previousStatus: order.status }));
+
+      const debug: ClubDispatchDebug = {
+        bodyType,
+        receivedIdsCount: rawOrderIds.length,
+        normalizedIdsCount: uniqueOrderIds.length,
+        foundOrdersCount: existing.length,
+        foundStatuses,
+        dispatchableCount: pending.length,
+        alreadyDispatchedCount: alreadyDispatched.length,
+        skippedCount: skipped.length,
+      };
+
+      if (!existing.length) {
+        return {
+          success: false,
+          status: 400,
+          error: "No matching orders found for selected IDs in this shop.",
+          debug,
+          updatedCount: 0,
+          alreadyDispatchedCount: 0,
+          skipped,
+          orders: [],
+        };
+      }
+
+      changedOrders = pending.map((order) => ({
+        id: order.id,
+        customerId: order.customerId,
+        previousStatus: isOrderStatus(String(order.status)) ? order.status : null,
+      }));
 
       let updatedCount = 0;
       if (pending.length) {
         const updateResult = await tx.order.updateMany({
-          where: { shopId, id: { in: pending.map((order) => order.id) }, status: { in: ["ORDER_RECEIVED", "PENDING"] } },
+          where: { shopId, id: { in: pending.map((order) => order.id) } },
           data: { status: "DISPATCHED" },
         });
         updatedCount = updateResult.count;
@@ -133,6 +181,7 @@ export async function POST(request: Request) {
         status: 200,
         updatedCount,
         alreadyDispatchedCount: alreadyDispatched.length,
+        debug,
         skipped,
         orders,
       };
@@ -155,7 +204,7 @@ export async function POST(request: Request) {
             orderId: order.id,
             userId: session.id,
             action: "DISPATCH",
-            previousStatus: order.previousStatus,
+            previousStatus: order.previousStatus ?? undefined,
             newStatus: "DISPATCHED",
             notes: "Dispatched via Club Dispatch",
           },
@@ -193,7 +242,8 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Could not dispatch selected orders.";
     return NextResponse.json({
       success: false,
-      error: process.env.NODE_ENV === "production" ? "Could not dispatch selected orders." : message,
+      error: message,
+      debug: emptyDebug,
       detail: process.env.NODE_ENV === "production" ? undefined : detail,
       updatedCount: 0,
       alreadyDispatchedCount: 0,

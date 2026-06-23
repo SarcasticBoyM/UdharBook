@@ -586,7 +586,10 @@ export default function OrderDeskPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) {
-        setClubError(data.detail ?? data.error ?? "Could not dispatch selected orders.");
+        if (process.env.NODE_ENV !== "production" && data.debug) {
+          console.info("[Club Dispatch] failure debug", data.debug);
+        }
+        setClubError(data.error ?? data.detail ?? "Could not dispatch selected orders.");
         return;
       }
       const updatedOrders = (data.orders ?? []) as OrderRow[];
