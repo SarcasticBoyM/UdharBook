@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { UserRole } from "@prisma/client";
+import type { Prisma, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
@@ -20,6 +20,22 @@ function parseDeliveryDate(value?: string | null) {
   const parsed = new Date(`${value}T00:00:00+05:30`);
   if (Number.isNaN(parsed.getTime())) throw new Error("INVALID_DELIVERY_DATE");
   return parsed;
+}
+
+function normalizeIndianMobile(input: unknown) {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
+
+async function findMobileMatches(shopId: string, normalizedMobile: string) {
+  const candidates = await prisma.customer.findMany({
+    where: { shopId, isArchived: false },
+    select: { id: true, partyName: true, contactNumber: true, batchTag: true },
+    take: 2000,
+  });
+  return candidates.filter((customer) => normalizeIndianMobile(customer.contactNumber) === normalizedMobile);
 }
 
 async function notifyPublicOrderSafe(input: {
@@ -70,7 +86,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     }
 
     const customerName = payload.customerName.replace(/\s+/g, " ");
-    const mobile = normalizePhone(payload.mobile);
+    const mobile = normalizeIndianMobile(payload.mobile);
+    const storedMobile = normalizePhone(payload.mobile);
     if (!mobile || mobile.length < 6) {
       return NextResponse.json({ success: false, error: "Enter a valid mobile number." }, { status: 400 });
     }
@@ -89,16 +106,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
       return NextResponse.json({ success: false, error: "This shop cannot receive public orders right now." }, { status: 503 });
     }
 
-    const existingCustomer = await prisma.customer.findFirst({
-      where: { shopId: link.shopId, contactNumber: mobile, isArchived: false },
-      select: { id: true },
-    });
+    const matches = await findMobileMatches(link.shopId, mobile);
     const duplicateOrder = await prisma.order.findFirst({
       where: {
         shopId: link.shopId,
         orderDetails: payload.orderText,
         createdAt: { gte: duplicateWindowStart },
-        customer: { contactNumber: mobile },
+        OR: [
+          { submittedCustomerMobile: mobile },
+          { customer: { contactNumber: { contains: mobile } } },
+        ],
       },
       select: { id: true },
     });
@@ -111,23 +128,34 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
     }
 
     const order = await prisma.$transaction(async (tx) => {
-      const customer = existingCustomer ?? await tx.customer.create({
-        data: {
-          shopId: link.shopId,
-          partyName: customerName,
-          contactNumber: mobile,
-          outstandingBalance: 0,
-          status: "PENDING",
-          geoAddress: payload.address || undefined,
-          notes: "Source: Customer Order Link",
-        },
-        select: { id: true },
-      });
+      let customer: { id: string } | null = null;
+      let customerMatchStatus = "REVIEW_REQUIRED";
+      let sourceNote = "Customer Order Link - Review required";
+      if (matches.length === 1) {
+        customer = { id: matches[0].id };
+        customerMatchStatus = "AUTO_MATCHED";
+        sourceNote = "Customer Order Link - Auto matched";
+      } else if (matches.length === 0) {
+        customer = await tx.customer.create({
+          data: {
+            shopId: link.shopId,
+            partyName: customerName,
+            contactNumber: storedMobile || mobile,
+            outstandingBalance: 0,
+            status: "PENDING",
+            geoAddress: payload.address || undefined,
+            notes: "Source: Customer Order Link",
+          },
+          select: { id: true },
+        });
+        customerMatchStatus = "NEW_CREATED";
+        sourceNote = "Customer Order Link - New customer created";
+      }
 
       const created = await tx.order.create({
         data: {
           shopId: link.shopId,
-          customerId: customer.id,
+          customerId: customer?.id,
           createdById: orderOwner.id,
           orderDetails: payload.orderText,
           preferredDeliveryDate: deliveryDate,
@@ -135,7 +163,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
           status: "ORDER_RECEIVED",
           sourceModule: "PUBLIC_ORDER_LINK",
           visitSource: "Customer Order Link",
-        },
+          customerMatchStatus,
+          submittedCustomerName: customerName,
+          submittedCustomerMobile: mobile,
+          submittedAddress: payload.address || undefined,
+        } satisfies Prisma.OrderUncheckedCreateInput,
         select: { id: true },
       });
 
@@ -143,9 +175,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
         data: {
           shopId: link.shopId,
           userId: orderOwner.id,
-          customerId: customer.id,
+          customerId: customer?.id,
           action: "order_created",
-          details: "Order created from Customer Order Link",
+          details: sourceNote,
         },
       });
 
@@ -156,7 +188,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
           userId: orderOwner.id,
           action: "CREATED",
           newStatus: "ORDER_RECEIVED",
-          notes: "Order created from Customer Order Link",
+          notes: sourceNote,
         },
       });
 

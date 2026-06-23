@@ -8,7 +8,7 @@ import { requireShopId } from "@/lib/tenant";
 
 type ChangedOrder = {
   id: string;
-  customerId: string;
+  customerId: string | null;
   previousStatus: OrderStatus | null;
 };
 
@@ -193,7 +193,7 @@ export async function POST(request: Request) {
           data: {
             shopId,
             userId: session.id,
-            customerId: order.customerId,
+            customerId: order.customerId ?? undefined,
             action: "order_status_updated",
             details: "Dispatched via Club Dispatch",
           },

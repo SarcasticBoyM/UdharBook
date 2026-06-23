@@ -682,8 +682,8 @@ model Order {
   id                    String      @id @default(cuid())
   shopId                String
   shop                  Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  customerId            String
-  customer              Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerId            String?
+  customer              Customer?   @relation(fields: [customerId], references: [id], onDelete: Cascade)
   createdById           String
   createdBy             User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
   staffVisitId          String?
@@ -694,6 +694,10 @@ model Order {
   status                OrderStatus @default(ORDER_RECEIVED)
   sourceModule          String      @default("FIELD_VISIT")
   visitSource           String?
+  customerMatchStatus   String?
+  submittedCustomerName String?
+  submittedCustomerMobile String?
+  submittedAddress      String?
   deliveredAt           DateTime?
   cancelledAt           DateTime?
   createdAt             DateTime    @default(now())

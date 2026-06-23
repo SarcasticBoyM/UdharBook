@@ -589,15 +589,15 @@ export async function POST(request: Request) {
     const orderNotification = await notifyOrderCreated({
       shopId,
       orderId: order.id,
-      customerName: order.customer.partyName,
+      customerName: order.customer?.partyName ?? "Customer",
       createdById: session.id,
       createdByName: order.createdBy.name,
     });
-    const customerNotification = order.sourceModule === "NEW_CUSTOMER_ORDER"
+    const customerNotification = order.sourceModule === "NEW_CUSTOMER_ORDER" && order.customerId
       ? await notifyCustomerAdded({
           shopId,
           customerId: order.customerId,
-          customerName: order.customer.partyName,
+          customerName: order.customer?.partyName ?? "Customer",
           createdByName: order.createdBy.name,
         })
       : undefined;
@@ -703,7 +703,7 @@ export async function PATCH(request: Request) {
         data: {
           shopId,
           userId: session.id,
-          customerId: updated.customerId,
+          customerId: updated.customerId ?? undefined,
           action: isEdit ? "order_edited" : "order_status_updated",
           details: isEdit ? "Order details edited" : `Order status changed from ${existing.status} to ${updated.status}`,
         },
@@ -736,7 +736,7 @@ export async function PATCH(request: Request) {
             shopId,
             orderId: order.id,
             type: action === "DISPATCH" ? "ORDER_DISPATCHED" : "ORDER_DELIVERED",
-            customerName: order.customer.partyName,
+            customerName: order.customer?.partyName ?? order.submittedCustomerName ?? "Customer",
             actorName: session.name,
           })
         : undefined;

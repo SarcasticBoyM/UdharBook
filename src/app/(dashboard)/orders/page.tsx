@@ -25,7 +25,11 @@ type OrderRow = {
   updatedAt?: string | null;
   deliveredAt: string | null;
   cancelledAt?: string | null;
-  customer: { id: string; partyName: string; contactNumber: string; batchTag?: string | null };
+  customer: { id: string; partyName: string; contactNumber: string; batchTag?: string | null } | null;
+  customerMatchStatus?: string | null;
+  submittedCustomerName?: string | null;
+  submittedCustomerMobile?: string | null;
+  submittedAddress?: string | null;
   createdBy: { name: string; role?: string };
   activities?: { action: string; newStatus?: OrderStatus | null; createdAt: string; user: { name: string; role?: string } }[];
 };
@@ -48,6 +52,8 @@ type Summary = {
   cancelledOrders: number;
   upcomingDeliveries: number;
 };
+
+type MatchCustomer = { id: string; partyName: string; contactNumber: string; batchTag?: string | null };
 
 type ClubFilter = "all" | "pending" | "dispatched";
 type DateFilter = "all" | "today" | "yesterday" | "last7days" | "thisMonth" | "custom";
@@ -104,9 +110,29 @@ function cleanContact(contact: unknown) {
   return value;
 }
 
+function orderCustomerName(order: OrderRow) {
+  return order.customer?.partyName || order.submittedCustomerName || "Customer";
+}
+
+function orderCustomerContact(order: OrderRow) {
+  return order.customer?.contactNumber || order.submittedCustomerMobile || "";
+}
+
+function orderCustomerBatch(order: OrderRow) {
+  return order.customer?.batchTag ?? "";
+}
+
+function orderMatchLabel(status?: string | null) {
+  if (status === "AUTO_MATCHED") return "Auto matched";
+  if (status === "NEW_CREATED") return "New customer created";
+  if (status === "REVIEW_REQUIRED") return "Customer match review required";
+  if (status === "UNLINKED") return "Kept unlinked";
+  return "";
+}
+
 function buildOrderShareText(order: OrderShareSource) {
-  const customerName = String(order.customerName || order.customer?.partyName || order.partyName || "").trim();
-  const contact = cleanContact(order.contactNumber || order.mobile || order.customer?.contactNumber);
+  const customerName = String(order.customerName || order.customer?.partyName || order.submittedCustomerName || order.partyName || "").trim();
+  const contact = cleanContact(order.contactNumber || order.mobile || order.customer?.contactNumber || order.submittedCustomerMobile);
   const orderText = String(order.orderText || order.itemsText || order.description || order.orderDetails || "").trim();
   return [customerName, contact, orderText].filter(Boolean).join("\n");
 }
@@ -403,6 +429,12 @@ export default function OrderDeskPage() {
   const [publicLinkLoading, setPublicLinkLoading] = useState(false);
   const [publicLinkSaving, setPublicLinkSaving] = useState(false);
   const [publicLinkError, setPublicLinkError] = useState("");
+  const [matchOrder, setMatchOrder] = useState<OrderRow | null>(null);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchSaving, setMatchSaving] = useState(false);
+  const [matchError, setMatchError] = useState("");
+  const [matchCustomers, setMatchCustomers] = useState<MatchCustomer[]>([]);
+  const [selectedMatchCustomerId, setSelectedMatchCustomerId] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSuggestion[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
@@ -546,7 +578,7 @@ export default function OrderDeskPage() {
     const needle = query.trim().toLowerCase();
     if (!needle) return orders;
     return orders.filter((order) =>
-      [order.customer.partyName, order.customer.batchTag ?? "", order.customer.contactNumber, order.orderDetails, order.createdBy.name, order.visitSource ?? "", displayStatus(order.status)]
+      [orderCustomerName(order), orderCustomerBatch(order), orderCustomerContact(order), order.orderDetails, order.createdBy.name, order.visitSource ?? "", displayStatus(order.status)]
         .join(" ")
         .toLowerCase()
         .includes(needle),
@@ -555,7 +587,7 @@ export default function OrderDeskPage() {
   const filteredOrders = useMemo(() => {
     const tag = batchFilter.trim().toLowerCase();
     if (!tag) return visibleOrders;
-    return visibleOrders.filter((order) => (order.customer.batchTag ?? "").toLowerCase().includes(tag));
+    return visibleOrders.filter((order) => orderCustomerBatch(order).toLowerCase().includes(tag));
   }, [batchFilter, visibleOrders]);
 
   const clubVisibleOrders = useMemo(() => {
@@ -566,7 +598,7 @@ export default function OrderDeskPage() {
       if (clubFilter === "pending" && normalized !== "ORDER_RECEIVED") return false;
       if (clubFilter === "dispatched" && normalized !== "DISPATCHED") return false;
       if (!needle) return true;
-      return [order.customer.partyName, order.customer.contactNumber, order.orderDetails]
+      return [orderCustomerName(order), orderCustomerContact(order), order.orderDetails]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -955,6 +987,55 @@ export default function OrderDeskPage() {
     }
   }
 
+  async function openMatchCustomer(order: OrderRow) {
+    setMatchOrder(order);
+    setSelectedMatchCustomerId("");
+    setMatchCustomers([]);
+    setMatchError("");
+    setMatchLoading(true);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/customer-matches`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setMatchError(data.error ?? "Could not load customer matches.");
+        return;
+      }
+      setMatchCustomers(data.matches ?? []);
+      setSelectedMatchCustomerId(data.matches?.[0]?.id ?? "");
+    } catch {
+      setMatchError("Could not load customer matches. Check your connection and retry.");
+    } finally {
+      setMatchLoading(false);
+    }
+  }
+
+  async function submitCustomerMatch(action: "LINK_EXISTING" | "CREATE_NEW" | "KEEP_UNLINKED") {
+    if (!matchOrder || matchSaving) return;
+    setMatchSaving(true);
+    setMatchError("");
+    try {
+      const res = await fetch(`/api/orders/${matchOrder.id}/match-customer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, customerId: action === "LINK_EXISTING" ? selectedMatchCustomerId : undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setMatchError(data.error ?? "Could not match customer.");
+        return;
+      }
+      const updatedOrder = data.order as OrderRow;
+      setOrders((current) => current.map((order) => order.id === updatedOrder.id ? { ...order, ...updatedOrder } : order));
+      setClubOrders((current) => current.map((order) => order.id === updatedOrder.id ? { ...order, ...updatedOrder } : order));
+      setMatchOrder(null);
+      showToast("Customer match updated");
+    } catch {
+      setMatchError("Could not match customer. Check your connection and retry.");
+    } finally {
+      setMatchSaving(false);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1046,6 +1127,63 @@ export default function OrderDeskPage() {
           </div>
         </div>
       )}
+      {matchOrder && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-4 shadow-xl dark:bg-slate-950 sm:max-w-lg sm:rounded-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold">Match Customer</h2>
+                <p className="text-sm text-slate-500">Review the submitted customer before linking this order.</p>
+              </div>
+              <button type="button" onClick={() => setMatchOrder(null)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close customer match">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-900">
+              <p className="font-bold">{matchOrder.submittedCustomerName ?? orderCustomerName(matchOrder)}</p>
+              <p>{matchOrder.submittedCustomerMobile ?? orderCustomerContact(matchOrder)}</p>
+              {matchOrder.submittedAddress && <p className="mt-1 text-slate-500">{matchOrder.submittedAddress}</p>}
+            </div>
+            {matchError && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{matchError}</div>}
+            {matchLoading ? (
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading matches...
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {matchCustomers.length > 0 ? (
+                  <div className="space-y-2">
+                    {matchCustomers.map((customer) => (
+                      <label key={customer.id} className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+                        <input type="radio" name="matchCustomer" checked={selectedMatchCustomerId === customer.id} onChange={() => setSelectedMatchCustomerId(customer.id)} className="mt-1" />
+                        <span>
+                          <span className="font-bold">{customer.partyName}</span>
+                          {customer.batchTag && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700">{customer.batchTag}</span>}
+                          <span className="block text-slate-500">{customer.contactNumber}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-dashed p-4 text-sm text-slate-500">No matching customers found for this mobile.</p>
+                )}
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <button type="button" onClick={() => void submitCustomerMatch("LINK_EXISTING")} disabled={matchSaving || !selectedMatchCustomerId} className="min-h-11 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white disabled:opacity-60">
+                    Link Selected
+                  </button>
+                  <button type="button" onClick={() => void submitCustomerMatch("CREATE_NEW")} disabled={matchSaving} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-semibold disabled:opacity-60 dark:border-slate-700">
+                    Create New
+                  </button>
+                  <button type="button" onClick={() => void submitCustomerMatch("KEEP_UNLINKED")} disabled={matchSaving} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-semibold disabled:opacity-60 dark:border-slate-700">
+                    Keep Unlinked
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Pending Orders" value={summary.pendingOrders} icon={<Clock className="h-5 w-5" />} />
@@ -1128,13 +1266,14 @@ export default function OrderDeskPage() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="font-bold">{order.customer.partyName}</h2>
-                  {order.customer.batchTag && <span className="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-bold text-sky-700">{order.customer.batchTag}</span>}
+                  <h2 className="font-bold">{orderCustomerName(order)}</h2>
+                  {orderCustomerBatch(order) && <span className="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-bold text-sky-700">{orderCustomerBatch(order)}</span>}
                   <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${order.sourceModule === "NEW_CUSTOMER_ORDER" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-700"}`}>
                     {order.sourceModule === "NEW_CUSTOMER_ORDER" ? "New" : "Existing"}
                   </span>
+                  {orderMatchLabel(order.customerMatchStatus) && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800">{orderMatchLabel(order.customerMatchStatus)}</span>}
                 </div>
-                <p className="text-sm text-slate-500">{order.customer.contactNumber}</p>
+                <p className="text-sm text-slate-500">{orderCustomerContact(order)}</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <span className={`rounded-full px-3 py-1 text-xs font-semibold ${priorityClass(order.priority)}`}>{order.priority}</span>
@@ -1160,7 +1299,12 @@ export default function OrderDeskPage() {
                   <Share2 className="h-4 w-4" />
                   Share WhatsApp
                 </button>
-                {canAssignTasks && (
+                {order.customerMatchStatus === "REVIEW_REQUIRED" && (
+                  <button type="button" onClick={() => void openMatchCustomer(order)} className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-800">
+                    Match Customer
+                  </button>
+                )}
+                {canAssignTasks && order.customer && (
                   <AssignTaskButton
                     label="Assign Follow-up"
                     seed={{
@@ -1249,10 +1393,10 @@ export default function OrderDeskPage() {
                       <input type="checkbox" checked={selected} onChange={() => toggleClubOrder(order.id)} className="mt-1 h-5 w-5 rounded border-slate-300" />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-bold">{order.customer.partyName}</h3>
+                          <h3 className="font-bold">{orderCustomerName(order)}</h3>
                           <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${statusClass(order.status)}`}>{displayStatus(order.status)}</span>
                         </div>
-                        {cleanContact(order.customer.contactNumber) && <p className="mt-1 text-xs text-slate-500">{cleanContact(order.customer.contactNumber)}</p>}
+                        {cleanContact(orderCustomerContact(order)) && <p className="mt-1 text-xs text-slate-500">{cleanContact(orderCustomerContact(order))}</p>}
                         <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{order.orderDetails}</p>
                         <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
                           <span>Qty: {orderQuantity(order)}</span>
