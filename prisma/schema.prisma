@@ -187,6 +187,7 @@ model Shop {
   visitPhotos        VisitPhoto[]
   supportAccessGrants SupportAccessGrant[]
   orders             Order[]
+  orderPublicLink    OrderPublicLink?
   userRoleAssignments UserRoleAssignment[]
   orderActivities    OrderActivity[]
   whatsappOrderSetting WhatsAppOrderNotificationSetting?
@@ -725,6 +726,19 @@ model OrderActivity {
   @@index([shopId, createdAt])
   @@index([orderId, createdAt])
   @@index([userId, createdAt])
+}
+
+model OrderPublicLink {
+  id            String   @id @default(cuid())
+  shopId        String   @unique
+  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  token         String   @unique
+  isEnabled     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  regeneratedAt DateTime?
+
+  @@index([shopId])
 }
 
 model WhatsAppOrderNotificationSetting {

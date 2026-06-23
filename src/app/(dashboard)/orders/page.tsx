@@ -397,6 +397,12 @@ export default function OrderDeskPage() {
   const [clubLoading, setClubLoading] = useState(false);
   const [clubSaving, setClubSaving] = useState(false);
   const [clubError, setClubError] = useState("");
+  const [publicLinkOpen, setPublicLinkOpen] = useState(false);
+  const [publicOrderUrl, setPublicOrderUrl] = useState("");
+  const [publicOrderEnabled, setPublicOrderEnabled] = useState(true);
+  const [publicLinkLoading, setPublicLinkLoading] = useState(false);
+  const [publicLinkSaving, setPublicLinkSaving] = useState(false);
+  const [publicLinkError, setPublicLinkError] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerResults, setCustomerResults] = useState<CustomerSuggestion[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
@@ -869,6 +875,86 @@ export default function OrderDeskPage() {
     setCustomDateOpen(false);
   }
 
+  async function loadPublicOrderLink() {
+    setPublicLinkOpen(true);
+    setPublicLinkLoading(true);
+    setPublicLinkError("");
+    try {
+      const res = await fetch("/api/orders/public-link");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setPublicLinkError(data.error ?? "Could not load customer order link.");
+        return;
+      }
+      setPublicOrderUrl(data.url ?? "");
+      setPublicOrderEnabled(Boolean(data.isEnabled));
+    } catch {
+      setPublicLinkError("Could not load customer order link. Check your connection and retry.");
+    } finally {
+      setPublicLinkLoading(false);
+    }
+  }
+
+  async function copyPublicOrderLink() {
+    if (!publicOrderUrl) return;
+    await navigator.clipboard.writeText(publicOrderUrl);
+    showToast("Order link copied");
+  }
+
+  async function sharePublicOrderLink() {
+    if (!publicOrderUrl) return;
+    if (navigator.share) {
+      await navigator.share({ text: publicOrderUrl, url: publicOrderUrl });
+      return;
+    }
+    await copyPublicOrderLink();
+  }
+
+  async function setPublicOrderLinkEnabled(isEnabled: boolean) {
+    setPublicLinkSaving(true);
+    setPublicLinkError("");
+    try {
+      const res = await fetch("/api/orders/public-link", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isEnabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setPublicLinkError(data.error ?? "Could not update customer order link.");
+        return;
+      }
+      setPublicOrderUrl(data.url ?? "");
+      setPublicOrderEnabled(Boolean(data.isEnabled));
+      showToast(isEnabled ? "Order link enabled" : "Order link disabled");
+    } catch {
+      setPublicLinkError("Could not update customer order link. Check your connection and retry.");
+    } finally {
+      setPublicLinkSaving(false);
+    }
+  }
+
+  async function regeneratePublicOrderLink() {
+    if (!window.confirm("Regenerate this customer order link? The old link will stop working.")) return;
+    setPublicLinkSaving(true);
+    setPublicLinkError("");
+    try {
+      const res = await fetch("/api/orders/public-link/regenerate", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        setPublicLinkError(data.error ?? "Could not regenerate customer order link.");
+        return;
+      }
+      setPublicOrderUrl(data.url ?? "");
+      setPublicOrderEnabled(Boolean(data.isEnabled));
+      showToast("Order link regenerated");
+    } catch {
+      setPublicLinkError("Could not regenerate customer order link. Check your connection and retry.");
+    } finally {
+      setPublicLinkSaving(false);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -881,6 +967,11 @@ export default function OrderDeskPage() {
             <button type="button" onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
               <Plus className="h-4 w-4" />
               New Order
+            </button>
+          )}
+          {canCreateOrders && (
+            <button type="button" onClick={() => void loadPublicOrderLink()} className="inline-flex items-center gap-2 rounded-lg border border-brand-300 px-4 py-2 text-sm font-semibold text-brand-700 dark:border-brand-800 dark:text-brand-200">
+              Customer Order Link
             </button>
           )}
           <button type="button" onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold dark:border-slate-700">
@@ -908,6 +999,50 @@ export default function OrderDeskPage() {
             <button type="button" onClick={() => setSharePromptOrder(null)} className="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700">
               Close
             </button>
+          </div>
+        </div>
+      )}
+      {publicLinkOpen && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-4 shadow-xl dark:bg-slate-950 sm:max-w-lg sm:rounded-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold">Customer Order Link</h2>
+                <p className="text-sm text-slate-500">Share this link with customers to place orders directly.</p>
+              </div>
+              <button type="button" onClick={() => setPublicLinkOpen(false)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close customer order link">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            {publicLinkError && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{publicLinkError}</div>}
+            {publicLinkLoading ? (
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading link...
+              </div>
+            ) : (
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="text-sm font-semibold">Public order link</span>
+                  <input readOnly value={publicOrderUrl} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm dark:border-slate-700 dark:bg-slate-900" />
+                </label>
+                <label className="flex items-center justify-between rounded-lg border border-slate-200 p-3 text-sm font-semibold dark:border-slate-800">
+                  <span>{publicOrderEnabled ? "Link enabled" : "Link disabled"}</span>
+                  <input type="checkbox" checked={publicOrderEnabled} disabled={publicLinkSaving} onChange={(event) => void setPublicOrderLinkEnabled(event.target.checked)} className="h-5 w-5" />
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => void copyPublicOrderLink()} disabled={!publicOrderUrl || publicLinkSaving} className="min-h-11 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-60">
+                    Copy Order Link
+                  </button>
+                  <button type="button" onClick={() => void sharePublicOrderLink()} disabled={!publicOrderUrl || publicLinkSaving} className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold disabled:opacity-60 dark:border-slate-700">
+                    Share Order Link
+                  </button>
+                  <button type="button" onClick={() => void regeneratePublicOrderLink()} disabled={publicLinkSaving} className="col-span-2 min-h-11 rounded-lg border border-red-200 px-4 text-sm font-semibold text-red-700 disabled:opacity-60 dark:border-red-900 dark:text-red-300">
+                    {publicLinkSaving ? "Saving..." : "Regenerate Link"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
