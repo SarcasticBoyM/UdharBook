@@ -51,23 +51,25 @@ export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!canUseOrders(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canUseOrders(session.role)) return validationError("You do not have permission to dispatch orders.", 403);
 
   const shopId = requireShopId(request, session);
   try {
-    const body = await request.json();
-    const rawOrderIds = body?.orderIds ?? body?.ids ?? body?.selectedOrderIds;
-    if (!Array.isArray(rawOrderIds)) {
-      return validationError("orderIds must be an array.");
-    }
-    if (rawOrderIds.length === 0) {
-      return validationError("Select at least one order to dispatch.");
-    }
-    if (rawOrderIds.some((id) => typeof id !== "string" || id.trim().length === 0)) {
-      return validationError("orderIds must contain non-empty order ids.");
+    const body = await request.json().catch(() => ({}));
+    const payloadOrderIds = body?.orderIds || body?.ids || body?.selectedOrderIds;
+    const rawOrderIds = Array.isArray(body) ? body : Array.isArray(payloadOrderIds) ? payloadOrderIds : [];
+    const uniqueOrderIds = Array.from(
+      new Set(
+        rawOrderIds
+          .filter(Boolean)
+          .map((id: unknown) => String(id).trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 100);
+    if (!uniqueOrderIds.length) {
+      return validationError("No orders selected for club dispatch.");
     }
 
-    const uniqueOrderIds = Array.from(new Set(rawOrderIds.map((id: string) => id.trim()))).slice(0, 100);
     let changedOrders: ChangedOrder[] = [];
 
     const result = await prisma.$transaction(async (tx) => {
@@ -75,6 +77,18 @@ export async function POST(request: Request) {
         where: { shopId, id: { in: uniqueOrderIds } },
         select: { id: true, customerId: true, status: true },
       });
+      if (!existing.length) {
+        return {
+          success: false,
+          status: 400,
+          error: "No matching orders found.",
+          updatedCount: 0,
+          alreadyDispatchedCount: 0,
+          skipped: uniqueOrderIds.map((id) => ({ id, reason: "ORDER_NOT_FOUND_FOR_SHOP" })),
+          orders: [],
+        };
+      }
+
       const skipped: { id: string; reason: string }[] = [];
       const existingIds = new Set(existing.map((order) => order.id));
       skipped.push(

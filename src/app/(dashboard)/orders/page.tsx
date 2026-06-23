@@ -578,10 +578,11 @@ export default function OrderDeskPage() {
     setClubSaving(true);
     setClubError("");
     try {
+      const selectedOrderIds = Array.from(clubSelected);
       const res = await fetch("/api/orders/club-dispatch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderIds: Array.from(clubSelected) }),
+        body: JSON.stringify({ orderIds: selectedOrderIds }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) {
