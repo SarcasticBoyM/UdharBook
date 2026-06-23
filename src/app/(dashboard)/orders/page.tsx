@@ -22,11 +22,12 @@ type OrderRow = {
   visitSource: string | null;
   sourceModule?: string | null;
   createdAt: string;
+  updatedAt?: string | null;
   deliveredAt: string | null;
   cancelledAt?: string | null;
   customer: { id: string; partyName: string; contactNumber: string; batchTag?: string | null };
   createdBy: { name: string; role?: string };
-  activities?: { action: string; createdAt: string; user: { name: string; role?: string } }[];
+  activities?: { action: string; newStatus?: OrderStatus | null; createdAt: string; user: { name: string; role?: string } }[];
 };
 
 type CustomerMode = "existing" | "new";
@@ -159,15 +160,46 @@ function isDateBetween(value: string, from: string, to: string) {
   return value >= from && value <= to;
 }
 
-function orderMatchesDateFilter(order: OrderRow, dateFilter: DateFilter, fromDate: string, toDate: string) {
-  if (dateFilter === "all") return true;
-  const orderDate = toInputDate(order.createdAt);
+function dateFilterEndDate(dateFilter: DateFilter, fromDate: string, toDate: string) {
   const today = todayInputDate();
-  if (dateFilter === "today") return orderDate === today;
-  if (dateFilter === "yesterday") return orderDate === addInputDays(today, -1);
-  if (dateFilter === "last7days") return isDateBetween(orderDate, addInputDays(today, -6), today);
-  if (dateFilter === "thisMonth") return isDateBetween(orderDate, monthStartInputDate(today), today);
-  return Boolean(fromDate && toDate && isDateBetween(orderDate, fromDate, toDate));
+  if (dateFilter === "today") return today;
+  if (dateFilter === "yesterday") return addInputDays(today, -1);
+  if (dateFilter === "last7days") return today;
+  if (dateFilter === "thisMonth") return today;
+  if (dateFilter === "custom") return toDate || fromDate;
+  return "";
+}
+
+function dateMatchesFilter(value: string, dateFilter: DateFilter, fromDate: string, toDate: string) {
+  if (dateFilter === "all") return true;
+  const today = todayInputDate();
+  if (dateFilter === "today") return value === today;
+  if (dateFilter === "yesterday") return value === addInputDays(today, -1);
+  if (dateFilter === "last7days") return isDateBetween(value, addInputDays(today, -6), today);
+  if (dateFilter === "thisMonth") return isDateBetween(value, monthStartInputDate(today), today);
+  return Boolean(fromDate && toDate && isDateBetween(value, fromDate, toDate));
+}
+
+function latestActivityDate(order: OrderRow, status: OrderStatus) {
+  return order.activities?.find((activity) => activity.newStatus === status)?.createdAt ?? null;
+}
+
+function statusEventDate(order: OrderRow, filter: string) {
+  if (filter === "dispatched") return latestActivityDate(order, "DISPATCHED") ?? order.updatedAt ?? order.createdAt;
+  if (filter === "delivered") return order.deliveredAt ?? latestActivityDate(order, "DELIVERED") ?? order.updatedAt ?? order.createdAt;
+  if (filter === "cancelled") return order.cancelledAt ?? latestActivityDate(order, "CANCELLED") ?? order.updatedAt ?? order.createdAt;
+  if (filter === "upcoming") return order.preferredDeliveryDate;
+  return order.createdAt;
+}
+
+function orderMatchesDateFilter(order: OrderRow, filter: string, dateFilter: DateFilter, fromDate: string, toDate: string) {
+  if (dateFilter === "all") return true;
+  if (filter === "pending") {
+    const endDate = dateFilterEndDate(dateFilter, fromDate, toDate);
+    return Boolean(endDate && toInputDate(order.createdAt) <= endDate);
+  }
+  const filterDate = toInputDate(statusEventDate(order, filter));
+  return Boolean(filterDate && dateMatchesFilter(filterDate, dateFilter, fromDate, toDate));
 }
 
 function formatDateTime(value: string) {
@@ -204,9 +236,13 @@ function orderMatchesFilter(order: OrderRow, filter: string) {
   return true;
 }
 
-function filterEmptyLabel(filter: string) {
-  if (filter === "pending") return "No pending orders found for selected date filter.";
+function filterEmptyLabel(filter: string, dateFilter: DateFilter) {
+  if (filter === "pending") return "No pending orders found.";
+  if (filter === "dispatched" && dateFilter === "today") return "No orders dispatched today.";
+  if (filter === "dispatched" && dateFilter === "yesterday") return "No orders dispatched yesterday.";
   if (filter === "dispatched") return "No dispatched orders found for selected date filter.";
+  if (filter === "delivered" && dateFilter === "today") return "No orders delivered today.";
+  if (filter === "delivered" && dateFilter === "yesterday") return "No orders delivered yesterday.";
   if (filter === "delivered") return "No delivered orders found for selected date filter.";
   if (filter === "cancelled") return "No cancelled orders found for selected date filter.";
   if (filter === "high") return "No high priority orders found for selected date filter.";
@@ -316,6 +352,15 @@ function canCancel(order: OrderRow) {
   return !["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status));
 }
 
+function dateFilterLabel(filter: string) {
+  if (filter === "pending") return "PENDING AS ON";
+  if (filter === "dispatched") return "DISPATCH DATE";
+  if (filter === "delivered") return "DELIVERY DATE";
+  if (filter === "cancelled") return "CANCEL DATE";
+  if (filter === "upcoming") return "DELIVERY DATE";
+  return "ORDER DATE";
+}
+
 export default function OrderDeskPage() {
   const searchParams = useSearchParams();
   const highlightedId = searchParams.get("highlight");
@@ -398,10 +443,11 @@ export default function OrderDeskPage() {
   }
 
   const activeDateLabel = useMemo(() => {
-    if (dateFilter === "custom" && fromDate && toDate) return `Date: ${formatDate(fromDate)} - ${formatDate(toDate)}`;
+    const label = dateFilterLabel(filter);
+    if (dateFilter === "custom" && fromDate && toDate) return `${label}: ${formatDate(fromDate)} - ${formatDate(toDate)}`;
     const option = dateFilterOptions.find((item) => item.value === dateFilter);
-    return `Date: ${option?.label ?? "All Dates"}`;
-  }, [dateFilter, fromDate, toDate]);
+    return `${label}: ${option?.label ?? "All Dates"}`;
+  }, [dateFilter, filter, fromDate, toDate]);
 
   const load = useCallback(async () => {
     loadAbortRef.current?.abort();
@@ -599,7 +645,7 @@ export default function OrderDeskPage() {
             const updated = updatedOrders.find((item) => item.id === order.id);
             return updated ? { ...order, ...updated, activities: order.activities } : order;
           })
-          .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate))
+          .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, filter, dateFilter, fromDate, toDate))
       );
       setSummary((current) => {
         let next = current;
@@ -731,12 +777,12 @@ export default function OrderDeskPage() {
           if (editor.mode === "edit") {
             return current
               .map((order) => order.id === savedOrder.id ? { ...order, ...savedOrder, activities: order.activities } : order)
-              .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate));
+              .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, filter, dateFilter, fromDate, toDate));
           }
-          return orderMatchesFilter(savedOrder, filter) && orderMatchesDateFilter(savedOrder, dateFilter, fromDate, toDate) ? [savedOrder, ...current] : current;
+          return orderMatchesFilter(savedOrder, filter) && orderMatchesDateFilter(savedOrder, filter, dateFilter, fromDate, toDate) ? [savedOrder, ...current] : current;
         });
         setSummary((current) =>
-          editor.mode === "create" && orderMatchesDateFilter(savedOrder, dateFilter, fromDate, toDate)
+          editor.mode === "create" && orderMatchesDateFilter(savedOrder, filter, dateFilter, fromDate, toDate)
             ? applySummaryChange(current, null, savedOrder)
             : current
         );
@@ -779,7 +825,7 @@ export default function OrderDeskPage() {
           if (order.id !== orderId) return order;
           return { ...order, ...updatedOrder, activities: order.activities };
         })
-        .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, dateFilter, fromDate, toDate));
+        .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, filter, dateFilter, fromDate, toDate));
       return next;
     });
     setSummary((current) => applySummaryChange(current, previousOrder, updatedOrder));
@@ -890,7 +936,7 @@ export default function OrderDeskPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-2 sm:grid-cols-[minmax(12rem,16rem)_auto] sm:items-end">
             <label className="block">
-              <span className="text-xs font-bold uppercase text-slate-500">Order date</span>
+              <span className="text-xs font-bold uppercase text-slate-500">{dateFilterLabel(filter)}</span>
               <select
                 value={customDateOpen && dateFilter !== "custom" ? "custom" : dateFilter}
                 onChange={(event) => selectDateFilter(event.target.value as DateFilter)}
@@ -935,7 +981,7 @@ export default function OrderDeskPage() {
         {loading && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">Loading orders...</div>}
         {!loading && filteredOrders.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">
-            {dateFilter === "all" ? "No orders found." : filterEmptyLabel(filter)}
+            {dateFilter === "all" ? "No orders found." : filterEmptyLabel(filter, dateFilter)}
           </div>
         )}
         {filteredOrders.map((order) => (

@@ -17,6 +17,7 @@ const orderFilters = ["all", "pending", "dispatched", "delivered", "cancelled", 
 const localOffsetMinutes = 330;
 const orderDateField = "createdAt" as const;
 type OrderFilter = (typeof orderFilters)[number];
+type DateRange = NonNullable<ReturnType<typeof orderDateRange>>;
 
 const createSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -170,8 +171,51 @@ function orderDateRange(searchParams: URLSearchParams, now = new Date()) {
   return { gte, lte };
 }
 
-function orderDateCondition(dateRange: NonNullable<ReturnType<typeof orderDateRange>>): Prisma.OrderWhereInput {
+function orderDateCondition(dateRange: DateRange): Prisma.OrderWhereInput {
   return { [orderDateField]: dateRange };
+}
+
+function orderActivityDateCondition(newStatus: OrderStatus, dateRange: DateRange): Prisma.OrderWhereInput {
+  return {
+    OR: [
+      { activities: { some: { newStatus, createdAt: dateRange } } },
+      { activities: { none: { newStatus } }, updatedAt: dateRange },
+    ],
+  };
+}
+
+function deliveredDateCondition(dateRange: DateRange): Prisma.OrderWhereInput {
+  return {
+    OR: [
+      { deliveredAt: dateRange },
+      { deliveredAt: null, activities: { some: { newStatus: "DELIVERED", createdAt: dateRange } } },
+      { deliveredAt: null, activities: { none: { newStatus: "DELIVERED" } }, updatedAt: dateRange },
+    ],
+  };
+}
+
+function cancelledDateCondition(dateRange: DateRange): Prisma.OrderWhereInput {
+  return {
+    OR: [
+      { cancelledAt: dateRange },
+      { cancelledAt: null, activities: { some: { newStatus: "CANCELLED", createdAt: dateRange } } },
+      { cancelledAt: null, activities: { none: { newStatus: "CANCELLED" } }, updatedAt: dateRange },
+    ],
+  };
+}
+
+function getOrderDateWhereForFilter(input: {
+  activeTab: OrderFilter;
+  dateRange: DateRange | null;
+}): Prisma.OrderWhereInput | null {
+  const { activeTab, dateRange } = input;
+  if (!dateRange) return null;
+  if (activeTab === "pending") return { [orderDateField]: { lte: dateRange.lte } };
+  if (activeTab === "dispatched") return orderActivityDateCondition("DISPATCHED", dateRange);
+  if (activeTab === "delivered") return deliveredDateCondition(dateRange);
+  if (activeTab === "cancelled") return cancelledDateCondition(dateRange);
+  if (activeTab === "upcoming") return { preferredDeliveryDate: dateRange };
+  return orderDateCondition(dateRange);
 }
 
 function latestOrderSort(): Prisma.OrderOrderByWithRelationInput[] {
@@ -180,7 +224,7 @@ function latestOrderSort(): Prisma.OrderOrderByWithRelationInput[] {
 
 function orderFilterCondition(filter: OrderFilter, now: Date, upcoming: Date): Prisma.OrderWhereInput | null {
   if (filter === "pending") return { status: { in: ["ORDER_RECEIVED", "PENDING"] } };
-  if (filter === "dispatched") return { status: "DISPATCHED" };
+  if (filter === "dispatched") return { status: { in: ["DISPATCHED", "PROCESSING"] } };
   if (filter === "delivered") return { status: "DELIVERED" };
   if (filter === "cancelled") return { status: "CANCELLED" };
   if (filter === "high" || filter === "high-priority") return { priority: "High" };
@@ -311,8 +355,9 @@ export async function GET(request: Request) {
     const conditions: Prisma.OrderWhereInput[] = [];
     const dateRange = orderDateRange(searchParams, now);
     const filterCondition = orderFilterCondition(filter, now, upcoming);
+    const dateCondition = getOrderDateWhereForFilter({ activeTab: filter, dateRange });
     if (filterCondition) conditions.push(filterCondition);
-    if (dateRange) conditions.push(orderDateCondition(dateRange));
+    if (dateCondition) conditions.push(dateCondition);
     const where: Prisma.OrderWhereInput = {
       shopId,
       ...(conditions.length > 0 ? { AND: conditions } : {}),
