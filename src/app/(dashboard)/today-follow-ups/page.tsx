@@ -887,7 +887,7 @@ export default function TodayFollowUpsPage() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-none pb-24">
+    <div className="mx-auto flex w-full max-w-none flex-col pb-6 lg:h-[calc(100dvh-4rem)] lg:min-h-0 lg:overflow-hidden lg:pb-0">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-brand-700 dark:text-brand-300">Daily recovery queue</p>
@@ -991,8 +991,8 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <div className="mt-4 grid w-full min-w-0 gap-5 overflow-x-hidden lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)] lg:items-start">
-        <main ref={listRef} className="min-w-0 space-y-5 overscroll-y-contain scroll-smooth lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pr-1">
+      <div className="mt-4 grid w-full min-w-0 gap-5 overflow-x-hidden lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(380px,440px)] lg:items-stretch lg:overflow-hidden">
+        <main ref={listRef} className="min-w-0 space-y-5 overscroll-y-contain scroll-smooth lg:min-h-0 lg:overflow-y-auto lg:pb-2 lg:pr-1">
           <ScheduledQueueSection
             customers={visibleScheduled}
             total={scheduled.length}
@@ -2061,7 +2061,7 @@ function ActionPanel({
   };
 
   return (
-    <aside className="fixed inset-0 z-[60] bg-black/40 lg:sticky lg:top-4 lg:z-0 lg:h-[calc(100dvh-2rem)] lg:w-full lg:min-w-0 lg:bg-transparent">
+    <aside className="fixed inset-0 z-[60] bg-black/40 lg:relative lg:inset-auto lg:z-0 lg:h-full lg:w-full lg:min-w-0 lg:bg-transparent">
       <div className="ui-surface-elevated ml-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden border shadow-xl lg:h-full lg:min-h-0 lg:max-w-none lg:rounded-xl lg:shadow-sm">
         <div className="ui-surface-muted grid shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:flex lg:items-start lg:justify-between lg:gap-3 lg:p-4">
           <button
