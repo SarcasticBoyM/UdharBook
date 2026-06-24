@@ -5,11 +5,15 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
+import { parseDeliveryLocation } from "@/lib/order-delivery-location";
 
 const publicOrderSchema = z.object({
   customerName: z.string().trim().min(1, "Customer name is required.").max(120),
   mobile: z.string().trim().min(1, "Mobile number is required.").max(30),
   address: z.string().trim().max(300).optional().nullable(),
+  deliveryLocation: z.string().trim().max(1000).optional().nullable(),
+  deliveryLocationText: z.string().trim().max(1000).optional().nullable(),
+  deliveryLocationUrl: z.string().trim().max(1000).optional().nullable(),
   orderText: z.string().trim().min(1, "Order details are required.").max(4000),
   deliveryDate: z.string().optional().nullable(),
   website: z.string().optional().nullable(),
@@ -92,6 +96,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
       return NextResponse.json({ success: false, error: "Enter a valid mobile number." }, { status: 400 });
     }
     const deliveryDate = parseDeliveryDate(payload.deliveryDate);
+    const deliveryLocation = parseDeliveryLocation(payload.deliveryLocation ?? payload.deliveryLocationText ?? payload.deliveryLocationUrl);
     const duplicateWindowStart = new Date(Date.now() - 60_000);
     const orderOwner = await prisma.user.findFirst({
       where: {
@@ -143,7 +148,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
             contactNumber: storedMobile || mobile,
             outstandingBalance: 0,
             status: "PENDING",
-            geoAddress: payload.address || undefined,
+            geoAddress: payload.address || (deliveryLocation.deliveryLocationUrl ? undefined : deliveryLocation.deliveryLocationText ?? undefined),
             notes: "Source: Customer Order Link",
           },
           select: { id: true },
@@ -159,6 +164,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
           createdById: orderOwner.id,
           orderDetails: payload.orderText,
           preferredDeliveryDate: deliveryDate,
+          deliveryLocationText: deliveryLocation.deliveryLocationText,
+          deliveryLocationUrl: deliveryLocation.deliveryLocationUrl,
           priority: "Normal",
           status: "ORDER_RECEIVED",
           sourceModule: "PUBLIC_ORDER_LINK",
@@ -205,6 +212,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
         mobile,
         orderText: payload.orderText,
         deliveryDate: payload.deliveryDate || null,
+        deliveryLocation: deliveryLocation.deliveryLocationText,
       },
     }, { status: 201 });
   } catch (error) {

@@ -16,6 +16,7 @@ type SubmittedSummary = {
   mobile: string;
   orderText: string;
   deliveryDate: string | null;
+  deliveryLocation?: string | null;
 };
 
 export default function PublicCustomerOrderPage() {
@@ -25,6 +26,7 @@ export default function PublicCustomerOrderPage() {
   const [customerName, setCustomerName] = useState("");
   const [mobile, setMobile] = useState("");
   const [address, setAddress] = useState("");
+  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [orderText, setOrderText] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [website, setWebsite] = useState("");
@@ -63,14 +65,14 @@ export default function PublicCustomerOrderPage() {
       const res = await fetch(`/vcard/order-link/${encodeURIComponent(token)}/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerName, mobile, address, orderText, deliveryDate, website }),
+        body: JSON.stringify({ customerName, mobile, address, deliveryLocation, orderText, deliveryDate, website }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.success === false) {
         setError(data.error ?? "Could not submit order.");
         return;
       }
-      setSummary(data.summary ?? { customerName, mobile, orderText, deliveryDate: deliveryDate || null });
+      setSummary(data.summary ?? { customerName, mobile, orderText, deliveryDate: deliveryDate || null, deliveryLocation: deliveryLocation || null });
     } catch {
       setError("Could not submit order. Please check your connection and retry.");
     } finally {
@@ -117,6 +119,7 @@ export default function PublicCustomerOrderPage() {
               <p>{summary.mobile}</p>
               <p className="mt-3 whitespace-pre-wrap">{summary.orderText}</p>
               {summary.deliveryDate && <p className="mt-3">Delivery date: {summary.deliveryDate}</p>}
+              {summary.deliveryLocation && <p className="mt-3 whitespace-pre-wrap">Delivery Location: {summary.deliveryLocation}</p>}
             </div>
           </div>
         </div>
@@ -146,6 +149,10 @@ export default function PublicCustomerOrderPage() {
             <label className="block">
               <span className="text-sm font-semibold text-slate-700">Address / Area</span>
               <input value={address} onChange={(event) => setAddress(event.target.value)} maxLength={300} className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base" />
+            </label>
+            <label className="block">
+              <span className="text-sm font-semibold text-slate-700">Delivery Location / Maps Link</span>
+              <textarea value={deliveryLocation} onChange={(event) => setDeliveryLocation(event.target.value)} maxLength={1000} rows={2} placeholder="Area / address / Google Maps link" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-base" />
             </label>
             <label className="block">
               <span className="text-sm font-semibold text-slate-700">Order Details</span>

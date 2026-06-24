@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
 import { notifyCustomerAdded, notifyOrderCreated, notifyOrderStatusChanged } from "@/lib/notifications";
+import { parseDeliveryLocation } from "@/lib/order-delivery-location";
 
 const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
@@ -32,6 +33,9 @@ const createSchema = z.object({
   }).optional(),
   orderDetails: z.string().trim().min(1),
   preferredDeliveryDate: z.string().optional().nullable(),
+  deliveryLocation: z.string().max(1000).optional().nullable(),
+  deliveryLocationText: z.string().max(1000).optional().nullable(),
+  deliveryLocationUrl: z.string().max(1000).optional().nullable(),
   priority: prioritySchema.default("Normal"),
   clientRequestId: z.string().trim().min(8).max(120).optional(),
 });
@@ -42,6 +46,9 @@ const patchSchema = z.object({
   status: z.enum(["ORDER_RECEIVED", "DISPATCHED", "PENDING", "PROCESSING", "DELIVERED", "CANCELLED"]).optional(),
   orderDetails: z.string().trim().min(1).optional(),
   preferredDeliveryDate: z.string().optional().nullable(),
+  deliveryLocation: z.string().max(1000).optional().nullable(),
+  deliveryLocationText: z.string().max(1000).optional().nullable(),
+  deliveryLocationUrl: z.string().max(1000).optional().nullable(),
   priority: prioritySchema.optional(),
 });
 
@@ -497,6 +504,7 @@ export async function POST(request: Request) {
     const body = createSchema.parse(payload);
     if (!body.customerId && !body.newCustomer) throw new Error("CUSTOMER_REQUIRED");
     const preferredDeliveryDate = parseOptionalDate(body.preferredDeliveryDate);
+    const deliveryLocation = parseDeliveryLocation(body.deliveryLocation ?? body.deliveryLocationText ?? body.deliveryLocationUrl);
     const order = await prisma.$transaction(async (tx) => {
       logger.info("order_create_transaction_start", { requestId, shopId, userId: session.id, role: session.role, customerId: body.customerId ?? null, hasNewCustomer: Boolean(body.newCustomer) });
       let customer: { id: string };
@@ -541,6 +549,8 @@ export async function POST(request: Request) {
           createdById: session.id,
           orderDetails: body.orderDetails,
           preferredDeliveryDate,
+          deliveryLocationText: deliveryLocation.deliveryLocationText,
+          deliveryLocationUrl: deliveryLocation.deliveryLocationUrl,
           priority: body.priority,
           createdAt: { gte: duplicateWindowStart },
         },
@@ -555,6 +565,8 @@ export async function POST(request: Request) {
           createdById: session.id,
           orderDetails: body.orderDetails,
           preferredDeliveryDate,
+          deliveryLocationText: deliveryLocation.deliveryLocationText,
+          deliveryLocationUrl: deliveryLocation.deliveryLocationUrl,
           priority: body.priority,
           status: legacyReceivedStatus,
           sourceModule: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "NEW_CUSTOMER_ORDER" : "ORDER_DESK",
@@ -649,6 +661,9 @@ export async function PATCH(request: Request) {
     const body = patchSchema.parse(payload);
     const action = body.action ?? actionForStatus(body.status as OrderStatus | undefined);
     const preferredDeliveryDate = body.preferredDeliveryDate === undefined ? undefined : parseOptionalDate(body.preferredDeliveryDate);
+    const deliveryLocation = body.deliveryLocation === undefined && body.deliveryLocationText === undefined && body.deliveryLocationUrl === undefined
+      ? undefined
+      : parseDeliveryLocation(body.deliveryLocation ?? body.deliveryLocationText ?? body.deliveryLocationUrl);
     const now = new Date();
     let previousStatusForActivity: OrderStatus | null = null;
 
@@ -679,6 +694,10 @@ export async function PATCH(request: Request) {
         data: {
           ...(body.orderDetails ? { orderDetails: body.orderDetails } : {}),
           ...(preferredDeliveryDate !== undefined ? { preferredDeliveryDate } : {}),
+          ...(deliveryLocation !== undefined ? {
+            deliveryLocationText: deliveryLocation.deliveryLocationText,
+            deliveryLocationUrl: deliveryLocation.deliveryLocationUrl,
+          } : {}),
           ...(body.priority ? { priority: body.priority } : {}),
           status: nextStatus,
           deliveredAt: nextStatus === "DELIVERED" ? now : existing.deliveredAt,

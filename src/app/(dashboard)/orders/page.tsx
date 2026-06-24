@@ -17,6 +17,8 @@ type OrderRow = {
   id: string;
   orderDetails: string;
   preferredDeliveryDate: string | null;
+  deliveryLocationText?: string | null;
+  deliveryLocationUrl?: string | null;
   priority: string;
   status: OrderStatus;
   visitSource: string | null;
@@ -134,7 +136,15 @@ function buildOrderShareText(order: OrderShareSource) {
   const customerName = String(order.customerName || order.customer?.partyName || order.submittedCustomerName || order.partyName || "").trim();
   const contact = cleanContact(order.contactNumber || order.mobile || order.customer?.contactNumber || order.submittedCustomerMobile);
   const orderText = String(order.orderText || order.itemsText || order.description || order.orderDetails || "").trim();
-  return [customerName, contact, orderText].filter(Boolean).join("\n");
+  const deliveryLocation = String(order.deliveryLocationText || order.deliveryLocationUrl || "").trim();
+  const deliveryLine = deliveryLocation ? `Delivery Location: ${deliveryLocation}` : "";
+  return [customerName, contact, orderText, deliveryLine].filter(Boolean).join("\n");
+}
+
+function deliveryLocationLabel(order: Pick<OrderRow, "deliveryLocationText" | "deliveryLocationUrl">) {
+  if (order.deliveryLocationText) return order.deliveryLocationText;
+  if (order.deliveryLocationUrl) return "Map link added";
+  return "";
 }
 
 function normalizedStatus(status: OrderStatus) {
@@ -445,6 +455,7 @@ export default function OrderDeskPage() {
   const [orderDetails, setOrderDetails] = useState("");
   const [structuredItems, setStructuredItems] = useState<StructuredOrderItem[]>(emptyStructuredItems);
   const [deliveryDate, setDeliveryDate] = useState("");
+  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [priority, setPriority] = useState("Normal");
   const loadAbortRef = useRef<AbortController | null>(null);
   const canManageOrders = canUseOrders(role);
@@ -748,6 +759,7 @@ export default function OrderDeskPage() {
     setOrderDetails("");
     setStructuredItems(emptyStructuredItems());
     setDeliveryDate("");
+    setDeliveryLocation("");
     setPriority("Normal");
     setEditor({ mode: "create" });
   }
@@ -757,6 +769,7 @@ export default function OrderDeskPage() {
     setOrderDetails(order.orderDetails);
     setStructuredItems(emptyStructuredItems());
     setDeliveryDate(toInputDate(order.preferredDeliveryDate));
+    setDeliveryLocation(order.deliveryLocationText ?? order.deliveryLocationUrl ?? "");
     setPriority(order.priority);
     setMoreDetailsOpen(false);
     setEditor({ mode: "edit", order });
@@ -775,6 +788,7 @@ export default function OrderDeskPage() {
               customerMode: "EXISTING_CUSTOMER",
               orderDetails,
               preferredDeliveryDate: datePayload(deliveryDate),
+              deliveryLocation,
               priority,
               clientRequestId,
             }
@@ -783,6 +797,7 @@ export default function OrderDeskPage() {
               newCustomer,
               orderDetails,
               preferredDeliveryDate: datePayload(deliveryDate),
+              deliveryLocation,
               priority,
               clientRequestId,
             }
@@ -791,6 +806,7 @@ export default function OrderDeskPage() {
             action: "EDIT",
             orderDetails,
             preferredDeliveryDate: datePayload(deliveryDate),
+            deliveryLocation,
             priority,
           };
 
@@ -1281,6 +1297,17 @@ export default function OrderDeskPage() {
               </div>
             </div>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{order.orderDetails}</p>
+            {deliveryLocationLabel(order) && (
+              <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+                <p className="font-bold text-slate-700 dark:text-slate-200">Delivery Location</p>
+                <p className="mt-1 line-clamp-2 whitespace-pre-wrap">{deliveryLocationLabel(order)}</p>
+                {order.deliveryLocationUrl && (
+                  <a href={order.deliveryLocationUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-brand-700 dark:border-slate-700 dark:text-brand-200">
+                    Open Map
+                  </a>
+                )}
+              </div>
+            )}
             <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-6">
               <span>Qty: {orderQuantity(order)}</span>
               <span>Delivery: {formatDate(order.preferredDeliveryDate)}</span>
@@ -1398,6 +1425,14 @@ export default function OrderDeskPage() {
                         </div>
                         {cleanContact(orderCustomerContact(order)) && <p className="mt-1 text-xs text-slate-500">{cleanContact(orderCustomerContact(order))}</p>}
                         <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{order.orderDetails}</p>
+                        {deliveryLocationLabel(order) && (
+                          <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                            Delivery Location: {deliveryLocationLabel(order)}
+                            {order.deliveryLocationUrl && (
+                              <a href={order.deliveryLocationUrl} target="_blank" rel="noopener noreferrer" className="ml-2 font-bold text-brand-700 dark:text-brand-200">Open Map</a>
+                            )}
+                          </p>
+                        )}
                         <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
                           <span>Qty: {orderQuantity(order)}</span>
                           <span>Created: {formatDateTime(order.createdAt)}</span>
@@ -1570,6 +1605,10 @@ export default function OrderDeskPage() {
                     <option>Urgent</option>
                   </select>
                 </div>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Delivery Location</label>
+                <textarea value={deliveryLocation} onChange={(e) => setDeliveryLocation(e.target.value)} maxLength={1000} rows={2} placeholder="Area / address / Google Maps link" className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
               </div>
             </div>
 

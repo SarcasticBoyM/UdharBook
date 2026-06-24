@@ -701,6 +701,8 @@ model Order {
   staffVisit            StaffVisit? @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
   orderDetails          String
   preferredDeliveryDate DateTime?
+  deliveryLocationText  String?
+  deliveryLocationUrl   String?
   priority              String      @default("Normal")
   status                OrderStatus @default(ORDER_RECEIVED)
   sourceModule          String      @default("FIELD_VISIT")
