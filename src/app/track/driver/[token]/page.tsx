@@ -8,6 +8,8 @@ type PublicLocation = {
   success: boolean;
   driverName?: string;
   isActive?: boolean;
+  latestPoint?: { lat: number; lng: number; accuracy: number | null; capturedAt: string } | null;
+  points?: { lat: number; lng: number; accuracy: number | null; capturedAt: string }[];
   lat: number | null;
   lng: number | null;
   accuracy: number | null;
@@ -68,6 +70,13 @@ export default function PublicDriverTrackingPage() {
             <span>Started: {timeLabel(data?.tripStartedAt)}</span>
             <span>Accuracy: {data?.accuracy ? `${Math.round(data.accuracy)}m` : "-"}</span>
           </div>
+          {data?.latestPoint && (
+            <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">
+              <p className="font-bold">Latest location</p>
+              <p>{data.latestPoint.lat.toFixed(6)}, {data.latestPoint.lng.toFixed(6)}</p>
+              <p className="text-slate-500">{timeLabel(data.latestPoint.capturedAt)}</p>
+            </div>
+          )}
         </section>
 
         <section className="h-[70vh] min-h-[420px] overflow-hidden rounded-xl border bg-white shadow-sm">
@@ -79,6 +88,23 @@ export default function PublicDriverTrackingPage() {
               <p>{data?.success === false ? data.error : "Location not available yet"}</p>
             </div>
           )}
+        </section>
+
+        <section className="rounded-xl border bg-white p-4 shadow-sm">
+          <h2 className="font-bold">Location Points</h2>
+          <p className="text-sm text-slate-500">Latest {data?.points?.length ?? 0} points with timestamp.</p>
+          <div className="mt-3 max-h-96 overflow-auto">
+            <div className="space-y-2">
+              {(data?.points ?? []).map((point, index) => (
+                <div key={`${point.capturedAt}-${index}`} className={`rounded-lg border p-3 text-sm ${index === (data?.points?.length ?? 0) - 1 ? "border-brand-300 bg-brand-50" : ""}`}>
+                  <p className="font-semibold">Point {index + 1} | {timeLabel(point.capturedAt)}</p>
+                  <p>Lat: {point.lat.toFixed(6)} | Lng: {point.lng.toFixed(6)}</p>
+                  <p className="text-slate-500">Accuracy: {point.accuracy ? `${Math.round(point.accuracy)}m` : "-"}</p>
+                </div>
+              ))}
+              {(!data?.points || data.points.length === 0) && <p className="text-sm text-slate-500">No location points available.</p>}
+            </div>
+          </div>
         </section>
       </div>
     </main>

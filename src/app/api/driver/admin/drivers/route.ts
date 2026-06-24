@@ -24,8 +24,10 @@ function serializeDriver(driver: {
     lastLng: number | null;
     lastAccuracy: number | null;
     lastLocationAt: Date | null;
+    totalDistanceMeters: number;
+    pointCount: number;
   }[];
-}) {
+}, today: { totalDistanceMeters: number; tripCount: number }) {
   const trip = driver.driverTrips[0] ?? null;
   return {
     id: driver.id,
@@ -35,10 +37,15 @@ function serializeDriver(driver: {
     linkEnabled: driver.driverTrackingLink?.isEnabled ?? false,
     trackingLink: driver.driverTrackingLink ? publicTrackingUrl(driver.driverTrackingLink.token) : null,
     trip,
+    currentKm: trip ? Number((trip.totalDistanceMeters / 1000).toFixed(2)) : 0,
+    todayKm: Number((today.totalDistanceMeters / 1000).toFixed(2)),
+    tripCountToday: today.tripCount,
   };
 }
 
 async function loadDrivers(shopId: string) {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
   const drivers = await prisma.user.findMany({
     where: { shopId, role: "DRIVER" },
     select: {
@@ -59,12 +66,24 @@ async function loadDrivers(shopId: string) {
           lastLng: true,
           lastAccuracy: true,
           lastLocationAt: true,
+          totalDistanceMeters: true,
+          pointCount: true,
         },
       },
     },
     orderBy: { name: "asc" },
   });
-  return drivers.map(serializeDriver);
+  const todayTrips = await prisma.driverTrip.groupBy({
+    by: ["driverId"],
+    where: { shopId, startedAt: { gte: todayStart } },
+    _sum: { totalDistanceMeters: true },
+    _count: { id: true },
+  });
+  const todayByDriver = new Map(todayTrips.map((row) => [row.driverId, {
+    totalDistanceMeters: row._sum.totalDistanceMeters ?? 0,
+    tripCount: row._count.id,
+  }]));
+  return drivers.map((driver) => serializeDriver(driver, todayByDriver.get(driver.id) ?? { totalDistanceMeters: 0, tripCount: 0 }));
 }
 
 export async function GET() {

@@ -483,6 +483,13 @@ model DriverTrip {
   lastSpeed      Float?
   lastHeading    Float?
   lastLocationAt DateTime?
+  totalDistanceMeters Float       @default(0)
+  movingDurationSeconds Int       @default(0)
+  idleDurationSeconds Int         @default(0)
+  pointCount     Int              @default(0)
+  maxSpeedKmph   Float?
+  avgSpeedKmph   Float?
+  lastMovementAt DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   points         DriverLocationPoint[]
@@ -505,6 +512,10 @@ model DriverLocationPoint {
   accuracy   Float?
   speed      Float?
   heading    Float?
+  distanceFromPreviousMeters Float?
+  calculatedSpeedKmph Float?
+  isDistanceIgnored Boolean     @default(false)
+  ignoreReason String?
   capturedAt DateTime
   createdAt  DateTime    @default(now())
 

@@ -17,6 +17,7 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
     where: { shopId: link.shopId, driverId: link.driverId },
     orderBy: { updatedAt: "desc" },
     select: {
+      id: true,
       status: true,
       startedAt: true,
       endedAt: true,
@@ -26,13 +27,24 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
       lastLocationAt: true,
     },
   });
+  const points = trip?.id
+    ? await prisma.driverLocationPoint.findMany({
+        where: { tripId: trip.id },
+        orderBy: { capturedAt: "desc" },
+        take: 100,
+        select: { lat: true, lng: true, accuracy: true, capturedAt: true },
+      })
+    : [];
+  const latestPoint = points[0] ?? null;
   return NextResponse.json({
     success: true,
     driverName: link.driver.name,
     isActive: trip?.status === "ACTIVE",
-    lat: trip?.lastLat ?? null,
-    lng: trip?.lastLng ?? null,
-    accuracy: trip?.lastAccuracy ?? null,
+    latestPoint,
+    points: [...points].reverse(),
+    lat: latestPoint?.lat ?? trip?.lastLat ?? null,
+    lng: latestPoint?.lng ?? trip?.lastLng ?? null,
+    accuracy: latestPoint?.accuracy ?? trip?.lastAccuracy ?? null,
     lastLocationAt: trip?.lastLocationAt ?? null,
     tripStartedAt: trip?.startedAt ?? null,
     tripEndedAt: trip?.endedAt ?? null,

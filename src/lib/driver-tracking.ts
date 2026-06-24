@@ -15,6 +15,47 @@ export function validCoordinate(lat: number, lng: number) {
   return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat === 0 && lng === 0);
 }
 
+function radians(value: number) {
+  return value * Math.PI / 180;
+}
+
+export function haversineMeters(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
+  const earthRadiusMeters = 6371000;
+  const deltaLat = radians(to.lat - from.lat);
+  const deltaLng = radians(to.lng - from.lng);
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(deltaLng / 2) ** 2;
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export function calculateDriverDistance(input: {
+  previous?: { lat: number; lng: number; capturedAt: Date } | null;
+  current: { lat: number; lng: number; accuracy?: number | null; capturedAt: Date };
+}) {
+  if (!validCoordinate(input.current.lat, input.current.lng)) {
+    return { distanceMeters: 0, speedKmph: null, ignored: true, reason: "INVALID_COORDINATES" };
+  }
+  if (input.current.accuracy !== null && input.current.accuracy !== undefined && input.current.accuracy > 100) {
+    return { distanceMeters: 0, speedKmph: null, ignored: true, reason: "LOW_ACCURACY" };
+  }
+  if (!input.previous || !validCoordinate(input.previous.lat, input.previous.lng)) {
+    return { distanceMeters: 0, speedKmph: null, ignored: false, reason: null };
+  }
+  const seconds = (input.current.capturedAt.getTime() - input.previous.capturedAt.getTime()) / 1000;
+  if (seconds <= 0) return { distanceMeters: 0, speedKmph: null, ignored: true, reason: "NON_POSITIVE_TIME_DIFF" };
+  const distanceMeters = haversineMeters(input.previous, input.current);
+  const speedKmph = distanceMeters / seconds * 3.6;
+  if (distanceMeters < 10) return { distanceMeters, speedKmph, ignored: true, reason: "MOVEMENT_UNDER_10M" };
+  if (speedKmph > 120) return { distanceMeters, speedKmph, ignored: true, reason: "UNREALISTIC_SPEED" };
+  if (distanceMeters > 5000 && seconds < 300) return { distanceMeters, speedKmph, ignored: true, reason: "GPS_JUMP" };
+  return { distanceMeters, speedKmph, ignored: false, reason: null };
+}
+
+export function km(value?: number | null) {
+  return Number(((value ?? 0) / 1000).toFixed(2));
+}
+
 export function trackingToken() {
   return crypto.randomBytes(32).toString("base64url");
 }

@@ -6,10 +6,31 @@ import { Copy, Loader2, MapPin, Play, Share2, Square } from "lucide-react";
 type Trip = {
   id: string;
   status: "ACTIVE" | "ENDED";
+  startedAt: string;
+  endedAt: string | null;
   lastLat: number | null;
   lastLng: number | null;
   lastAccuracy: number | null;
+  lastSpeed?: number | null;
   lastLocationAt: string | null;
+  totalDistanceMeters: number;
+  movingDurationSeconds: number;
+  idleDurationSeconds: number;
+  pointCount: number;
+  maxSpeedKmph?: number | null;
+  avgSpeedKmph?: number | null;
+};
+
+type TripPoint = {
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  speed: number | null;
+  distanceFromPreviousMeters: number | null;
+  calculatedSpeedKmph: number | null;
+  isDistanceIgnored: boolean;
+  ignoreReason: string | null;
+  capturedAt: string;
 };
 
 type DriverMe = {
@@ -22,6 +43,17 @@ type DriverMe = {
 function timeLabel(value?: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function km(meters?: number | null) {
+  return ((meters ?? 0) / 1000).toFixed(2);
+}
+
+function durationLabel(seconds?: number | null) {
+  const value = Math.max(0, seconds ?? 0);
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
 function positionPayload(position: GeolocationPosition) {
@@ -40,6 +72,8 @@ export default function DriverTripPage() {
   const [gpsStatus, setGpsStatus] = useState("GPS permission pending");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [recentTrips, setRecentTrips] = useState<Trip[]>([]);
+  const [detailTrip, setDetailTrip] = useState<(Trip & { points: TripPoint[] }) | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const lastSentRef = useRef(0);
 
@@ -49,6 +83,19 @@ export default function DriverTripPage() {
     if (res.ok) setData(json);
     else setError(json.error ?? "Could not load driver trip.");
   }, []);
+
+  const loadTrips = useCallback(async () => {
+    const res = await fetch("/api/driver/trips?dateFilter=all", { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) setRecentTrips(json.trips ?? []);
+  }, []);
+
+  async function viewTrip(tripId: string) {
+    const res = await fetch(`/api/driver/trips/${tripId}`, { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) setDetailTrip(json.trip);
+    else setError(json.error ?? "Could not load trip detail.");
+  }
 
   const sendLocation = useCallback(async (position: GeolocationPosition, force = false) => {
     const now = Date.now();
@@ -137,8 +184,9 @@ export default function DriverTripPage() {
       setBusy(false);
       if (!res.ok) setError(json.error ?? "Could not stop trip.");
       else {
-        setGpsStatus("Trip ended");
-        await load();
+      setGpsStatus("Trip ended");
+      await load();
+      await loadTrips();
       }
     };
     if ("geolocation" in navigator) {
@@ -165,8 +213,9 @@ export default function DriverTripPage() {
 
   useEffect(() => {
     void load();
+    void loadTrips();
     return stopWatch;
-  }, [load, stopWatch]);
+  }, [load, loadTrips, stopWatch]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -193,10 +242,63 @@ export default function DriverTripPage() {
         <p className="mt-1 text-3xl font-black">{live ? "Live" : data?.trip?.status === "ENDED" ? "Ended" : "Not Started"}</p>
         <div className="mt-4 grid gap-2 text-sm text-slate-600 dark:text-slate-300">
           <span>Location: {gpsStatus}</span>
+          <span>Start time: {timeLabel(data?.trip?.startedAt)}</span>
+          <span>Current duration: {durationLabel(data?.trip?.movingDurationSeconds)}</span>
+          <span>Current trip KM: {km(data?.trip?.totalDistanceMeters)}</span>
           <span>Last updated: {timeLabel(data?.trip?.lastLocationAt)}</span>
           <span>Accuracy: {data?.trip?.lastAccuracy ? `${Math.round(data.trip.lastAccuracy)}m` : "-"}</span>
+          <span>Total points: {data?.trip?.pointCount ?? 0}</span>
         </div>
       </section>
+
+      <section className="rounded-xl border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="font-bold">Recent Trip Logs</h2>
+        <div className="mt-3 space-y-2">
+          {recentTrips.slice(0, 10).map((trip) => (
+            <div key={trip.id} className="rounded-lg border p-3 text-sm dark:border-slate-800">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold">{timeLabel(trip.startedAt)} - {timeLabel(trip.endedAt)}</p>
+                  <p className="text-slate-500">{trip.status} | {km(trip.totalDistanceMeters)} KM | {durationLabel(trip.movingDurationSeconds)} | {trip.pointCount} points</p>
+                </div>
+                <button type="button" onClick={() => void viewTrip(trip.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">View Details</button>
+              </div>
+            </div>
+          ))}
+          {recentTrips.length === 0 && <p className="text-sm text-slate-500">No trip logs yet.</p>}
+        </div>
+      </section>
+
+      {detailTrip && (
+        <section className="rounded-xl border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="font-bold">Trip Detail</h2>
+              <p className="text-sm text-slate-500">{km(detailTrip.totalDistanceMeters)} KM | {durationLabel(detailTrip.movingDurationSeconds)} | {detailTrip.pointCount} points</p>
+            </div>
+            <button type="button" onClick={() => setDetailTrip(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Close</button>
+          </div>
+          <div className="mt-3 max-h-80 overflow-auto rounded-lg border dark:border-slate-800">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-900">
+                <tr><th className="p-2">Time</th><th className="p-2">Lat</th><th className="p-2">Lng</th><th className="p-2">Accuracy</th><th className="p-2">Speed</th><th className="p-2">Distance</th></tr>
+              </thead>
+              <tbody>
+                {detailTrip.points.map((point, index) => (
+                  <tr key={`${point.capturedAt}-${index}`} className="border-t dark:border-slate-800">
+                    <td className="p-2">{timeLabel(point.capturedAt)}</td>
+                    <td className="p-2">{point.lat.toFixed(6)}</td>
+                    <td className="p-2">{point.lng.toFixed(6)}</td>
+                    <td className="p-2">{point.accuracy ? `${Math.round(point.accuracy)}m` : "-"}</td>
+                    <td className="p-2">{point.calculatedSpeedKmph ? `${point.calculatedSpeedKmph.toFixed(1)} km/h` : "-"}</td>
+                    <td className="p-2">{point.distanceFromPreviousMeters ? `${Math.round(point.distanceFromPreviousMeters)}m` : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <button type="button" disabled={busy || live} onClick={() => void startTrip()} className="inline-flex min-h-16 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-base font-bold text-white disabled:opacity-50">

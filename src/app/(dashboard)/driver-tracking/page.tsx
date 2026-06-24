@@ -18,7 +18,43 @@ type DriverRow = {
     lastLng: number | null;
     lastAccuracy: number | null;
     lastLocationAt: string | null;
+    totalDistanceMeters: number;
+    pointCount: number;
   } | null;
+  currentKm: number;
+  todayKm: number;
+  tripCountToday: number;
+};
+
+type TripLog = {
+  id: string;
+  status: "ACTIVE" | "ENDED";
+  startedAt: string;
+  endedAt: string | null;
+  totalDistanceMeters: number;
+  movingDurationSeconds: number;
+  pointCount: number;
+  driver: { id: string; name: string };
+};
+
+type TripDetail = TripLog & {
+  startLat: number | null;
+  startLng: number | null;
+  endLat: number | null;
+  endLng: number | null;
+  maxSpeedKmph: number | null;
+  avgSpeedKmph: number | null;
+  points: {
+    lat: number;
+    lng: number;
+    accuracy: number | null;
+    speed: number | null;
+    distanceFromPreviousMeters: number | null;
+    calculatedSpeedKmph: number | null;
+    isDistanceIgnored: boolean;
+    ignoreReason: string | null;
+    capturedAt: string;
+  }[];
 };
 
 function timeAgo(value?: string | null) {
@@ -33,11 +69,30 @@ function mapsEmbed(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}&z=16&output=embed`;
 }
 
+function km(meters?: number | null) {
+  return ((meters ?? 0) / 1000).toFixed(2);
+}
+
+function timeLabel(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function durationLabel(seconds?: number | null) {
+  const value = Math.max(0, seconds ?? 0);
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
 export default function DriverTrackingPage() {
   const [drivers, setDrivers] = useState<DriverRow[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [dateFilter, setDateFilter] = useState("today");
+  const [tripLogs, setTripLogs] = useState<TripLog[]>([]);
+  const [tripDetail, setTripDetail] = useState<TripDetail | null>(null);
 
   const selected = useMemo(() => drivers.find((driver) => driver.id === selectedId) ?? drivers[0] ?? null, [drivers, selectedId]);
 
@@ -53,6 +108,21 @@ export default function DriverTrackingPage() {
       setMessage(data.error ?? "Could not load drivers.");
     }
   }, []);
+
+  const loadTripLogs = useCallback(async () => {
+    const params = new URLSearchParams({ dateFilter });
+    if (selected?.id) params.set("driverId", selected.id);
+    const res = await fetch(`/api/driver/trips?${params.toString()}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setTripLogs(data.trips ?? []);
+  }, [dateFilter, selected?.id]);
+
+  async function viewTripDetail(tripId: string) {
+    const res = await fetch(`/api/driver/trips/${tripId}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setTripDetail(data.trip);
+    else setMessage(data.error ?? "Could not load trip detail.");
+  }
 
   async function linkAction(driverId: string, action: "REGENERATE" | "REVOKE" | "ENABLE") {
     const res = await fetch("/api/driver/admin/drivers", {
@@ -87,6 +157,10 @@ export default function DriverTrackingPage() {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  useEffect(() => {
+    void loadTripLogs();
+  }, [loadTripLogs]);
+
   const selectedTrip = selected?.trip;
   const hasMap = Boolean(selectedTrip?.lastLat && selectedTrip.lastLng);
 
@@ -118,6 +192,7 @@ export default function DriverTrackingPage() {
                 </span>
               </div>
               <p className="mt-2 text-xs text-slate-500">Updated {timeAgo(driver.trip?.lastLocationAt)}</p>
+              <p className="mt-1 text-xs font-semibold text-slate-600">Today {driver.todayKm.toFixed(2)} KM | Current {driver.currentKm.toFixed(2)} KM | {driver.tripCountToday} trips</p>
             </button>
           ))}
           {drivers.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No drivers found. Create a DRIVER in Staff Management.</div>}
@@ -131,12 +206,14 @@ export default function DriverTrackingPage() {
                   <h2 className="text-xl font-bold">{selected.name}</h2>
                   <p className="text-sm text-slate-500">{selected.trip?.status === "ACTIVE" ? "Live trip active" : selected.trip ? "Trip ended" : "No trip yet"}</p>
                   <p className="text-sm text-slate-500">Last updated: {timeAgo(selected.trip?.lastLocationAt)}</p>
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Today KM: {selected.todayKm.toFixed(2)} | Current KM: {selected.currentKm.toFixed(2)} | Trip count: {selected.tripCountToday}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => void copy(selected.trackingLink)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold"><Copy className="h-4 w-4" /> Copy</button>
                   <button type="button" onClick={() => void share(selected.trackingLink)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold"><Share2 className="h-4 w-4" /> Share</button>
                   <button type="button" onClick={() => void linkAction(selected.id, "REGENERATE")} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold"><RotateCcw className="h-4 w-4" /> Regenerate</button>
                   <button type="button" onClick={() => void linkAction(selected.id, selected.linkEnabled ? "REVOKE" : "ENABLE")} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold"><ShieldOff className="h-4 w-4" /> {selected.linkEnabled ? "Revoke" : "Enable"}</button>
+                  <button type="button" onClick={() => void loadTripLogs()} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold">View Logs</button>
                 </div>
               </div>
 
@@ -151,6 +228,62 @@ export default function DriverTrackingPage() {
                 <a href={`https://www.google.com/maps?q=${selectedTrip.lastLat},${selectedTrip.lastLng}`} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-4 text-sm font-semibold">
                   <MapPin className="h-4 w-4" /> Open in Google Maps
                 </a>
+              )}
+              <div className="rounded-lg border p-3 dark:border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-bold">Trip History</h3>
+                  <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className="min-h-10 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="last7days">Last 7 Days</option>
+                    <option value="thisMonth">This Month</option>
+                    <option value="all">All</option>
+                  </select>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {tripLogs.map((trip) => (
+                    <div key={trip.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-950">
+                      <div>
+                        <p className="font-semibold">{trip.driver.name} | {timeLabel(trip.startedAt)} - {timeLabel(trip.endedAt)}</p>
+                        <p className="text-slate-500">{trip.status} | {km(trip.totalDistanceMeters)} KM | {durationLabel(trip.movingDurationSeconds)} | {trip.pointCount} points</p>
+                      </div>
+                      <button type="button" onClick={() => void viewTripDetail(trip.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">View Details</button>
+                    </div>
+                  ))}
+                  {tripLogs.length === 0 && <p className="text-sm text-slate-500">No trips found.</p>}
+                </div>
+              </div>
+              {tripDetail && (
+                <div className="rounded-lg border p-3 dark:border-slate-800">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold">Trip Detail</h3>
+                      <p className="text-sm text-slate-500">{tripDetail.driver.name} | {km(tripDetail.totalDistanceMeters)} KM | Avg {tripDetail.avgSpeedKmph?.toFixed(1) ?? "-"} km/h | Max {tripDetail.maxSpeedKmph?.toFixed(1) ?? "-"} km/h</p>
+                    </div>
+                    <button type="button" onClick={() => setTripDetail(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Close</button>
+                  </div>
+                  <div className="mt-3 max-h-96 overflow-auto rounded-lg border dark:border-slate-800">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-900">
+                        <tr><th className="p-2">Time</th><th className="p-2">Lat</th><th className="p-2">Lng</th><th className="p-2">Accuracy</th><th className="p-2">Speed</th><th className="p-2">Distance</th><th className="p-2">Valid</th><th className="p-2">Reason</th></tr>
+                      </thead>
+                      <tbody>
+                        {tripDetail.points.map((point, index) => (
+                          <tr key={`${point.capturedAt}-${index}`} className="border-t dark:border-slate-800">
+                            <td className="p-2">{timeLabel(point.capturedAt)}</td>
+                            <td className="p-2">{point.lat.toFixed(6)}</td>
+                            <td className="p-2">{point.lng.toFixed(6)}</td>
+                            <td className="p-2">{point.accuracy ? `${Math.round(point.accuracy)}m` : "-"}</td>
+                            <td className="p-2">{point.calculatedSpeedKmph ? `${point.calculatedSpeedKmph.toFixed(1)} km/h` : "-"}</td>
+                            <td className="p-2">{point.distanceFromPreviousMeters ? `${Math.round(point.distanceFromPreviousMeters)}m` : "-"}</td>
+                            <td className="p-2">{point.isDistanceIgnored ? "Ignored" : "Valid"}</td>
+                            <td className="p-2">{point.ignoreReason ?? "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
             </div>
           ) : (
