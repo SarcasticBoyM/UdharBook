@@ -479,6 +479,7 @@ export default function TodayFollowUpsPage() {
   const sheetHistoryActiveRef = useRef(false);
   const restoreFocusIdRef = useRef<string | null>(null);
   const [mobileSheet, setMobileSheet] = useState(false);
+  const [showGoToTop, setShowGoToTop] = useState(false);
 
   const restoreListFocus = useCallback(() => {
     const customerId = restoreFocusIdRef.current;
@@ -535,6 +536,25 @@ export default function TodayFollowUpsPage() {
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setShowGoToTop(window.scrollY > 400);
+    };
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(update);
+    };
+
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, []);
 
   useEffect(() => {
@@ -1127,6 +1147,17 @@ export default function TodayFollowUpsPage() {
           onSaved={handleSaved}
         />
       </div>
+      {showGoToTop && (
+        <button
+          type="button"
+          aria-label="Go to top"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-full border border-slate-200 bg-slate-950 px-3 text-sm font-bold text-white shadow-lg shadow-slate-900/20 transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:border-slate-700 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-100 sm:px-4 xl:bottom-6"
+        >
+          <ChevronUp className="h-5 w-5" />
+          <span className="hidden sm:inline">Top</span>
+        </button>
+      )}
     </div>
   );
 }
