@@ -504,15 +504,21 @@ export default function TodayFollowUpsPage() {
   }, [restoreListFocus]);
 
   const scrollListElementIntoView = useCallback((element: HTMLElement | null) => {
-    const list = listRef.current;
-    if (!list || !element) return;
-    const listRect = list.getBoundingClientRect();
+    if (!element || !window.matchMedia("(min-width: 1280px)").matches) return;
     const elementRect = element.getBoundingClientRect();
-    if (elementRect.top < listRect.top) {
-      list.scrollBy({ top: elementRect.top - listRect.top, behavior: "smooth" });
-    } else if (elementRect.bottom > listRect.bottom) {
-      list.scrollBy({ top: elementRect.bottom - listRect.bottom, behavior: "smooth" });
-    }
+    const topOffset = 96;
+    const bottomOffset = 120;
+    const comfortableBottom = window.innerHeight - bottomOffset;
+    const alreadyAligned =
+      elementRect.top >= topOffset &&
+      elementRect.bottom <= comfortableBottom &&
+      elementRect.top <= window.innerHeight * 0.45;
+    if (alreadyAligned) return;
+
+    window.scrollTo({
+      top: Math.max(0, window.scrollY + elementRect.top - topOffset),
+      behavior: "smooth",
+    });
   }, []);
 
   useEffect(() => {
@@ -524,12 +530,20 @@ export default function TodayFollowUpsPage() {
   }, []);
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 1023px)");
+    const media = window.matchMedia("(max-width: 1279px)");
     const update = () => setMobileSheet(media.matches);
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    if (!selectedId || mobileSheet) return;
+    window.setTimeout(() => {
+      const target = listRef.current?.querySelector<HTMLElement>(`[data-customer-id="${CSS.escape(selectedId)}"]`) ?? null;
+      scrollListElementIntoView(target);
+    }, 0);
+  }, [mobileSheet, scrollListElementIntoView, selectedId]);
 
   useEffect(() => {
     const onPopState = (event: PopStateEvent) => {
