@@ -920,6 +920,18 @@ export default function TodayFollowUpsPage() {
     [closeCustomer, openCustomer, queueOrder, scrollListElementIntoView]
   );
 
+  const selectedPanel = selected ? (
+    <ActionPanel
+      customer={selected}
+      canAssignTask={isShopAdminRole(currentRole)}
+      canAssignFollowUp={isShopAdminRole(currentRole)}
+      staffOptions={staffOptions}
+      onClose={closeCustomer}
+      onOptimistic={applyOptimisticAction}
+      onSaved={handleSaved}
+    />
+  ) : null;
+
   return (
     <div className="mx-auto w-full max-w-none pb-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1025,7 +1037,7 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <div className="mt-4 grid w-full min-w-0 gap-5 overflow-x-hidden xl:grid-cols-[minmax(0,1fr)_440px] xl:items-start">
+      <div className="mt-4 w-full min-w-0 overflow-x-hidden">
         <main ref={listRef} className="min-w-0 space-y-5 scroll-smooth">
           <ScheduledQueueSection
             customers={visibleScheduled}
@@ -1043,6 +1055,7 @@ export default function TodayFollowUpsPage() {
             onQuickSave={quickSave}
             onCancel={cancelScheduled}
             onTaskStatus={updateLinkedTask}
+            selectedPanel={selectedPanel}
           />
 
           {loading ? (
@@ -1061,6 +1074,7 @@ export default function TodayFollowUpsPage() {
                 selectedId={selectedId}
                 onSelect={openCustomer}
                 onQuickSave={quickSave}
+                selectedPanel={selectedPanel}
               />
               <div ref={sentinelRef} className="h-4" />
               {loadingMore && (
@@ -1078,6 +1092,7 @@ export default function TodayFollowUpsPage() {
                 selectedId={selectedId}
                 onSelect={openCustomer}
                 onQuickSave={quickSave}
+                selectedPanel={selectedPanel}
               />
               <QueueSection
                 title="Today's Follow-ups"
@@ -1086,6 +1101,7 @@ export default function TodayFollowUpsPage() {
                 selectedId={selectedId}
                 onSelect={openCustomer}
                 onQuickSave={quickSave}
+                selectedPanel={selectedPanel}
               />
               <QueueSection
                 title="Recently Contacted"
@@ -1094,6 +1110,7 @@ export default function TodayFollowUpsPage() {
                 selectedId={selectedId}
                 onSelect={openCustomer}
                 onQuickSave={quickSave}
+                selectedPanel={selectedPanel}
               />
               <div ref={sentinelRef} className="h-4" />
               {loadingMore && (
@@ -1115,9 +1132,16 @@ export default function TodayFollowUpsPage() {
                   Completed actions will appear here as staff works the queue.
                 </div>
               ) : (
-                done.map((customer) => (
-                  <DoneCard key={`${customer.id}-${customer.todayAction?.id ?? "done"}`} customer={customer} onOpen={() => openCustomer(customer.id)} />
-                ))
+                done.map((customer) => {
+                  const card = <DoneCard customer={customer} onOpen={() => openCustomer(customer.id)} />;
+                  return selectedId === customer.id && selectedPanel ? (
+                    <SelectedPartyRow key={`${customer.id}-${customer.todayAction?.id ?? "done"}`} panel={selectedPanel}>
+                      {card}
+                    </SelectedPartyRow>
+                  ) : (
+                    <div key={`${customer.id}-${customer.todayAction?.id ?? "done"}`}>{card}</div>
+                  );
+                })
               )}
             </div>
           </section>
@@ -1136,16 +1160,6 @@ export default function TodayFollowUpsPage() {
             </section>
           )}
         </main>
-
-        <ActionPanel
-          customer={selected}
-          canAssignTask={isShopAdminRole(currentRole)}
-          canAssignFollowUp={isShopAdminRole(currentRole)}
-          staffOptions={staffOptions}
-          onClose={closeCustomer}
-          onOptimistic={applyOptimisticAction}
-          onSaved={handleSaved}
-        />
       </div>
       {showGoToTop && (
         <button
@@ -1206,6 +1220,7 @@ function ScheduledQueueSection({
   onQuickSave,
   onCancel,
   onTaskStatus,
+  selectedPanel,
 }: {
   customers: ScheduledQueueCustomer[];
   total: number;
@@ -1222,6 +1237,7 @@ function ScheduledQueueSection({
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
   onCancel: (followUpId: string) => Promise<void>;
   onTaskStatus: (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => Promise<void>;
+  selectedPanel?: React.ReactNode;
 }) {
   const grouped = {
     overdue: customers.filter((customer) => scheduledGroupFor(customer) === "overdue"),
@@ -1318,6 +1334,7 @@ function ScheduledQueueSection({
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
                 onTaskStatus={onTaskStatus}
+                selectedPanel={selectedPanel}
               />
               <ScheduledGroup
                 title="Due Today"
@@ -1328,6 +1345,7 @@ function ScheduledQueueSection({
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
                 onTaskStatus={onTaskStatus}
+                selectedPanel={selectedPanel}
               />
               <ScheduledGroup
                 title="Upcoming"
@@ -1338,6 +1356,7 @@ function ScheduledQueueSection({
                 onQuickSave={onQuickSave}
                 onCancel={onCancel}
                 onTaskStatus={onTaskStatus}
+                selectedPanel={selectedPanel}
               />
             </div>
           )}
@@ -1370,6 +1389,7 @@ function ScheduledGroup({
   onQuickSave,
   onCancel,
   onTaskStatus,
+  selectedPanel,
 }: {
   title: string;
   description: string;
@@ -1379,6 +1399,7 @@ function ScheduledGroup({
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string, supersedesFollowUpId?: string) => Promise<void>;
   onCancel: (followUpId: string) => Promise<void>;
   onTaskStatus: (customer: ScheduledQueueCustomer, status: "IN_PROGRESS" | "COMPLETED" | "CANCELLED") => Promise<void>;
+  selectedPanel?: React.ReactNode;
 }) {
   if (customers.length === 0) return null;
   return (
@@ -1391,18 +1412,35 @@ function ScheduledGroup({
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{customers.length}</span>
       </div>
       <div className="min-w-0 space-y-3">
-        {customers.map((customer) => (
-          <ScheduledFollowUpCard
-            key={customer.scheduledFollowUp.id}
-            customer={customer}
-            active={selectedId === customer.id}
-            onOpen={() => onSelect(customer.id)}
-            onQuickSave={onQuickSave}
-            onCancel={onCancel}
-            onTaskStatus={onTaskStatus}
-          />
-        ))}
+        {customers.map((customer) => {
+          const card = (
+            <ScheduledFollowUpCard
+              customer={customer}
+              active={selectedId === customer.id}
+              onOpen={() => onSelect(customer.id)}
+              onQuickSave={onQuickSave}
+              onCancel={onCancel}
+              onTaskStatus={onTaskStatus}
+            />
+          );
+          return selectedId === customer.id && selectedPanel ? (
+            <SelectedPartyRow key={customer.scheduledFollowUp.id} panel={selectedPanel}>
+              {card}
+            </SelectedPartyRow>
+          ) : (
+            <div key={customer.scheduledFollowUp.id}>{card}</div>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+function SelectedPartyRow({ children, panel }: { children: React.ReactNode; panel: React.ReactNode }) {
+  return (
+    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_440px] xl:items-start">
+      <div className="min-w-0">{children}</div>
+      {panel}
     </div>
   );
 }
@@ -1572,12 +1610,14 @@ function CompactQueueSection({
   selectedId,
   onSelect,
   onQuickSave,
+  selectedPanel,
 }: {
   customers: QueueCustomer[];
   total: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+  selectedPanel?: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -1591,15 +1631,23 @@ function CompactQueueSection({
         </span>
       </div>
       <div className="divide-y divide-slate-100 dark:divide-slate-800">
-        {customers.map((customer) => (
-          <CompactCustomerCard
-            key={customer.id}
-            customer={customer}
-            active={selectedId === customer.id}
-            onOpen={() => onSelect(customer.id)}
-            onQuickSave={onQuickSave}
-          />
-        ))}
+        {customers.map((customer) => {
+          const card = (
+            <CompactCustomerCard
+              customer={customer}
+              active={selectedId === customer.id}
+              onOpen={() => onSelect(customer.id)}
+              onQuickSave={onQuickSave}
+            />
+          );
+          return selectedId === customer.id && selectedPanel ? (
+            <SelectedPartyRow key={customer.id} panel={selectedPanel}>
+              {card}
+            </SelectedPartyRow>
+          ) : (
+            <div key={customer.id}>{card}</div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1679,6 +1727,7 @@ function QueueSection({
   selectedId,
   onSelect,
   onQuickSave,
+  selectedPanel,
 }: {
   title: string;
   count: number;
@@ -1686,6 +1735,7 @@ function QueueSection({
   selectedId: string | null;
   onSelect: (id: string) => void;
   onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
+  selectedPanel?: React.ReactNode;
 }) {
   return (
     <section>
@@ -1699,15 +1749,23 @@ function QueueSection({
         </div>
       ) : (
         <div className="space-y-3">
-          {customers.map((customer) => (
-            <CustomerCard
-              key={customer.id}
-              customer={customer}
-              active={selectedId === customer.id}
-              onOpen={() => onSelect(customer.id)}
-              onQuickSave={onQuickSave}
-            />
-          ))}
+          {customers.map((customer) => {
+            const card = (
+              <CustomerCard
+                customer={customer}
+                active={selectedId === customer.id}
+                onOpen={() => onSelect(customer.id)}
+                onQuickSave={onQuickSave}
+              />
+            );
+            return selectedId === customer.id && selectedPanel ? (
+              <SelectedPartyRow key={customer.id} panel={selectedPanel}>
+                {card}
+              </SelectedPartyRow>
+            ) : (
+              <div key={customer.id}>{card}</div>
+            );
+          })}
         </div>
       )}
     </section>
@@ -2106,7 +2164,7 @@ function ActionPanel({
   };
 
   return (
-    <aside className="fixed inset-0 z-[60] bg-black/40 xl:sticky xl:top-4 xl:z-0 xl:h-auto xl:w-full xl:min-w-0 xl:self-start xl:bg-transparent">
+    <aside className="fixed inset-0 z-[60] bg-black/40 xl:relative xl:inset-auto xl:z-0 xl:h-auto xl:w-full xl:min-w-0 xl:self-start xl:bg-transparent">
       <div className="ui-surface-elevated ml-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden border shadow-xl xl:max-h-[calc(100dvh-2rem)] xl:min-h-0 xl:max-w-none xl:rounded-xl xl:shadow-sm">
         <div className="ui-surface-muted grid shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:flex lg:items-start lg:justify-between lg:gap-3 lg:p-4">
           <button
