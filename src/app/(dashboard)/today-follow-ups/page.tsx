@@ -24,7 +24,7 @@ import {
   X,
 } from "lucide-react";
 import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/client";
-import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { formatCurrency, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
 import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
 import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
@@ -1038,7 +1038,7 @@ export default function TodayFollowUpsPage() {
       </div>
 
       <div className="mt-4 w-full min-w-0 overflow-x-hidden">
-        <main ref={listRef} className="min-w-0 space-y-5 scroll-smooth">
+        <main ref={listRef} className="min-w-0 space-y-4 scroll-smooth">
           <ScheduledQueueSection
             customers={visibleScheduled}
             total={scheduled.length}
@@ -1126,7 +1126,7 @@ export default function TodayFollowUpsPage() {
               <h2 className="text-lg font-bold">Follow-up Done Today</h2>
               <span className="text-sm text-slate-500">{done.length} actioned</span>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {done.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900">
                   Completed actions will appear here as staff works the queue.
@@ -1246,7 +1246,7 @@ function ScheduledQueueSection({
   };
 
   return (
-    <section className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+    <section className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-4">
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,auto)] lg:items-start">
         <div className="min-w-0 max-w-3xl">
           <div className="flex min-w-0 items-center gap-3">
@@ -1324,7 +1324,7 @@ function ScheduledQueueSection({
               </p>
             </div>
           ) : (
-            <div className="mt-5 space-y-5">
+            <div className="mt-4 space-y-4">
               <ScheduledGroup
                 title="Overdue"
                 description="Missed reminder time. Work these first."
@@ -1411,7 +1411,7 @@ function ScheduledGroup({
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{customers.length}</span>
       </div>
-      <div className="min-w-0 space-y-3">
+      <div className="min-w-0 space-y-2">
         {customers.map((customer) => {
           const card = (
             <ScheduledFollowUpCard
@@ -1485,24 +1485,24 @@ function ScheduledFollowUpCard({
       tabIndex={-1}
       onClick={onOpen}
       className={cn(
-        "min-w-0 cursor-pointer overflow-hidden rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 sm:p-5",
+        "min-w-0 cursor-pointer overflow-hidden rounded-lg border p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900",
         cardTone,
         active && "ring-2 ring-brand-500"
       )}
     >
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(260px,1fr)_minmax(190px,220px)_150px] 2xl:grid-cols-[minmax(360px,1fr)_minmax(220px,260px)_170px] xl:items-stretch">
-        <div className="min-w-0 space-y-3">
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(220px,1fr)_minmax(150px,190px)_132px] xl:items-center">
+        <div className="min-w-0 space-y-1.5">
           <div className="flex min-w-0 items-start gap-2">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-2">
-                <h3 className="truncate text-lg font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
+                <h3 className="truncate text-base font-extrabold text-slate-950 dark:text-white">{customer.partyName}</h3>
                 <BatchBadge tag={customer.batchTag} />
               </div>
-              <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{displayPhone(customer.contactNumber)}</p>
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">{displayPhone(customer.contactNumber)}</p>
             </div>
           </div>
-          <p className="line-clamp-2 text-sm leading-6 text-slate-700 dark:text-slate-300">{notes}</p>
-          <div className="flex flex-wrap gap-2">
+          <p className="line-clamp-1 text-xs leading-5 text-slate-700 dark:text-slate-300">{notes}</p>
+          <div className="flex flex-wrap gap-1.5">
             {isPromise && <Badge tone="violet">Promise to pay</Badge>}
             {isReminder && <Badge tone="blue">Reminder set</Badge>}
             <Badge tone={isOrderFollowUp(scheduled.followUpType) ? "amber" : "slate"}>{followUpTypeLabel(scheduled.followUpType)}</Badge>
@@ -1510,27 +1510,27 @@ function ScheduledFollowUpCard({
           </div>
         </div>
 
-        <div className="min-w-0 rounded-xl border border-white/80 bg-white/80 p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-950/50">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+        <div className="min-w-0 rounded-lg border border-white/80 bg-white/80 p-2.5 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-950/50">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
             <div>
               <p className="text-xs font-semibold uppercase text-slate-400">Outstanding</p>
-              <p className="mt-1 text-lg font-extrabold text-slate-950 dark:text-white">{formatCurrency(customer.outstandingBalance)}</p>
+              <p className="text-base font-extrabold text-slate-950 dark:text-white">{formatCurrency(customer.outstandingBalance)}</p>
             </div>
             <div>
               <p className="text-xs font-semibold uppercase text-slate-400">
                 {isPromise ? "Payment Expected" : "Scheduled For"}
               </p>
-              <p className="mt-1 text-sm font-bold leading-5 text-slate-800 dark:text-slate-100">{formatDateTime(dueAt)}</p>
+              <p className="text-xs font-bold leading-5 text-slate-800 dark:text-slate-100">{formatDateTime(dueAt)}</p>
             </div>
-            <div className="flex flex-wrap gap-2 sm:col-span-2 xl:col-span-1">
-              <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <div className="flex flex-wrap gap-1.5 sm:col-span-2 xl:col-span-1">
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 Priority: {customer.smartPriorityLabel || statusLabel(customer.smartPriority)}
               </span>
-              <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 By {scheduled.assignedTo || "Staff"}
               </span>
               {linkedTask && (
-                <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                   Task: {statusLabel(linkedTask.status)}
                 </span>
               )}
@@ -1538,9 +1538,9 @@ function ScheduledFollowUpCard({
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-col gap-2 xl:min-w-[150px] 2xl:min-w-[170px]">
+        <div className="flex min-w-0 flex-col gap-1.5 xl:min-w-[132px]">
           <Badge tone={stateTone}>{stateLabel}</Badge>
-          <span className={cn("rounded-xl px-3 py-2 text-center text-xs font-extrabold leading-5", badgeToneClass(stateTone))}>
+          <span className={cn("rounded-lg px-2 py-1 text-center text-[11px] font-extrabold leading-4", badgeToneClass(stateTone))}>
             {followUpTimingLabel(dueAt, scheduled.promiseToPay)}
           </span>
           <QuickButton label="Open Follow-up" onClick={onOpen} />
@@ -1548,7 +1548,7 @@ function ScheduledFollowUpCard({
             <Link
               href={`/tasks?taskId=${encodeURIComponent(linkedTask.id)}`}
               onClick={(event) => event.stopPropagation()}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
             >
               Open Task
             </Link>
@@ -1556,7 +1556,7 @@ function ScheduledFollowUpCard({
           <Link
             href={`/customers/${customer.id}`}
             onClick={(event) => event.stopPropagation()}
-            className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
           >
             Open Customer
           </Link>
@@ -1575,7 +1575,7 @@ function ScheduledFollowUpCard({
           )}
         </div>
       </div>
-      <div className="mt-4 flex min-w-0 items-start gap-2 rounded-xl bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
+      <div className="mt-2 flex min-w-0 items-start gap-2 rounded-lg bg-white/70 px-2.5 py-1.5 text-xs font-semibold text-slate-600 dark:bg-slate-950/40 dark:text-slate-300">
         <Bell className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
         <span className="min-w-0 break-words">{isPromise ? "Payment reminder" : "Reminder"} scheduled for {formatDateTime(dueAt)}</span>
       </div>
@@ -1674,7 +1674,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
       tabIndex={-1}
       onClick={onOpen}
       className={cn(
-        "grid min-h-20 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-3 transition [contain-intrinsic-size:96px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_150px_150px_160px]",
+        "grid min-h-16 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2 transition [contain-intrinsic-size:72px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_130px_130px_136px] sm:items-center",
         active && "bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-950/30"
       )}
     >
@@ -1701,7 +1701,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
             event.stopPropagation();
             onOpen();
           }}
-          className="min-h-10 rounded-lg bg-brand-600 px-3 text-xs font-bold text-white"
+          className="min-h-9 rounded-lg bg-brand-600 px-3 text-xs font-bold text-white"
         >
           Open
         </button>
@@ -1711,7 +1711,7 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
             event.stopPropagation();
             onQuickSave(customer, "COMPLETED", "Marked completed from compact queue.");
           }}
-          className="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700"
+          className="min-h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700"
         >
           Done
         </button>
@@ -1748,7 +1748,7 @@ function QueueSection({
           No customers in this section.
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {customers.map((customer) => {
             const card = (
               <CustomerCard
@@ -1785,7 +1785,6 @@ function CustomerCard({
 }) {
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const latest = latestFollowUp(customer);
-  const lastPayment = customer.payments[0];
   const priority = customer.smartPriority ?? derivedPriority(customer);
   const priorityName = customer.smartPriorityLabel ?? (priority === "URGENT" ? "Critical" : statusLabel(priority));
   const tone = cardTone(customer);
@@ -1813,67 +1812,70 @@ function CustomerCard({
       }}
       onTouchEnd={handleTouchEnd}
       className={cn(
-        "min-h-[244px] cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition [content-visibility:auto] [contain-intrinsic-size:260px] dark:bg-slate-900 sm:p-4",
+        "cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition [content-visibility:auto] [contain-intrinsic-size:112px] dark:bg-slate-900",
         active && "ring-2 ring-brand-500",
         tone === "red" && "border-red-200 dark:border-red-900",
         tone === "yellow" && "border-amber-200 dark:border-amber-900",
         tone === "green" && "border-emerald-200 dark:border-emerald-900"
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="grid min-w-0 gap-2 lg:grid-cols-[minmax(260px,1fr)_minmax(300px,1.1fr)_170px] lg:items-center">
+        <div className="flex min-w-0 items-start gap-2">
         <span
           className={cn(
-            "mt-1 h-3 w-3 shrink-0 rounded-full",
+            "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
             tone === "red" && "bg-red-500",
             tone === "yellow" && "bg-amber-400",
             tone === "green" && "bg-emerald-500"
           )}
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <h3 className="truncate text-lg font-bold">{customer.partyName}</h3>
-                <BatchBadge tag={customer.batchTag} />
-              </div>
-              <p className="truncate text-sm text-slate-500">Ledger: {customer.batchTag ?? customer.partyName}</p>
-              <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{displayPhone(customer.contactNumber)}</p>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-base font-bold">{customer.partyName}</h3>
+              <BatchBadge tag={customer.batchTag} />
             </div>
-            <div className="text-right">
-              <p className="text-lg font-extrabold">{formatCurrency(customer.outstandingBalance)}</p>
-              <span className={cn("mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold", priorityClass(priority))}>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
+              <span>{displayPhone(customer.contactNumber)}</span>
+              <span className="truncate">Ledger: {customer.batchTag ?? customer.partyName}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <div className="grid gap-1 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+            <Info label="Last follow-up" value={formatDateTime(customer.lastFollowupDate ?? latest?.followupDate)} />
+            <Info label="Timing" value={followUpTimingLabel(customer.nextFollowupDate ?? latest?.nextFollowupDate, latest?.status === "PAYMENT_PROMISED")} />
+          </div>
+          <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs dark:bg-slate-800/70">
+            <p className="line-clamp-1">
+              <span className="font-semibold">Last notes: </span>
+              {latest?.notes || customer.notes || "No follow-up notes yet."}
+            </p>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+              <span>Status: {statusLabel(customer.optimisticStatus ?? latest?.status)}</span>
+              <span>Next: {formatDateTime(customer.nextFollowupDate ?? latest?.nextFollowupDate)}</span>
+              <span className="truncate">Promise: {latest?.customerResponse || "-"}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+          <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-right dark:bg-slate-800/70 lg:text-left">
+            <div>
+              <p className="text-sm font-extrabold">{formatCurrency(customer.outstandingBalance)}</p>
+              <span className={cn("mt-0.5 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold", priorityClass(priority))}>
                 {priorityName}
               </span>
             </div>
           </div>
-
-          <div className="mt-3 grid gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2 lg:grid-cols-4">
-            <Info label="Last payment" value={lastPayment ? `${formatCurrency(lastPayment.amount)} / ${formatDate(lastPayment.paidAt)}` : "-"} />
-            <Info label="Last follow-up" value={formatDateTime(customer.lastFollowupDate ?? latest?.followupDate)} />
-            <Info label="Next follow-up" value={formatDateTime(customer.nextFollowupDate ?? latest?.nextFollowupDate)} />
-            <Info label="Timing" value={followUpTimingLabel(customer.nextFollowupDate ?? latest?.nextFollowupDate, latest?.status === "PAYMENT_PROMISED")} />
-          </div>
-
-          <div className="mt-3 min-h-[86px] rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800/70">
-            <p className="line-clamp-2">
-              <span className="font-semibold">Last notes: </span>
-              {latest?.notes || customer.notes || "No follow-up notes yet."}
-            </p>
-            <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3">
-              <span>Status: {statusLabel(customer.optimisticStatus ?? latest?.status)}</span>
-              <span className="truncate">Promise: {latest?.customerResponse || "-"}</span>
-              <span>Staff: {latest?.createdBy.name || "Unassigned"}</span>
-            </div>
-          </div>
-
-          <div className="mt-3 grid min-h-[44px] grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
             <button
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
                 onOpen();
               }}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white"
+              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white"
             >
               Open Follow-up
             </button>
@@ -1883,15 +1885,15 @@ function CustomerCard({
                 event.stopPropagation();
                 onQuickSave(customer, "COMPLETED", "Marked completed from queue.");
               }}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"
+              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700"
             >
               <CheckCircle2 className="h-4 w-4" />
               Quick Complete
             </button>
           </div>
-          <p className="mt-2 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to quick complete, left to open details.</p>
         </div>
       </div>
+      <p className="mt-1 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to quick complete, left to open details.</p>
     </article>
   );
 }
@@ -1904,7 +1906,7 @@ function QuickButton({ label, onClick }: { label: string; onClick: () => void })
         event.stopPropagation();
         onClick();
       }}
-      className="min-h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-brand-700 dark:hover:text-brand-200"
+      className="min-h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 transition hover:border-brand-300 hover:text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-brand-700 dark:hover:text-brand-200"
     >
       {label}
     </button>
@@ -1918,7 +1920,7 @@ function DoneCard({ customer, onOpen }: { customer: QueueCustomer; onOpen: () =>
       type="button"
       data-customer-id={customer.id}
       onClick={onOpen}
-      className="w-full rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-left shadow-sm dark:border-emerald-900 dark:bg-emerald-950/30"
+      className="w-full rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-left shadow-sm dark:border-emerald-900 dark:bg-emerald-950/30"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -1926,20 +1928,20 @@ function DoneCard({ customer, onOpen }: { customer: QueueCustomer; onOpen: () =>
             <h3 className="truncate font-bold">{customer.partyName}</h3>
             <BatchBadge tag={customer.batchTag} />
           </div>
-          <p className="text-sm text-slate-600 dark:text-slate-300">{statusLabel(action?.status)} by {action?.createdBy.name ?? "Staff"}</p>
+          <p className="text-xs text-slate-600 dark:text-slate-300">{statusLabel(action?.status)} by {action?.createdBy.name ?? "Staff"}</p>
         </div>
         <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">{formatDateTime(action?.completedAt ?? action?.actionLoggedAt ?? action?.followupDate)}</span>
       </div>
-      <p className="mt-2 line-clamp-2 text-sm">{action?.notes || action?.customerResponse || "Completed today."}</p>
+      <p className="mt-1 line-clamp-1 text-xs">{action?.notes || action?.customerResponse || "Completed today."}</p>
     </button>
   );
 }
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-      <p className="text-[11px] uppercase text-slate-400">{label}</p>
-      <p className="mt-0.5 font-semibold">{value}</p>
+    <div className="rounded-md border border-slate-200 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900">
+      <p className="text-[10px] uppercase text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-semibold">{value}</p>
     </div>
   );
 }
