@@ -27,6 +27,10 @@ type CustomerSuggestion = {
   contactNumber: string;
   outstandingBalance: number;
   geoAddress?: string | null;
+  googleMapsUrl?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  geofenceRadiusM?: number;
   lastFollowupDate: string | null;
   nextFollowupDate: string | null;
   lastVisitDate: string | null;
@@ -42,6 +46,9 @@ type Visit = {
   accuracy?: number | null;
   verified: boolean;
   outsideWarning: boolean;
+  geoFenceStatus?: string | null;
+  distanceMeters?: number | null;
+  geoFenceRadiusM?: number | null;
   notes: string | null;
   result: string | null;
   outcome?: string | null;
@@ -267,7 +274,9 @@ export default function FieldStaffPage() {
 
   const isFieldWorker = isSalesRole(role ?? "");
   const isAdmin = isShopAdminRole(role ?? "");
-  const canSaveVisit = Boolean(isFieldWorker && (selectedCustomer || leadName.trim()) && visitOutcomes.length > 0 && gpsState !== "checking" && !visitSaving);
+  const selectedCustomerHasLocation = Boolean(selectedCustomer && selectedCustomer.latitude != null && selectedCustomer.longitude != null);
+  const hasPunchTarget = selectedCustomer ? selectedCustomerHasLocation : Boolean(leadName.trim());
+  const canSaveVisit = Boolean(isFieldWorker && hasPunchTarget && visitOutcomes.length > 0 && gpsState !== "checking" && !visitSaving);
   const showNotFound = search.trim().length > 0 && !searching && customers.length === 0 && !selectedCustomer;
   const chequeCollectionContext: ChequeCollectionContext | null = chequeVisit
     ? chequeVisit
@@ -642,7 +651,8 @@ export default function FieldStaffPage() {
         setPaymentBankName("");
         setPaymentScreenshotUrl("");
       }
-      setMessage(options.successMessage ?? (needsCheque ? "Visit saved. Add cheque details below." : "Visit saved successfully."));
+      const distanceText = data.visit?.distanceMeters != null ? ` You were ${Math.round(data.visit.distanceMeters)}m from the customer.` : "";
+      setMessage(options.successMessage ?? (needsCheque ? `Visit punched.${distanceText} Add cheque details below.` : `Location verified visit punched.${distanceText}`));
       await loadVisits();
       return data.visit as Visit;
     } finally {
@@ -652,6 +662,10 @@ export default function FieldStaffPage() {
 
   function saveVisit() {
     if (!isFieldWorker) return;
+    if (selectedCustomer && !selectedCustomerHasLocation) {
+      setMessage("Customer location not configured. Ask admin to set location.");
+      return;
+    }
     if (!canSaveVisit) return;
     runDirectGpsRequest({ status: "ACTIVE", onSuccess: async (position) => { await saveVisitAtLocation(position); } });
   }
@@ -919,6 +933,9 @@ export default function FieldStaffPage() {
                           {customer.contactNumber}
                           {customer.geoAddress ? ` | ${customer.geoAddress}` : ""}
                         </p>
+                        <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${customer.latitude != null && customer.longitude != null ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                          {customer.latitude != null && customer.longitude != null ? "Location Set" : "Location Missing"}
+                        </span>
                       </div>
                       <p className="shrink-0 text-sm font-bold">{money(customer.outstandingBalance)}</p>
                     </div>
@@ -935,13 +952,31 @@ export default function FieldStaffPage() {
 
           {selectedCustomer && (
             <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <p className="font-bold">{selectedCustomer.partyName}</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-bold">{selectedCustomer.partyName}</p>
+                <span className={`rounded-full px-2 py-1 text-xs font-semibold ${selectedCustomerHasLocation ? "bg-emerald-200 text-emerald-900" : "bg-amber-200 text-amber-900"}`}>
+                  {selectedCustomerHasLocation ? "Location Set" : "Location Missing"}
+                </span>
+              </div>
               <div className="mt-2 grid gap-1 sm:grid-cols-2">
                 <span>Balance: {money(selectedCustomer.outstandingBalance)}</span>
                 <span>Last follow-up: {formatDateTime(selectedCustomer.lastFollowupDate)}</span>
                 <span>Next follow-up: {formatDateTime(selectedCustomer.nextFollowupDate)}</span>
                 <span>Last visit: {formatDateTime(selectedCustomer.lastVisitDate)}</span>
+                {selectedCustomerHasLocation && <span>Allowed radius: {selectedCustomer.geofenceRadiusM ?? 100}m</span>}
               </div>
+              {selectedCustomerHasLocation ? (
+                <a
+                  href={selectedCustomer.googleMapsUrl || `https://www.google.com/maps?q=${selectedCustomer.latitude},${selectedCustomer.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-300 px-3 text-xs font-semibold"
+                >
+                  <Navigation className="h-4 w-4" /> Open Map
+                </a>
+              ) : (
+                <p className="mt-2 font-medium text-amber-800">Customer location not configured. Ask admin to set location.</p>
+              )}
             </div>
           )}
 
@@ -1034,6 +1069,7 @@ export default function FieldStaffPage() {
           )}
 
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Visit notes" className="mt-3 min-h-20 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
+          {selectedCustomer && <p className="mt-2 text-xs text-slate-500">Location is used only to verify this customer visit punch.</p>}
           {showChequeFlow && chequeCollectionContext && (
             <VisitChequeCollection
               visit={chequeCollectionContext}
@@ -1048,7 +1084,7 @@ export default function FieldStaffPage() {
           )}
           <div className="sticky bottom-3 z-10 mt-3">
             <button type="button" onClick={saveVisit} disabled={!canSaveVisit} className="flex min-h-14 w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-base font-semibold text-white shadow-lg disabled:opacity-50">
-              <MapPin className="h-5 w-5" /> {visitSaving || gpsState === "checking" ? "Saving Visit..." : "Save Visit"}
+              <MapPin className="h-5 w-5" /> {visitSaving || gpsState === "checking" ? "Verifying Location..." : "Punch Visit"}
             </button>
           </div>
         </section>
@@ -1069,7 +1105,8 @@ export default function FieldStaffPage() {
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold dark:bg-slate-800">{visit.status}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {visit.verified ? "GPS captured" : "GPS saved"}</span>
+                <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {visit.geoFenceStatus === "INSIDE" ? "Inside geofence" : visit.geoFenceStatus === "GPS_LOW_ACCURACY" ? "GPS low accuracy" : visit.verified ? "GPS verified" : "GPS saved"}</span>
+                {visit.distanceMeters != null && <span>{Math.round(visit.distanceMeters)}m from customer</span>}
                 <span>{visit.visitType ?? "Visit"}</span>
                 {visit.orderQuantity ? <span>Qty {visit.orderQuantity}</span> : visit.orderAmount ? <span>Order {money(visit.orderAmount)}</span> : null}
                 {visit.recoveryAmount > 0 && <span className="flex items-center gap-1"><IndianRupee className="h-3.5 w-3.5" /> {money(visit.recoveryAmount)}</span>}

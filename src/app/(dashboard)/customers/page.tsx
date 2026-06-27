@@ -354,6 +354,7 @@ export default function CustomersPage() {
                     </Link>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {c.batchTag && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">{c.batchTag}</span>}
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${c.latitude != null && c.longitude != null ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{c.latitude != null && c.longitude != null ? "Location Set" : "Location Missing"}</span>
                       <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", statusBadgeClass(c.status))}>{formatStatus(c.status)}</span>
                       {archived && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">Archived</span>}
                     </div>
@@ -454,6 +455,9 @@ export default function CustomersPage() {
                           {c.batchTag}
                         </span>
                       )}
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${c.latitude != null && c.longitude != null ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                        {c.latitude != null && c.longitude != null ? "Location Set" : "Location Missing"}
+                      </span>
                       {archived && (
                         <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
                           Archived

@@ -26,6 +26,14 @@ type CustomerDetail = {
   lastFollowupDate: string | null;
   nextFollowupDate: string | null;
   createdAt: string;
+  locationName: string | null;
+  geoAddress: string | null;
+  googleMapsUrl: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofenceRadiusM: number;
+  locationVerifiedAt: string | null;
+  locationUpdatedBy: { name: string } | null;
   followUps: {
     id: string;
     followupDate: string;
@@ -91,6 +99,10 @@ type CustomerDetail = {
     checkOutAt: string | null;
     verified: boolean;
     outsideWarning: boolean;
+    geoFenceStatus: string | null;
+    geoFenceRadiusM: number | null;
+    distanceMeters: number | null;
+    accuracy: number | null;
     notes: string | null;
     result: string | null;
     visitType: string;
@@ -115,6 +127,9 @@ export default function CustomerDetailPage() {
   const [paymentNotes, setPaymentNotes] = useState("");
   const [note, setNote] = useState("");
   const [role, setRole] = useState("");
+  const [locationForm, setLocationForm] = useState({ googleMapsUrl: "", locationName: "", locationAddress: "", latitude: "", longitude: "", radius: "100" });
+  const [locationMessage, setLocationMessage] = useState("");
+  const [locationSaving, setLocationSaving] = useState(false);
   const isReadOnlySales = isSalesRole(role) && !isAccountsRole(role) && !isShopAdminRole(role);
 
   const load = useCallback(() => {
@@ -126,6 +141,18 @@ export default function CustomerDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!customer) return;
+    setLocationForm({
+      googleMapsUrl: customer.googleMapsUrl ?? "",
+      locationName: customer.locationName ?? "",
+      locationAddress: customer.geoAddress ?? "",
+      latitude: customer.latitude == null ? "" : String(customer.latitude),
+      longitude: customer.longitude == null ? "" : String(customer.longitude),
+      radius: String(customer.geofenceRadiusM || 100),
+    });
+  }, [customer]);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -181,6 +208,55 @@ export default function CustomerDetailPage() {
       body: JSON.stringify({ action }),
     });
     if (res.ok) load();
+  };
+
+  const parseMapsLink = async () => {
+    setLocationMessage("");
+    const res = await fetch(`/api/customers/${id}/location/parse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: locationForm.googleMapsUrl }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.success) return setLocationMessage(data.error ?? "Could not parse maps link.");
+    setLocationForm((current) => ({ ...current, googleMapsUrl: data.expandedUrl || current.googleMapsUrl, latitude: String(data.latitude), longitude: String(data.longitude) }));
+    setLocationMessage("Coordinates parsed. Save location to apply the geofence.");
+  };
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) return setLocationMessage("Geolocation is not supported on this device.");
+    setLocationMessage("Getting current location...");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocationForm((current) => ({ ...current, latitude: String(position.coords.latitude), longitude: String(position.coords.longitude) }));
+        setLocationMessage(`Current location captured with ${Math.round(position.coords.accuracy)}m accuracy.`);
+      },
+      (error) => setLocationMessage(error.code === 1 ? "Location permission denied. Allow location and retry." : "Could not capture current location."),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  };
+
+  const saveLocation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLocationSaving(true);
+    setLocationMessage("");
+    const res = await fetch(`/api/customers/${id}/location`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        googleMapsUrl: locationForm.googleMapsUrl || null,
+        locationName: locationForm.locationName || null,
+        locationAddress: locationForm.locationAddress || null,
+        latitude: Number(locationForm.latitude),
+        longitude: Number(locationForm.longitude),
+        radius: Number(locationForm.radius),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLocationSaving(false);
+    if (!data.success) return setLocationMessage(data.error ?? "Could not save customer location.");
+    setLocationMessage("Customer location and geofence saved.");
+    load();
   };
 
   if (!customer) {
@@ -338,6 +414,44 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
+      <section className="card mt-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Customer Location</h2>
+            <p className="mt-1 text-sm text-slate-500">Official location used for location verified sales visit punches.</p>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${customer.latitude != null && customer.longitude != null ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+            {customer.latitude != null && customer.longitude != null ? "Location Set" : "Location Missing"}
+          </span>
+        </div>
+        {customer.latitude != null && customer.longitude != null && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+            <span>{customer.locationName || customer.geoAddress || "Saved customer location"}</span>
+            <span className="text-slate-500">{customer.latitude.toFixed(6)}, {customer.longitude.toFixed(6)} | Radius {customer.geofenceRadiusM || 100}m</span>
+            <a href={customer.googleMapsUrl || `https://www.google.com/maps?q=${customer.latitude},${customer.longitude}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-slate-300 px-3 py-2 font-semibold">
+              Open in Google Maps
+            </a>
+          </div>
+        )}
+        {customer.locationVerifiedAt && <p className="mt-2 text-xs text-slate-500">Last updated {formatDate(customer.locationVerifiedAt)}{customer.locationUpdatedBy?.name ? ` by ${customer.locationUpdatedBy.name}` : ""}</p>}
+        {isShopAdminRole(role) && (
+          <form onSubmit={saveLocation} className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="text-sm md:col-span-2"><span className="mb-1 block font-medium">Google Maps Link</span><input value={locationForm.googleMapsUrl} onChange={(event) => setLocationForm((current) => ({ ...current, googleMapsUrl: event.target.value }))} placeholder="https://www.google.com/maps?q=..." className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" /></label>
+            <input value={locationForm.locationName} onChange={(event) => setLocationForm((current) => ({ ...current, locationName: event.target.value }))} placeholder="Location name" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={locationForm.locationAddress} onChange={(event) => setLocationForm((current) => ({ ...current, locationAddress: event.target.value }))} placeholder="Address / landmark" className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input type="number" step="any" value={locationForm.latitude} onChange={(event) => setLocationForm((current) => ({ ...current, latitude: event.target.value }))} placeholder="Latitude" required className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input type="number" step="any" value={locationForm.longitude} onChange={(event) => setLocationForm((current) => ({ ...current, longitude: event.target.value }))} placeholder="Longitude" required className="min-h-11 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <label className="text-sm"><span className="mb-1 block font-medium">Allowed radius (30-1000m)</span><input type="number" min="30" max="1000" value={locationForm.radius} onChange={(event) => setLocationForm((current) => ({ ...current, radius: event.target.value }))} className="min-h-11 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" /></label>
+            <div className="flex flex-wrap items-end gap-2">
+              <button type="button" onClick={parseMapsLink} disabled={!locationForm.googleMapsUrl} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-semibold disabled:opacity-50">Parse Maps Link</button>
+              <button type="button" onClick={useCurrentLocation} className="min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-semibold">Use Current Location</button>
+              <button type="submit" disabled={locationSaving} className="min-h-11 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">{locationSaving ? "Saving..." : "Save Location"}</button>
+            </div>
+          </form>
+        )}
+        {locationMessage && <p className="mt-3 rounded-lg bg-slate-100 p-3 text-sm dark:bg-slate-800">{locationMessage}</p>}
+      </section>
+
       {!isReadOnlySales && <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <form onSubmit={addPayment} className="card">
           <h2 className="font-semibold">Record Payment</h2>
@@ -460,6 +574,9 @@ export default function CustomerDetailPage() {
                   <p><span className="text-slate-500">Checkout:</span> {formatDate(visit.checkOutAt)}</p>
                   <p><span className="text-slate-500">Recovery:</span> {formatCurrency(visit.recoveryAmount)}</p>
                   <p><span className="text-slate-500">Travel:</span> {visit.travelKm.toFixed(1)} km</p>
+                  <p><span className="text-slate-500">Geofence:</span> {visit.geoFenceStatus?.replace(/_/g, " ") ?? "Not recorded"}</p>
+                  {visit.distanceMeters != null && <p><span className="text-slate-500">Distance:</span> {Math.round(visit.distanceMeters)}m / {visit.geoFenceRadiusM ?? customer.geofenceRadiusM}m</p>}
+                  {visit.accuracy != null && <p><span className="text-slate-500">GPS accuracy:</span> {Math.round(visit.accuracy)}m</p>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                   <span>{visit.visitType}</span>

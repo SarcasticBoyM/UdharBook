@@ -11,6 +11,10 @@ type CustomerSearchRow = {
   batchTag: string | null;
   outstandingBalance: number;
   geoAddress: string | null;
+  googleMapsUrl: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofenceRadiusM: number;
   lastFollowupDate: Date | null;
   nextFollowupDate: Date | null;
   staffVisits: { checkInAt: Date }[];
@@ -46,6 +50,10 @@ function serializeCustomer(customer: CustomerSearchRow, query: string) {
     batchTag: customer.batchTag,
     outstandingBalance: customer.outstandingBalance,
     geoAddress: customer.geoAddress,
+    googleMapsUrl: customer.googleMapsUrl,
+    latitude: customer.latitude,
+    longitude: customer.longitude,
+    geofenceRadiusM: customer.geofenceRadiusM,
     lastFollowupDate: customer.lastFollowupDate,
     nextFollowupDate: customer.nextFollowupDate,
     lastVisitDate: customer.staffVisits[0]?.checkInAt ?? null,
@@ -115,6 +123,10 @@ export async function GET(request: Request) {
         batchTag: true,
         outstandingBalance: true,
         geoAddress: true,
+        googleMapsUrl: true,
+        latitude: true,
+        longitude: true,
+        geofenceRadiusM: true,
         lastFollowupDate: true,
         nextFollowupDate: true,
         staffVisits: {

@@ -28,6 +28,10 @@ type Visit = {
   checkOutLng: number | null;
   verified: boolean;
   outsideWarning: boolean;
+  geoFenceStatus: string | null;
+  geoFenceRadiusM: number | null;
+  distanceMeters: number | null;
+  accuracy: number | null;
   notes: string | null;
   result: string | null;
   visitType: string;
@@ -257,7 +261,7 @@ export default function DailyVisitsPage() {
         new Date(visitStart(visit)).toISOString(),
         visit.checkOutAt ? new Date(visit.checkOutAt).toISOString() : "",
         visitDuration(visit),
-        visit.verified ? "Yes" : "No",
+        visit.geoFenceStatus === "INSIDE" ? "Inside geofence" : visit.verified ? "Yes" : "No",
         String(visit.recoveryAmount),
         visit.result ?? visit.notes ?? "",
       ]),
@@ -375,6 +379,7 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Visit</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Geo verification</th>
               <th className="px-4 py-3">Visit Date</th>
               <th className="px-4 py-3">Check In</th>
               <th className="px-4 py-3">Check Out</th>
@@ -394,6 +399,12 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
                 <td className="px-4 py-3">{visit.visitType}</td>
                 <td className="px-4 py-3">
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold dark:bg-slate-800">{statusLabel(visit)}</span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${visit.geoFenceStatus === "INSIDE" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                    {visit.geoFenceStatus?.replace(/_/g, " ") ?? (visit.verified ? "GPS verified" : "Not verified")}
+                  </span>
+                  {visit.distanceMeters != null && <span className="mt-1 block text-xs text-slate-500">{Math.round(visit.distanceMeters)}m / {visit.geoFenceRadiusM ?? "-"}m</span>}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3">{visitDate(visitStart(visit))}</td>
                 <td className="whitespace-nowrap px-4 py-3">{time(visitStart(visit))}</td>
@@ -439,6 +450,10 @@ function Timeline({ visits, loading }: { visits: Visit[]; loading: boolean }) {
               )}
             </div>
             <p className="mt-2 break-words text-sm">{notesSummary(visit)}</p>
+            <p className={`mt-2 text-xs font-semibold ${visit.geoFenceStatus === "INSIDE" ? "text-emerald-700" : "text-amber-700"}`}>
+              {visit.geoFenceStatus?.replace(/_/g, " ") ?? (visit.verified ? "GPS verified" : "Not verified")}
+              {visit.distanceMeters != null ? ` | ${Math.round(visit.distanceMeters)}m from customer` : ""}
+            </p>
             {visit.recoveryAmount > 0 && <p className="mt-2 text-sm font-bold">{money(visit.recoveryAmount)}</p>}
           </div>
         ))}

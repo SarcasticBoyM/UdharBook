@@ -72,6 +72,7 @@ export async function GET(
           photos: { orderBy: { createdAt: "desc" }, take: 4 },
         },
       },
+      locationUpdatedBy: { select: { name: true } },
     },
   });
 

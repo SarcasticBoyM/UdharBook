@@ -354,6 +354,7 @@ model User {
   driverTrackingLink DriverTrackingLink? @relation("DriverTrackingLinkDriver")
   driverTrips DriverTrip[] @relation("DriverTripDriver")
   driverLocationPoints DriverLocationPoint[] @relation("DriverLocationPointDriver")
+  customerLocationsUpdated Customer[] @relation("CustomerLocationUpdatedBy")
 
   @@index([shopId])
   @@index([role])
@@ -568,6 +569,12 @@ model Customer {
   latitude           Float?
   longitude          Float?
   geoAddress         String?
+  locationName       String?
+  googleMapsUrl      String?
+  geofenceRadiusM    Int            @default(100)
+  locationVerifiedAt DateTime?
+  locationUpdatedById String?
+  locationUpdatedBy  User?          @relation("CustomerLocationUpdatedBy", fields: [locationUpdatedById], references: [id], onDelete: SetNull)
   staffVisits        StaffVisit[]
   orders             Order[]
   tasks              Task[]
@@ -589,6 +596,7 @@ model Customer {
   @@index([shopId, updatedAt])
   @@index([shopId, status])
   @@index([shopId, isArchived])
+  @@index([locationUpdatedById])
 }
 
 model StaffLocation {
@@ -651,6 +659,11 @@ model StaffVisit {
   distanceMeters  Float?
   verified        Boolean          @default(false)
   outsideWarning  Boolean          @default(false)
+  geoFenceStatus  String?
+  geoFenceRadiusM Int?
+  locationCapturedAt DateTime?
+  deviceInfo      String?
+  geoFenceOverrideReason String?
   notes           String?
   result          String?
   visitType       String           @default("Follow-up")

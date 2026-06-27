@@ -4,7 +4,8 @@ import type { OrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { requireShopId } from "@/lib/tenant";
-import { distanceMeters, endOfDay, isFieldWorker, startOfDay, visibleStaffId } from "@/lib/field-tracking";
+import { endOfDay, isFieldWorker, startOfDay, visibleStaffId } from "@/lib/field-tracking";
+import { distanceMeters, getGeofenceStatus } from "@/lib/geo";
 import { logger } from "@/lib/logger";
 import { recordFollowUpActivity } from "@/lib/follow-up-service";
 import { notifyCustomerAdded, notifyFollowUpCompleted, notifyOrderCreated } from "@/lib/notifications";
@@ -52,7 +53,7 @@ const visitSchema = z.object({
   leadContactPerson: z.string().optional(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  accuracy: z.number().optional(),
+  accuracy: z.number().min(0).optional(),
   notes: z.string().optional(),
   recoveryAmount: z.number().min(0).optional(),
   nextFollowupDate: z.string().datetime().optional(),
@@ -197,7 +198,7 @@ export async function POST(request: Request) {
       let customer = body.customerId
         ? await tx.customer.findFirst({
             where: { id: body.customerId, shopId, isArchived: false },
-            select: { id: true, latitude: true, longitude: true },
+            select: { id: true, latitude: true, longitude: true, geofenceRadiusM: true },
           })
         : null;
 
@@ -221,7 +222,7 @@ export async function POST(request: Request) {
                 longitude: body.longitude,
                 geoAddress: body.address,
               },
-              select: { id: true, latitude: true, longitude: true },
+              select: { id: true, latitude: true, longitude: true, geofenceRadiusM: true },
             })
           : await tx.customer.create({
               data: {
@@ -239,7 +240,7 @@ export async function POST(request: Request) {
             longitude: body.longitude,
             geoAddress: body.address,
           },
-              select: { id: true, latitude: true, longitude: true },
+              select: { id: true, latitude: true, longitude: true, geofenceRadiusM: true },
             });
         if (!existingLead) {
           createdCustomersForNotification.push({ id: createdCustomer.id, name });
@@ -251,7 +252,17 @@ export async function POST(request: Request) {
         customer.latitude !== null && customer.longitude !== null
           ? distanceMeters(body.latitude, body.longitude, customer.latitude, customer.longitude)
           : null;
-      const verified = distance === null ? false : distance <= 200;
+      const radius = customer.geofenceRadiusM || 100;
+      if (body.customerId && body.accuracy == null) throw new Error("GPS_ACCURACY_MISSING");
+      const geoFenceStatus = getGeofenceStatus(distance, radius, body.accuracy);
+      if (body.customerId && geoFenceStatus === "LOCATION_MISSING") throw new Error("CUSTOMER_LOCATION_MISSING");
+      if (body.customerId && geoFenceStatus === "GPS_LOW_ACCURACY") {
+        throw new Error(`GPS_LOW_ACCURACY:${Math.round(body.accuracy ?? 0)}:${radius}`);
+      }
+      if (body.customerId && geoFenceStatus === "OUTSIDE") {
+        throw new Error(`OUTSIDE_GEOFENCE:${Math.round(distance ?? 0)}:${radius}`);
+      }
+      const verified = geoFenceStatus === "INSIDE";
       const now = new Date();
       const visitType = body.visitType ?? (body.customerId ? "General Visit" : "New Lead Visit");
       const visitOutcomes = uniqueOutcomes([...(body.visitOutcomes ?? []), body.outcome]);
@@ -313,6 +324,10 @@ export async function POST(request: Request) {
           distanceMeters: distance ?? undefined,
           verified,
           outsideWarning: distance !== null && !verified,
+          geoFenceStatus,
+          geoFenceRadiusM: radius,
+          locationCapturedAt: now,
+          deviceInfo: request.headers.get("user-agent")?.slice(0, 500),
         },
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true } },
@@ -513,15 +528,25 @@ export async function POST(request: Request) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
+    const message = error instanceof Error ? error.message : "";
+    const responseError =
+      message === "CUSTOMER_OR_LEAD_REQUIRED"
+        ? "Customer name is required for a new visit"
+        : message === "ORDER_DETAILS_REQUIRED"
+          ? "Order details are required when Order Received is selected."
+          : message === "CUSTOMER_LOCATION_MISSING"
+            ? "Customer location not configured. Ask admin to set location."
+            : message === "GPS_ACCURACY_MISSING"
+              ? "GPS accuracy is unavailable. Move outdoors and retry the visit punch."
+            : message.startsWith("GPS_LOW_ACCURACY:")
+              ? `GPS accuracy is too low (${message.split(":")[1]}m). Move outdoors and retry.`
+              : message.startsWith("OUTSIDE_GEOFENCE:")
+                ? `You are ${message.split(":")[1]}m away from customer location. Visit punch allowed only within ${message.split(":")[2]}m.`
+                : "Could not save visit";
     return NextResponse.json(
       {
         success: false,
-        error:
-          error instanceof Error && error.message === "CUSTOMER_OR_LEAD_REQUIRED"
-            ? "Customer name is required for a new visit"
-            : error instanceof Error && error.message === "ORDER_DETAILS_REQUIRED"
-              ? "Order details are required when Order Received is selected."
-              : "Could not save visit",
+        error: responseError,
       },
       { status: 400 },
     );
