@@ -17,6 +17,8 @@ const PUBLIC = [
   "/track/driver",
   "/api/public/driver-location",
   "/manifest.webmanifest",
+  "/manifest.json",
+  "/.well-known/assetlinks.json",
   "/sw.js",
   "/icon.svg",
   "/icon-192.png",

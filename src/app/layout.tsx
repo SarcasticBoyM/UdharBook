@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   },
   description: "Track customer balances, follow-ups, reminders, and recoveries with UdharBook.",
   applicationName: "UdharBook",
-  manifest: "/manifest.webmanifest",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     title: "UdharBook",
@@ -30,6 +30,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#0f766e",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

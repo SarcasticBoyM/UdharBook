@@ -1,6 +1,7 @@
-const CACHE_NAME = "udharbook-v6";
+const CACHE_NAME = "udharbook-v7";
 const APP_SHELL = [
   "/manifest.webmanifest",
+  "/manifest.json",
   "/icon.svg",
   "/icon-192.png",
   "/icon-512.png",

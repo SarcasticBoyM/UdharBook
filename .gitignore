@@ -9,3 +9,9 @@ node_modules
 *.db-journal
 .DS_Store
 *.tsbuildinfo
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+android-twa/
