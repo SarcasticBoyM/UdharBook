@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Copy, MessageCircle, Phone } from "lucide-react";
 import { telHref, displayPhone } from "@/lib/phone";
-import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
+import { openWhatsAppUrl, paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
 
 interface Props {
   partyName: string;
@@ -17,6 +17,7 @@ export function CallActions({ partyName, contactNumber, balance, dueDate, compac
   const [copied, setCopied] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageIsError, setMessageIsError] = useState(false);
 
   useEffect(() => {
     setIsMobile(
@@ -34,22 +35,27 @@ export function CallActions({ partyName, contactNumber, balance, dueDate, compac
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const openWhatsApp = async () => {
-    setMessage("");
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    if (isAndroid && navigator.share) {
-      try {
-        await navigator.share({
-          title: `Reminder for ${partyName}`,
-          text: whatsappShareText(contactNumber, reminderText),
-        });
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setMessage("Could not open Android share chooser. Opening WhatsApp Web instead.");
-      }
+  const copyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(reminderText);
+      setMessageIsError(false);
+      setMessage("Reminder message copied.");
+    } catch {
+      setMessageIsError(true);
+      setMessage("Could not copy the reminder message.");
     }
-    window.open(waUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const openWhatsApp = () => {
+    if (!waUrl) {
+      setMessageIsError(true);
+      setMessage("Customer WhatsApp number is missing or invalid.");
+      return;
+    }
+
+    openWhatsAppUrl(waUrl);
+    setMessageIsError(false);
+    setMessage("WhatsApp opened. Please tap Send.");
   };
 
   return (
@@ -84,7 +90,21 @@ export function CallActions({ partyName, contactNumber, balance, dueDate, compac
         <MessageCircle className="h-4 w-4" />
         Send WhatsApp Reminder
       </button>
-      {message && <span className="w-full text-xs text-amber-700">{message}</span>}
+      {!waUrl && (
+        <button
+          type="button"
+          onClick={copyMessage}
+          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+        >
+          <Copy className="h-4 w-4" />
+          Copy Message
+        </button>
+      )}
+      {message && (
+        <span className={`fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-3 text-sm font-semibold text-white shadow-xl ${messageIsError ? "bg-amber-700" : "bg-emerald-700"}`} role="status">
+          {message}
+        </span>
+      )}
     </div>
   );
 }

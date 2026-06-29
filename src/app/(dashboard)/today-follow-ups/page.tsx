@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronUp,
   Clock3,
+  Copy,
   History,
   IndianRupee,
   Loader2,
@@ -26,7 +27,7 @@ import {
 import type { CustomerStatus, FollowUpPriority, FollowUpStatus } from "@prisma/client";
 import { formatCurrency, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
-import { paymentReminderMessage, whatsappHref, whatsappShareText } from "@/lib/whatsapp";
+import { openWhatsAppUrl, paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
 import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
@@ -2034,8 +2035,12 @@ function ActionPanel({
   const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, customer.nextFollowupDate);
   const reminderWhatsAppUrl = whatsappHref(customer.contactNumber, reminderMessage);
 
-  const sendWhatsAppReminder = async () => {
-    setWhatsAppMessage("");
+  const sendWhatsAppReminder = () => {
+    if (!reminderWhatsAppUrl) {
+      setWhatsAppMessage("Customer WhatsApp number is missing or invalid.");
+      return;
+    }
+
     setPrimaryAction("FOLLOW_UP_LATER");
     setStatus("RESCHEDULED");
     setSetReminder(true);
@@ -2043,20 +2048,17 @@ function ActionPanel({
     if (!customerResponse) setCustomerResponse("WhatsApp reminder sent");
     if (!nextDate) setNextDate(defaultReminderDate());
 
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    if (isAndroid && navigator.share) {
-      try {
-        await navigator.share({
-          title: `Reminder for ${customer.partyName}`,
-          text: whatsappShareText(customer.contactNumber, reminderMessage),
-        });
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setWhatsAppMessage("Could not open Android share chooser. Opening WhatsApp Web instead.");
-      }
+    openWhatsAppUrl(reminderWhatsAppUrl);
+    setWhatsAppMessage("WhatsApp opened. Please tap Send.");
+  };
+
+  const copyWhatsAppReminder = async () => {
+    try {
+      await navigator.clipboard.writeText(reminderMessage);
+      setWhatsAppMessage("Reminder message copied.");
+    } catch {
+      setWhatsAppMessage("Could not copy the reminder message.");
     }
-    window.open(reminderWhatsAppUrl, "_blank", "noopener,noreferrer");
   };
 
   const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
@@ -2225,8 +2227,22 @@ function ActionPanel({
                 <MessageCircle className="h-4 w-4" />
                 Send WhatsApp Reminder
               </button>
+              {!reminderWhatsAppUrl && (
+                <button
+                  type="button"
+                  onClick={copyWhatsAppReminder}
+                  className="col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                >
+                  <Copy className="h-4 w-4" />
+                  Copy Message
+                </button>
+              )}
             </div>
-            {whatsAppMessage && <p className="-mt-2 text-xs font-semibold text-amber-700">{whatsAppMessage}</p>}
+            {whatsAppMessage && (
+              <p className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-xl" role="status">
+                {whatsAppMessage}
+              </p>
+            )}
             {saveError && (
               <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm font-semibold text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
                 {saveError}
