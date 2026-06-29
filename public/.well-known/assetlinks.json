@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "in.qrvcard.udharbook",
+      "sha256_cert_fingerprints": [
+        "66:0D:97:A7:B4:9B:A5:E1:EB:E7:93:B9:68:1E:0B:04:95:94:11:B6:86:73:D1:3C:F5:C0:97:BB:D3:44:68:9D"
+      ]
+    }
+  }
+]
