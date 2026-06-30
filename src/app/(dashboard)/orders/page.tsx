@@ -332,7 +332,7 @@ function statusClass(status: OrderStatus) {
 }
 
 function canEdit(order: OrderRow) {
-  return normalizedStatus(order.status) === "ORDER_RECEIVED";
+  return ["ORDER_RECEIVED", "DISPATCHED"].includes(normalizedStatus(order.status));
 }
 
 function canDispatch(order: OrderRow) {
@@ -421,6 +421,7 @@ export default function OrderDeskPage() {
   const [message, setMessage] = useState("");
   const [toast, setToast] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [cancelOrder, setCancelOrder] = useState<OrderRow | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
@@ -458,6 +459,8 @@ export default function OrderDeskPage() {
   const [deliveryLocation, setDeliveryLocation] = useState("");
   const [priority, setPriority] = useState("Normal");
   const loadAbortRef = useRef<AbortController | null>(null);
+  const cancelDialogRef = useRef<HTMLDivElement | null>(null);
+  const cancelTriggerRef = useRef<HTMLButtonElement | null>(null);
   const canManageOrders = canUseOrders(role);
   const canCreateOrders = canManageOrders;
   const canAssignTasks = isShopAdminRole(role);
@@ -536,6 +539,19 @@ export default function OrderDeskPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!cancelOrder) return;
+    cancelDialogRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && actionLoading !== `${cancelOrder.id}:CANCEL`) {
+        setCancelOrder(null);
+        cancelTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [actionLoading, cancelOrder]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -852,37 +868,54 @@ export default function OrderDeskPage() {
   }
 
   async function runAction(orderId: string, action: "DISPATCH" | "DELIVER" | "CANCEL") {
+    if (actionLoading) return false;
     setMessage("");
     setActionLoading(`${orderId}:${action}`);
     console.info("[Order Desk] action start", { orderId, action });
-    const res = await fetch("/api/orders", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId, action }),
-    });
-    const data = await res.json().catch(() => ({}));
-    console.info("[Order Desk] action response", { orderId, action, ok: res.ok, status: res.status, data });
-    setActionLoading(null);
-    if (!res.ok) {
-      setMessage(data.error ?? "Could not update order.");
-      return;
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      console.info("[Order Desk] action response", { orderId, action, ok: res.ok, status: res.status, data });
+      if (!res.ok) {
+        setMessage(data.error ?? (action === "CANCEL" ? "Could not cancel order. Please try again." : "Could not update order."));
+        return false;
+      }
+      const updatedOrder = data.order as OrderRow | undefined;
+      if (!updatedOrder) {
+        await load();
+        return true;
+      }
+      const previousOrder = orders.find((order) => order.id === orderId) ?? null;
+      setOrders((current) => current
+        .map((order) => order.id === orderId ? { ...order, ...updatedOrder, activities: order.activities } : order)
+        .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, filter, dateFilter, fromDate, toDate)));
+      setSummary((current) => applySummaryChange(current, previousOrder, updatedOrder));
+      return true;
+    } catch {
+      setMessage(action === "CANCEL" ? "Could not cancel order. Check your connection and retry." : "Could not update order. Check your connection and retry.");
+      return false;
+    } finally {
+      setActionLoading(null);
     }
-    const updatedOrder = data.order as OrderRow | undefined;
-    if (!updatedOrder) {
-      await load();
-      return;
-    }
-    const previousOrder = orders.find((order) => order.id === orderId) ?? null;
-    setOrders((current) => {
-      const next = current
-        .map((order) => {
-          if (order.id !== orderId) return order;
-          return { ...order, ...updatedOrder, activities: order.activities };
-        })
-        .filter((order) => orderMatchesFilter(order, filter) && orderMatchesDateFilter(order, filter, dateFilter, fromDate, toDate));
-      return next;
-    });
-    setSummary((current) => applySummaryChange(current, previousOrder, updatedOrder));
+  }
+
+  function closeCancelDialog() {
+    if (cancelOrder && actionLoading === `${cancelOrder.id}:CANCEL`) return;
+    setCancelOrder(null);
+    window.setTimeout(() => cancelTriggerRef.current?.focus(), 0);
+  }
+
+  async function confirmCancel() {
+    if (!cancelOrder || actionLoading) return;
+    const cancelled = await runAction(cancelOrder.id, "CANCEL");
+    if (!cancelled) return;
+    setCancelOrder(null);
+    showToast("Order cancelled.");
+    window.setTimeout(() => cancelTriggerRef.current?.focus(), 0);
   }
 
   function selectDateFilter(value: DateFilter) {
@@ -1370,8 +1403,8 @@ export default function OrderDeskPage() {
                   </button>
                 )}
                 {canCancel(order) && (
-                  <button type="button" disabled={actionLoading === `${order.id}:CANCEL`} onClick={() => runAction(order.id, "CANCEL")} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-60">
-                    {actionLoading === `${order.id}:CANCEL` ? "Cancelling..." : "Cancel Order"}
+                  <button type="button" onClick={(event) => { cancelTriggerRef.current = event.currentTarget; setCancelOrder(order); }} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700">
+                    Cancel Order
                   </button>
                 )}
               </div>
@@ -1465,6 +1498,38 @@ export default function OrderDeskPage() {
         </div>
       )}
 
+      {cancelOrder && (
+        <div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/55 p-0 sm:items-center sm:p-4"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeCancelDialog(); }}
+        >
+          <div
+            ref={cancelDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-order-title"
+            aria-describedby="cancel-order-description"
+            tabIndex={-1}
+            className="w-full rounded-t-2xl bg-white p-5 shadow-xl outline-none dark:bg-slate-950 sm:max-w-md sm:rounded-2xl"
+          >
+            <h2 id="cancel-order-title" className="text-lg font-bold">Cancel Order?</h2>
+            <p id="cancel-order-description" className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              Are you sure you want to cancel this order? This action cannot be undone.
+            </p>
+            {message && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">{message}</div>}
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button type="button" onClick={closeCancelDialog} disabled={actionLoading === `${cancelOrder.id}:CANCEL`} className="min-h-12 rounded-lg border border-slate-300 px-4 text-sm font-semibold disabled:opacity-60 dark:border-slate-700">
+                Keep Order
+              </button>
+              <button type="button" onClick={() => void confirmCancel()} disabled={actionLoading === `${cancelOrder.id}:CANCEL`} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white disabled:opacity-60">
+                {actionLoading === `${cancelOrder.id}:CANCEL` && <Loader2 className="h-4 w-4 animate-spin" />}
+                {actionLoading === `${cancelOrder.id}:CANCEL` ? "Cancelling..." : "Yes, Cancel Order"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {editor && (
         <div className="fixed inset-0 z-50 flex items-start bg-black/40 p-0 sm:items-center sm:justify-center sm:p-4">
           <div className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl dark:bg-slate-950 sm:max-h-[calc(100dvh-2rem)] sm:max-w-xl sm:rounded-2xl">
@@ -1479,6 +1544,11 @@ export default function OrderDeskPage() {
             </div>
 
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-24">
+              {editor.mode === "edit" && editor.order && normalizedStatus(editor.order.status) === "DISPATCHED" && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+                  This order is already dispatched. Editing will only update order details; dispatch status will remain unchanged.
+                </div>
+              )}
               {editor.mode === "create" && (
                 <div>
                   <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-900">

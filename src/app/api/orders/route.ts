@@ -251,7 +251,7 @@ function transitionStatus(current: OrderStatus, action: string) {
   if (normalized && finalStatuses.includes(normalized)) throw new Error("ORDER_READ_ONLY");
 
   if (action === "EDIT") {
-    if (!isReceivedStatus(current)) throw new Error("ONLY_RECEIVED_ORDERS_CAN_BE_EDITED");
+    if (!isReceivedStatus(current) && !isDispatchedStatus(current)) throw new Error("ONLY_ACTIVE_ORDERS_CAN_BE_EDITED");
     return current;
   }
   if (action === "DISPATCH") {
@@ -660,6 +660,7 @@ export async function PATCH(request: Request) {
     });
     const body = patchSchema.parse(payload);
     const action = body.action ?? actionForStatus(body.status as OrderStatus | undefined);
+    if (action === "EDIT" && !body.orderDetails) throw new Error("ORDER_DETAILS_REQUIRED");
     const preferredDeliveryDate = body.preferredDeliveryDate === undefined ? undefined : parseOptionalDate(body.preferredDeliveryDate);
     const deliveryLocation = body.deliveryLocation === undefined && body.deliveryLocationText === undefined && body.deliveryLocationUrl === undefined
       ? undefined
@@ -734,10 +735,12 @@ export async function PATCH(request: Request) {
       shopId,
       orderId: order.id,
       userId: session.id,
-      action: action === "EDIT" ? "EDITED" : action,
       previousStatus: previousStatusForActivity,
       newStatus: order.status,
-      notes: action === "EDIT" ? "Order details edited" : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
+      action: action === "EDIT" ? "ORDER_UPDATED" : action,
+      notes: action === "EDIT"
+        ? isDispatchedStatus(order.status) ? "Order details edited after dispatch." : "Order details updated."
+        : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
     });
     logger.info("order_update_success", {
       requestId,
@@ -772,8 +775,10 @@ export async function PATCH(request: Request) {
     const message =
       error instanceof Error && error.message === "ORDER_READ_ONLY"
         ? "Delivered or cancelled orders are read-only."
-        : error instanceof Error && error.message === "ONLY_RECEIVED_ORDERS_CAN_BE_EDITED"
-          ? "Only received orders can be edited."
+        : error instanceof Error && error.message === "ONLY_ACTIVE_ORDERS_CAN_BE_EDITED"
+          ? "Only pending or dispatched orders can be edited."
+          : error instanceof Error && error.message === "ORDER_DETAILS_REQUIRED"
+            ? "Order details are required."
           : error instanceof Error && error.message === "ONLY_RECEIVED_ORDERS_CAN_BE_DISPATCHED"
             ? "Only received orders can be dispatched."
             : error instanceof Error && error.message === "ONLY_DISPATCHED_ORDERS_CAN_BE_DELIVERED"
