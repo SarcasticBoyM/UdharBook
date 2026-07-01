@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { normalizePhone } from "@/lib/phone";
 import { canUseOrders } from "@/lib/permissions";
 import { parseDeliveryLocation } from "@/lib/order-delivery-location";
+import { orderUrl, safeCreateNotification } from "@/lib/notifications";
 
 const publicOrderSchema = z.object({
   customerName: z.string().trim().min(1, "Customer name is required.").max(120),
@@ -48,19 +49,16 @@ async function notifyPublicOrderSafe(input: {
   customerName: string;
 }) {
   try {
-    await prisma.notification.create({
-      data: {
-        shopId: input.shopId,
-        targetType: "SHOP",
-        type: "ORDER_CREATED",
-        title: "New order received",
-        message: `${input.customerName} placed an order from customer order link.`,
-        entityType: "ORDER",
-        entityId: input.orderId,
-        actionUrl: "/orders",
-        priority: "NORMAL",
-        idempotencyKey: `public-order:${input.orderId}`,
-      },
+    await safeCreateNotification({
+      shopId: input.shopId,
+      target: { type: "SHOP" },
+      type: "ORDER_CREATED",
+      title: "New order received",
+      message: `${input.customerName} placed an order from customer order link.`,
+      entityType: "ORDER",
+      entityId: input.orderId,
+      actionUrl: orderUrl(input.orderId),
+      idempotencyKey: `public-order:${input.orderId}`,
     });
   } catch (error) {
     logger.error("public_order_notification_failed_non_blocking", {

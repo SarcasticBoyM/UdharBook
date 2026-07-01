@@ -8,6 +8,7 @@ import {
   OPERATIONAL_NOTIFICATION_ROLES,
 } from "@/lib/notification-priority";
 import { taskTypeLabels } from "@/lib/tasks";
+import { sendPushForNotification } from "@/lib/web-push";
 
 const RETRY_DELAYS_MINUTES = [1, 5, 30, 120] as const;
 const DEFAULT_MAX_RETRIES = RETRY_DELAYS_MINUTES.length;
@@ -347,6 +348,12 @@ export async function safeCreateNotification(input: CreateNotificationInput): Pr
       throw new NotificationValidationError("Notification event resolved no active same-shop recipients");
     }
     const notification = await insertNotification(input);
+    await sendPushForNotification(notification, resolvedRecipients).catch((pushError) => {
+      logger.warn("notification_push_dispatch_failed_non_blocking", {
+        notificationId: notification.id,
+        error: errorMessage(pushError),
+      });
+    });
     await markRetrySent(idempotencyKey);
     logger.info("notification_created", {
       event: "notification_created",
@@ -431,7 +438,14 @@ export async function processNotificationRetries(options: { shopId: string; limi
         if (input.shopId !== options.shopId || notificationIdempotencyKey(input) !== retry.idempotencyKey) {
           throw new NotificationValidationError("Retry shop or idempotency key mismatch");
         }
-        await insertNotification(input);
+        const notification = await insertNotification(input);
+        const recipients = await resolveNotificationRecipients(input);
+        await sendPushForNotification(notification, recipients).catch((pushError) => {
+          logger.warn("notification_retry_push_dispatch_failed_non_blocking", {
+            notificationId: notification.id,
+            error: errorMessage(pushError),
+          });
+        });
         await prisma.notificationRetry.update({
           where: { id: retry.id },
           data: { status: "SENT", lastError: null },

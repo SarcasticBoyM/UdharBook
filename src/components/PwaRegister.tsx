@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { currentPushSubscription, syncExistingPushSubscription } from "@/lib/push-client";
 
 const notified = new Set<string>();
 
@@ -20,7 +21,10 @@ export function PwaRegister() {
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").then((registration) => registration.update()).catch(() => undefined);
+      navigator.serviceWorker.register("/sw.js").then(async (registration) => {
+        await registration.update();
+        await syncExistingPushSubscription().catch(() => null);
+      }).catch(() => undefined);
     }
   }, []);
 
@@ -36,6 +40,7 @@ export function PwaRegister() {
         const res = await fetch("/api/notifications/due", { credentials: "same-origin" });
         if (!res.ok) return;
         const data = await res.json();
+        if (await currentPushSubscription().catch(() => null)) return;
         for (const reminder of data.reminders ?? []) {
           const label = timingLabel(reminder.scheduledAt, reminder.missed);
           const key = `${reminder.id}:${label}`;

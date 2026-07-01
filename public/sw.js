@@ -1,4 +1,4 @@
-const CACHE_NAME = "udharbook-v7";
+const CACHE_NAME = "udharbook-v8";
 const APP_SHELL = [
   "/manifest.webmanifest",
   "/manifest.json",
@@ -106,7 +106,12 @@ self.addEventListener("push", (event) => {
       badge: "/icon-192.png",
       requireInteraction: Boolean(data.requireInteraction),
       tag: data.tag,
-      data: { url: typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/" },
+      data: {
+        url: typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/",
+        notificationType: data.notificationType,
+        entityType: data.entityType,
+        entityId: data.entityId,
+      },
     })
   );
 });

@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
 import { ShopSwitcher } from "./ShopSwitcher";
 import { canAccessModule, roleLabel } from "@/lib/operational-roles";
+import { disableCurrentPushSubscription } from "@/lib/push-client";
 
 type SidebarLink = {
   href: string;
@@ -96,6 +97,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const displayRole = roleLabel(role);
 
   const logout = async () => {
+    await disableCurrentPushSubscription().catch(() => undefined);
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
   };

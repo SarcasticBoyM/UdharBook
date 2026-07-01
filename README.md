@@ -25,6 +25,8 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the push-subscription migration. Generate a key pair with `npx web-push generate-vapid-keys`. The scheduled due-reminder endpoint is protected by `CRON_SECRET` and configured in `vercel.json` to run every five minutes.
+
 ## Production Checks
 
 ```bash

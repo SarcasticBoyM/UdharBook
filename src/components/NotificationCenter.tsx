@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { CriticalAlertBanner } from "@/components/CriticalAlertBanner";
+import { PhoneNotificationControls } from "@/components/PhoneNotificationControls";
 import {
   notificationCategory,
   priorityRank,
@@ -21,6 +22,7 @@ import {
   type NotificationPriorityValue,
 } from "@/lib/notification-priority";
 import { cn } from "@/lib/utils";
+import { currentPushSubscription } from "@/lib/push-client";
 
 type AppNotification = {
   id: string;
@@ -154,6 +156,8 @@ export function NotificationCenter() {
     if (!shouldPushNotification(notification.type)) return;
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     if (!isStandalonePwa()) return;
+    void currentPushSubscription().then((subscription) => {
+      if (subscription) return;
     const payload = {
       type: "UDHARBOOK_NOTIFY",
       title: notification.title,
@@ -173,6 +177,7 @@ export function NotificationCenter() {
         tag: payload.tag,
       });
     }
+    }).catch(() => undefined);
   }, []);
 
   const mergeIncomingNotifications = useCallback((incoming: AppNotification[], showNew: boolean) => {
@@ -449,6 +454,7 @@ export function NotificationCenter() {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <PhoneNotificationControls />
               {actionError && (
                 <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

@@ -197,6 +197,7 @@ model Shop {
   qrVCard            QRVCard?
   notifications      Notification[]
   notificationRetries NotificationRetry[]
+  pushSubscriptions  PushSubscription[]
   tasks              Task[]
   driverTrackingLinks DriverTrackingLink[]
   driverTrips        DriverTrip[]
@@ -349,6 +350,7 @@ model User {
   roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
   notifications Notification[] @relation("NotificationTargetUser")
   notificationRetries NotificationRetry[] @relation("NotificationRetryTargetUser")
+  pushSubscriptions PushSubscription[]
   assignedTasks Task[] @relation("TaskAssignedTo")
   createdTasks Task[] @relation("TaskAssignedBy")
   driverTrackingLink DriverTrackingLink? @relation("DriverTrackingLinkDriver")
@@ -448,6 +450,40 @@ model Task {
   @@index([shopId, customerId, createdAt])
   @@index([shopId, sourceEntityType, sourceEntityId])
   @@index([shopId, linkedFollowUpId])
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  endpoint   String   @unique
+  p256dhKey  String
+  authKey    String
+  userAgent  String?
+  deviceInfo String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  deliveries PushDelivery[]
+
+  @@index([userId, isActive])
+  @@index([shopId, isActive])
+}
+
+model PushDelivery {
+  id             String           @id @default(cuid())
+  notificationId String
+  subscriptionId String
+  subscription   PushSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  status         String           @default("PENDING")
+  lastError      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([notificationId, subscriptionId])
+  @@index([status, updatedAt])
 }
 
 model DriverTrackingLink {
