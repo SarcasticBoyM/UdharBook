@@ -1,14 +1,16 @@
--- AlterTable
-ALTER TABLE "DriverTrip" ADD COLUMN "totalDistanceMeters" DOUBLE PRECISION NOT NULL DEFAULT 0;
-ALTER TABLE "DriverTrip" ADD COLUMN "movingDurationSeconds" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "DriverTrip" ADD COLUMN "idleDurationSeconds" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "DriverTrip" ADD COLUMN "pointCount" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "DriverTrip" ADD COLUMN "maxSpeedKmph" DOUBLE PRECISION;
-ALTER TABLE "DriverTrip" ADD COLUMN "avgSpeedKmph" DOUBLE PRECISION;
-ALTER TABLE "DriverTrip" ADD COLUMN "lastMovementAt" TIMESTAMP(3);
+-- Some production databases already contain driver-distance columns from an
+-- earlier manual/schema state. Preserve existing trip data and add only the
+-- columns that are still missing.
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "totalDistanceMeters" DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "movingDurationSeconds" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "idleDurationSeconds" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "pointCount" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "maxSpeedKmph" DOUBLE PRECISION;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "avgSpeedKmph" DOUBLE PRECISION;
+ALTER TABLE "DriverTrip" ADD COLUMN IF NOT EXISTS "lastMovementAt" TIMESTAMP(3);
 
--- AlterTable
-ALTER TABLE "DriverLocationPoint" ADD COLUMN "distanceFromPreviousMeters" DOUBLE PRECISION;
-ALTER TABLE "DriverLocationPoint" ADD COLUMN "calculatedSpeedKmph" DOUBLE PRECISION;
-ALTER TABLE "DriverLocationPoint" ADD COLUMN "isDistanceIgnored" BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE "DriverLocationPoint" ADD COLUMN "ignoreReason" TEXT;
+-- Location-point columns may have been deployed alongside DriverTrip manually.
+ALTER TABLE "DriverLocationPoint" ADD COLUMN IF NOT EXISTS "distanceFromPreviousMeters" DOUBLE PRECISION;
+ALTER TABLE "DriverLocationPoint" ADD COLUMN IF NOT EXISTS "calculatedSpeedKmph" DOUBLE PRECISION;
+ALTER TABLE "DriverLocationPoint" ADD COLUMN IF NOT EXISTS "isDistanceIgnored" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "DriverLocationPoint" ADD COLUMN IF NOT EXISTS "ignoreReason" TEXT;
