@@ -5,7 +5,9 @@ import { BellRing, Loader2, Send } from "lucide-react";
 import {
   currentPushSubscription,
   disableCurrentPushSubscription,
+  fetchPushStatus,
   savePushSubscription,
+  subscriptionUsesPublicKey,
   supportsWebPush,
   urlBase64ToUint8Array,
   type PhoneNotificationSupport,
@@ -26,10 +28,27 @@ export function PhoneNotificationControls() {
   const [configError, setConfigError] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [diagnostics, setDiagnostics] = useState({
+    notificationPermission: "unavailable",
+    serviceWorkerSupported: false,
+    pushManagerSupported: false,
+    serviceWorkerControllerPresent: false,
+    currentBrowserSubscriptionExists: false,
+    serverEnabled: false,
+    serverSubscriptionCount: 0,
+    lastTest: "not run",
+  });
 
   const refresh = useCallback(async () => {
     if (!supportsWebPush()) {
       setStatus("unsupported");
+      setDiagnostics((current) => ({
+        ...current,
+        notificationPermission: typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+        serviceWorkerSupported: "serviceWorker" in navigator,
+        pushManagerSupported: "PushManager" in window,
+        serviceWorkerControllerPresent: Boolean(navigator.serviceWorker?.controller),
+      }));
       return;
     }
     if (Notification.permission === "denied") {
@@ -38,16 +57,45 @@ export function PhoneNotificationControls() {
     }
     const response = await fetch("/api/notifications/config", { credentials: "same-origin", cache: "no-store" });
     const data = await response.json().catch(() => ({}));
+    let resolvedPublicKey = "";
     if (response.ok) {
       setConfigured(Boolean(data.configured));
-      setPublicKey(data.publicKey ?? "");
+      resolvedPublicKey = data.publicKey ?? "";
+      setPublicKey(resolvedPublicKey);
       setConfigError(typeof data.configError === "string" ? data.configError : "");
     } else {
       setConfigured(false);
       setConfigError(typeof data.message === "string" ? data.message : typeof data.error === "string" ? data.error : "Could not check phone notification configuration.");
     }
     const subscription = await currentPushSubscription().catch(() => null);
-    setStatus(subscription && Notification.permission === "granted"
+    const subscriptionKeyMatches = Boolean(subscription && resolvedPublicKey && subscriptionUsesPublicKey(subscription, resolvedPublicKey));
+    let serverEnabled = false;
+    let serverSubscriptionCount = 0;
+    try {
+      let serverStatus = await fetchPushStatus(subscription);
+      if (subscription && subscriptionKeyMatches && Notification.permission === "granted" && !serverStatus.enabled) {
+        await savePushSubscription(subscription);
+        serverStatus = await fetchPushStatus(subscription);
+      }
+      serverEnabled = serverStatus.enabled;
+      serverSubscriptionCount = serverStatus.activeCount;
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : "Could not check phone notification status.");
+    }
+    setDiagnostics((current) => ({
+      ...current,
+      notificationPermission: Notification.permission,
+      serviceWorkerSupported: "serviceWorker" in navigator,
+      pushManagerSupported: "PushManager" in window,
+      serviceWorkerControllerPresent: Boolean(navigator.serviceWorker.controller),
+      currentBrowserSubscriptionExists: Boolean(subscription && subscriptionKeyMatches),
+      serverEnabled,
+      serverSubscriptionCount,
+    }));
+    if (subscription && !subscriptionKeyMatches) {
+      setConfigError("This device uses an older VAPID key. Enable phone notifications again to refresh it.");
+    }
+    setStatus(subscription && subscriptionKeyMatches && serverEnabled && Notification.permission === "granted"
       ? "enabled"
       : Notification.permission === "default"
         ? "default"
@@ -62,19 +110,41 @@ export function PhoneNotificationControls() {
     try {
       if (!supportsWebPush()) throw new Error("This browser does not support background phone notifications. Use an installed Android Chrome/PWA over HTTPS.");
       if (!configured || !publicKey) throw new Error(configError || "Missing VAPID public key.");
-      const permission = await Notification.requestPermission();
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
       if (permission !== "granted") {
         setStatus(permission);
         throw new Error(permission === "denied" ? "Permission is blocked. Enable notifications from browser/site settings." : "Notification permission was not granted.");
       }
       const registration = await navigator.serviceWorker.ready;
-      const existing = await registration.pushManager.getSubscription();
-      const subscription = existing ?? await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey),
-      });
-      await savePushSubscription(subscription);
+      await registration.update();
+      let existing = await registration.pushManager.getSubscription();
+      if (existing && !subscriptionUsesPublicKey(existing, publicKey)) {
+        await fetch("/api/notifications/push", {
+          method: "DELETE",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: existing.endpoint }),
+        }).catch(() => undefined);
+        await existing.unsubscribe().catch(() => false);
+        existing = null;
+      }
+      let subscription = existing;
+      if (!subscription) {
+        try {
+          subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+          });
+        } catch (error) {
+          throw new Error(`Browser push subscription failed: ${error instanceof Error ? error.message : "Unknown browser error"}`);
+        }
+      }
+      const saved = await savePushSubscription(subscription);
+      if (!saved.enabled) throw new Error("Server did not enable this push subscription.");
       setStatus("enabled");
+      await refresh();
       setMessage("Phone notifications enabled on this device.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not enable phone notifications.");
@@ -105,8 +175,13 @@ export function PhoneNotificationControls() {
         body: JSON.stringify({ endpoint: subscription.endpoint }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? "Test notification could not be sent.");
-      setMessage("Test notification sent. Check your phone notification panel.");
+      setDiagnostics((current) => ({
+        ...current,
+        lastTest: `${Number(data.sentCount ?? 0)} sent / ${Number(data.failedCount ?? 0)} failed`,
+        serverSubscriptionCount: Number(data.totalSubscriptions ?? current.serverSubscriptionCount),
+      }));
+      if (!response.ok || data.sentCount === 0) throw new Error(data.message ?? data.error ?? "No active push subscription found for this user/device");
+      setMessage(data.message ?? "Test notification sent. Check your phone notification panel.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Test notification could not be sent.");
     } finally {
@@ -140,6 +215,20 @@ export function PhoneNotificationControls() {
         )}
       </div>
       {message && <p className="mt-2 text-xs text-slate-600 dark:text-slate-300" role="status">{message}</p>}
+      {configError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">{configError}</p>}
+      <details className="mt-2 text-[11px] text-slate-500">
+        <summary className="cursor-pointer">Phone notification diagnostics</summary>
+        <div className="mt-1 grid gap-0.5">
+          <span>Permission: {diagnostics.notificationPermission}</span>
+          <span>Service worker: {diagnostics.serviceWorkerSupported ? "supported" : "unsupported"}</span>
+          <span>Push manager: {diagnostics.pushManagerSupported ? "supported" : "unsupported"}</span>
+          <span>SW controller: {diagnostics.serviceWorkerControllerPresent ? "present" : "missing"}</span>
+          <span>Browser subscription: {diagnostics.currentBrowserSubscriptionExists ? "present" : "missing"}</span>
+          <span>Server enabled: {diagnostics.serverEnabled ? "yes" : "no"}</span>
+          <span>Server subscriptions: {diagnostics.serverSubscriptionCount}</span>
+          <span>Last test: {diagnostics.lastTest}</span>
+        </div>
+      </details>
       {typeof window !== "undefined" && !window.isSecureContext && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">HTTPS is required outside localhost.</p>}
     </div>
   );

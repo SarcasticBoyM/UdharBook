@@ -4,6 +4,7 @@ import { requireShopId } from "@/lib/tenant";
 import { processDueOrderFollowUpReminders } from "@/lib/order-follow-up-reminders";
 import { processDueCustomerTaskReminders } from "@/lib/customer-task-reminders";
 import { processDueScheduledFollowUpReminders } from "@/lib/follow-up-reminders";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
@@ -32,7 +33,21 @@ async function processRequest(request: Request) {
   }
 
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session) {
+    const url = new URL(request.url);
+    logger.warn("cron_secret_missing_or_invalid", {
+      path: url.pathname,
+      method: request.method,
+      querySecretPresent: Boolean(url.searchParams.get("secret")),
+      authorizationPresent: Boolean(request.headers.get("authorization")),
+      cronSecretConfigured: Boolean(process.env.CRON_SECRET),
+    });
+    return NextResponse.json({
+      ok: false,
+      error: "cron_secret_missing_or_invalid",
+      message: "CRON_SECRET is missing or invalid.",
+    }, { status: 401 });
+  }
   const shopId = requireShopId(request, session);
   const [orderResult, taskResult, followUpResult] = await Promise.all([
     processDueOrderFollowUpReminders({ shopId, recipientUserId: session.id, limit: 20 }),
@@ -52,7 +67,18 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!hasCronAuthorization(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const url = new URL(request.url);
+    logger.warn("cron_secret_missing_or_invalid", {
+      path: url.pathname,
+      querySecretPresent: Boolean(url.searchParams.get("secret")),
+      authorizationPresent: Boolean(request.headers.get("authorization")),
+      cronSecretConfigured: Boolean(process.env.CRON_SECRET),
+    });
+    return NextResponse.json({
+      ok: false,
+      error: "cron_secret_missing_or_invalid",
+      message: "CRON_SECRET is missing or invalid.",
+    }, { status: 401 });
   }
   return processRequest(request);
 }

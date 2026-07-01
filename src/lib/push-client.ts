@@ -7,12 +7,38 @@ export function urlBase64ToUint8Array(value: string) {
   return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
 }
 
+export function subscriptionUsesPublicKey(subscription: PushSubscription, publicKey: string) {
+  const actualKey = subscription.options.applicationServerKey;
+  if (!actualKey) return false;
+  const actual = new Uint8Array(actualKey);
+  const expected = urlBase64ToUint8Array(publicKey);
+  return actual.length === expected.length && actual.every((byte, index) => byte === expected[index]);
+}
+
 export function supportsWebPush() {
   return typeof window !== "undefined" &&
     window.isSecureContext &&
     "serviceWorker" in navigator &&
     "PushManager" in window &&
     "Notification" in window;
+}
+
+export async function pushEndpointHash(endpoint: string) {
+  const bytes = new TextEncoder().encode(endpoint);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 16);
+}
+
+export async function fetchPushStatus(subscription: PushSubscription | null) {
+  const endpointHash = subscription ? await pushEndpointHash(subscription.endpoint) : "";
+  const query = endpointHash ? `?endpointHash=${encodeURIComponent(endpointHash)}` : "";
+  const response = await fetch(`/api/notifications/push${query}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message ?? data.error ?? "Could not check phone notification status.");
+  return data as { enabled: boolean; activeCount: number; currentDeviceEnabled: boolean | null };
 }
 
 export async function currentPushSubscription() {
@@ -30,6 +56,7 @@ export async function savePushSubscription(subscription: PushSubscription) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.message ?? data.error ?? "Could not enable phone notifications.");
+  if (!data.enabled) throw new Error("Push subscription was not enabled by the server.");
   return data;
 }
 

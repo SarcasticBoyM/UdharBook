@@ -1,4 +1,4 @@
-const CACHE_NAME = "udharbook-v8";
+const CACHE_NAME = "udharbook-v9";
 const APP_SHELL = [
   "/manifest.webmanifest",
   "/manifest.json",
@@ -93,11 +93,15 @@ function showUdharBookNotification(data) {
 self.addEventListener("messageerror", () => undefined);
 
 self.addEventListener("push", (event) => {
-  let data = {};
+  let data = { title: "UdharBook", body: "You have a new UdharBook notification." };
   try {
-    data = event.data?.json() || {};
+    if (event.data) {
+      const parsed = event.data.json();
+      if (parsed && typeof parsed === "object") data = { ...data, ...parsed };
+    }
   } catch {
-    data = { body: event.data?.text() || "You have a new UdharBook notification." };
+    const plainText = event.data?.text();
+    if (plainText) data.body = plainText;
   }
   event.waitUntil(
     self.registration.showNotification(data.title || "UdharBook", {

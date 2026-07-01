@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -39,6 +40,10 @@ export type WebPushConfigDiagnostics = {
   subjectLooksValid: boolean;
   runtime: "nodejs";
 };
+
+export function pushEndpointHash(endpoint: string) {
+  return createHash("sha256").update(endpoint).digest("hex").slice(0, 16);
+}
 
 export function webPushConfig() {
   // Dynamic lookup keeps the public key server-resolved instead of relying on a
@@ -195,13 +200,15 @@ export async function sendPushForNotification(notification: PushNotificationReco
   return { sent, failed, skipped: false };
 }
 
-export async function sendTestPush(subscriptionId: string, userId: string, shopId: string) {
+export type TestPushSubscription = {
+  endpoint: string;
+  p256dhKey: string;
+  authKey: string;
+};
+
+export async function sendTestPush(subscription: TestPushSubscription) {
   const config = webPushConfig();
   if (!config.configured) throw new Error(config.error);
-  const subscription = await prisma.pushSubscription.findFirst({
-    where: { id: subscriptionId, userId, shopId, isActive: true },
-  });
-  if (!subscription) throw new Error("Active push subscription not found.");
   await webpush.sendNotification({
     endpoint: subscription.endpoint,
     keys: { p256dh: subscription.p256dhKey, auth: subscription.authKey },

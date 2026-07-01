@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { webPushConfig } from "@/lib/web-push";
+import { pushEndpointHash, webPushConfig } from "@/lib/web-push";
+import { logger } from "@/lib/logger";
 import {
   isPushSubscriptionStorageNotReady,
   logPushSubscriptionStorageError,
@@ -20,28 +21,35 @@ const subscriptionSchema = z.object({
   deviceInfo: z.string().trim().max(200).optional().nullable(),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const config = webPushConfig();
   try {
-    const [activeCount, latest] = await Promise.all([
-      prisma.pushSubscription.count({ where: { userId: session.id, shopId: session.shopId, isActive: true } }),
-      prisma.pushSubscription.findFirst({
-        where: { userId: session.id, shopId: session.shopId, isActive: true },
-        select: { id: true, endpoint: true, updatedAt: true },
-        orderBy: { updatedAt: "desc" },
-      }),
-    ]);
+    const requestedEndpointHash = new URL(request.url).searchParams.get("endpointHash");
+    const activeSubscriptions = await prisma.pushSubscription.findMany({
+      where: { userId: session.id, shopId: session.shopId, isActive: true },
+      select: { id: true, endpoint: true, updatedAt: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    const currentDevice = requestedEndpointHash
+      ? activeSubscriptions.find((subscription) => pushEndpointHash(subscription.endpoint) === requestedEndpointHash)
+      : null;
     return NextResponse.json({
+      ok: true,
       success: true,
+      enabled: requestedEndpointHash ? Boolean(currentDevice) : activeSubscriptions.length > 0,
       configured: config.configured,
       publicKey: config.publicKey,
       configError: config.error,
       diagnostics: config.diagnostics,
       storageReady: true,
-      activeCount,
-      latest,
+      activeCount: activeSubscriptions.length,
+      subscriptionCount: activeSubscriptions.length,
+      currentDeviceEnabled: requestedEndpointHash ? Boolean(currentDevice) : null,
+      latest: activeSubscriptions[0]
+        ? { id: activeSubscriptions[0].id, endpointHash: pushEndpointHash(activeSubscriptions[0].endpoint), updatedAt: activeSubscriptions[0].updatedAt }
+        : null,
     });
   } catch (error) {
     logPushSubscriptionStorageError("status", error);
@@ -68,6 +76,10 @@ export async function POST(request: Request) {
   }
   try {
     const body = subscriptionSchema.parse(await request.json());
+    const existing = await prisma.pushSubscription.findUnique({
+      where: { endpoint: body.endpoint },
+      select: { id: true },
+    });
     const subscription = await prisma.pushSubscription.upsert({
       where: { endpoint: body.endpoint },
       update: {
@@ -88,9 +100,24 @@ export async function POST(request: Request) {
         userAgent: request.headers.get("user-agent")?.slice(0, 500) ?? null,
         deviceInfo: body.deviceInfo || null,
       },
-      select: { id: true, updatedAt: true },
+      select: { id: true, isActive: true, updatedAt: true },
     });
-    return NextResponse.json({ success: true, subscription });
+    const endpointHash = pushEndpointHash(body.endpoint);
+    logger.info("push_subscription_saved", {
+      userIdPresent: Boolean(session.id),
+      shopIdPresent: Boolean(session.shopId),
+      endpointHash,
+      action: existing ? "updated" : "created",
+      isActive: subscription.isActive,
+    });
+    return NextResponse.json({
+      ok: true,
+      success: true,
+      enabled: true,
+      subscriptionId: subscription.id,
+      endpointHash,
+      action: existing ? "updated" : "created",
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid push subscription." }, { status: 400 });
