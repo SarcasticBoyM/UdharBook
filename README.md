@@ -41,6 +41,8 @@ Vercel Hobby only supports daily cron execution, so `vercel.json` intentionally 
 
 ## Production Checks
 
+`DATABASE_URL` is required for Prisma Client generation, migrations, and app runtime. `DIRECT_URL` is optional and is not referenced by the Prisma datasource.
+
 ```bash
 npm run lint
 npm run build
