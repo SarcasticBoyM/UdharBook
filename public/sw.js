@@ -1,4 +1,5 @@
-const CACHE_NAME = "udharbook-v9";
+const SERVICE_WORKER_VERSION = "v10";
+const CACHE_NAME = `udharbook-${SERVICE_WORKER_VERSION}`;
 const APP_SHELL = [
   "/manifest.webmanifest",
   "/manifest.json",
@@ -51,6 +52,10 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "UDHARBOOK_SW_VERSION") {
+    event.ports?.[0]?.postMessage({ version: SERVICE_WORKER_VERSION });
+    return;
+  }
   if (event.data?.type === "UDHARBOOK_SCHEDULE_NOTIFY") {
     const scheduledAt = Number(event.data.scheduledAt);
     if (!Number.isFinite(scheduledAt)) return;

@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BellRing, Loader2, Send } from "lucide-react";
+import { BellRing, Loader2, RefreshCw, Send } from "lucide-react";
 import {
+  CURRENT_SERVICE_WORKER_VERSION,
   currentPushSubscription,
+  currentServiceWorkerVersion,
   disableCurrentPushSubscription,
   fetchPushStatus,
   savePushSubscription,
+  serviceWorkerNeedsReopen,
   subscriptionUsesPublicKey,
   supportsWebPush,
   urlBase64ToUint8Array,
@@ -33,6 +36,7 @@ export function PhoneNotificationControls() {
     serviceWorkerSupported: false,
     pushManagerSupported: false,
     serviceWorkerControllerPresent: false,
+    serviceWorkerVersion: "unknown",
     currentBrowserSubscriptionExists: false,
     serverEnabled: false,
     serverSubscriptionCount: 0,
@@ -68,6 +72,8 @@ export function PhoneNotificationControls() {
       setConfigError(typeof data.message === "string" ? data.message : typeof data.error === "string" ? data.error : "Could not check phone notification configuration.");
     }
     const subscription = await currentPushSubscription().catch(() => null);
+    const workerVersion = await currentServiceWorkerVersion();
+    const workerIsCurrent = workerVersion === CURRENT_SERVICE_WORKER_VERSION;
     const subscriptionKeyMatches = Boolean(subscription && resolvedPublicKey && subscriptionUsesPublicKey(subscription, resolvedPublicKey));
     let serverEnabled = false;
     let serverSubscriptionCount = 0;
@@ -88,12 +94,15 @@ export function PhoneNotificationControls() {
       serviceWorkerSupported: "serviceWorker" in navigator,
       pushManagerSupported: "PushManager" in window,
       serviceWorkerControllerPresent: Boolean(navigator.serviceWorker.controller),
+      serviceWorkerVersion: workerVersion ?? "old/missing",
       currentBrowserSubscriptionExists: Boolean(subscription && subscriptionKeyMatches),
       serverEnabled,
       serverSubscriptionCount,
     }));
     if (subscription && !subscriptionKeyMatches) {
-      setConfigError("This device uses an older VAPID key. Enable phone notifications again to refresh it.");
+      setConfigError("Please close and reopen the app, then tap Recheck.");
+    } else if (!workerIsCurrent) {
+      setConfigError("App updated. Please close and reopen the app once to enable phone notifications.");
     }
     setStatus(subscription && subscriptionKeyMatches && serverEnabled && Notification.permission === "granted"
       ? "enabled"
@@ -145,7 +154,9 @@ export function PhoneNotificationControls() {
       if (!saved.enabled) throw new Error("Server did not enable this push subscription.");
       setStatus("enabled");
       await refresh();
-      setMessage("Phone notifications enabled on this device.");
+      setMessage(await serviceWorkerNeedsReopen()
+        ? "App updated. Please close and reopen the app once to enable phone notifications."
+        : "Phone notifications enabled on this device.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not enable phone notifications.");
     } finally {
@@ -189,6 +200,38 @@ export function PhoneNotificationControls() {
     }
   };
 
+  const recheck = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      await refresh();
+      setMessage(await serviceWorkerNeedsReopen()
+        ? "Please close and reopen the app, then tap Recheck."
+        : "Phone notification status rechecked.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not recheck phone notification status.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshServiceWorker = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      await registration.update();
+      await refresh();
+      setMessage(await serviceWorkerNeedsReopen()
+        ? "App updated. Please close and reopen the app once to enable phone notifications."
+        : "Service worker refreshed. Phone notification status is up to date.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not refresh the service worker.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-start gap-2">
@@ -213,7 +256,14 @@ export function PhoneNotificationControls() {
             <button type="button" onClick={disable} disabled={busy} className="ui-control min-h-10 rounded-md border px-3 text-xs font-semibold disabled:opacity-50">Disable</button>
           </>
         )}
+        <button type="button" onClick={recheck} disabled={busy || status === "unsupported"} className="ui-control inline-flex min-h-10 items-center gap-2 rounded-md border px-3 text-xs font-semibold disabled:opacity-50">
+          <RefreshCw className="h-4 w-4" /> Recheck status
+        </button>
+        <button type="button" onClick={refreshServiceWorker} disabled={busy || status === "unsupported"} className="ui-control inline-flex min-h-10 items-center gap-2 rounded-md border px-3 text-xs font-semibold disabled:opacity-50">
+          <RefreshCw className="h-4 w-4" /> Refresh service worker
+        </button>
       </div>
+      <p className="mt-2 text-xs text-slate-500">If notifications do not appear after enabling, close and reopen the app once.</p>
       {message && <p className="mt-2 text-xs text-slate-600 dark:text-slate-300" role="status">{message}</p>}
       {configError && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" role="status">{configError}</p>}
       <details className="mt-2 text-[11px] text-slate-500">
@@ -223,6 +273,7 @@ export function PhoneNotificationControls() {
           <span>Service worker: {diagnostics.serviceWorkerSupported ? "supported" : "unsupported"}</span>
           <span>Push manager: {diagnostics.pushManagerSupported ? "supported" : "unsupported"}</span>
           <span>SW controller: {diagnostics.serviceWorkerControllerPresent ? "present" : "missing"}</span>
+          <span>SW version: {diagnostics.serviceWorkerVersion}</span>
           <span>Browser subscription: {diagnostics.currentBrowserSubscriptionExists ? "present" : "missing"}</span>
           <span>Server enabled: {diagnostics.serverEnabled ? "yes" : "no"}</span>
           <span>Server subscriptions: {diagnostics.serverSubscriptionCount}</span>

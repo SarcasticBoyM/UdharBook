@@ -1,5 +1,7 @@
 export type PhoneNotificationSupport = "unsupported" | "denied" | "default" | "enabled" | "disabled";
 
+export const CURRENT_SERVICE_WORKER_VERSION = "v10";
+
 export function urlBase64ToUint8Array(value: string) {
   const padding = "=".repeat((4 - value.length % 4) % 4);
   const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -45,6 +47,24 @@ export async function currentPushSubscription() {
   if (!supportsWebPush()) return null;
   const registration = await navigator.serviceWorker.ready;
   return registration.pushManager.getSubscription();
+}
+
+export async function currentServiceWorkerVersion(timeoutMs = 1200) {
+  const controller = navigator.serviceWorker?.controller;
+  if (!controller) return null;
+  return new Promise<string | null>((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = window.setTimeout(() => resolve(null), timeoutMs);
+    channel.port1.onmessage = (event) => {
+      window.clearTimeout(timeout);
+      resolve(typeof event.data?.version === "string" ? event.data.version : null);
+    };
+    controller.postMessage({ type: "UDHARBOOK_SW_VERSION" }, [channel.port2]);
+  });
+}
+
+export async function serviceWorkerNeedsReopen() {
+  return await currentServiceWorkerVersion() !== CURRENT_SERVICE_WORKER_VERSION;
 }
 
 export async function savePushSubscription(subscription: PushSubscription) {
