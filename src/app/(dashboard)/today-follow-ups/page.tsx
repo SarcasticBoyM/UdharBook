@@ -18,6 +18,7 @@ import {
   Phone,
   Search,
   ShieldAlert,
+  SkipForward,
   StickyNote,
   TimerReset,
   Volume2,
@@ -757,6 +758,11 @@ export default function TodayFollowUpsPage() {
     [done, pending, visibleScheduled]
   );
 
+  const pendingQueueOrder = useMemo(
+    () => [...visibleScheduled.map((customer) => customer.id), ...pending.map((customer) => customer.id)],
+    [pending, visibleScheduled]
+  );
+
   const applyOptimisticAction = (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount = 0, addToDone = true) => {
     const now = new Date().toISOString();
     const action: FollowUpItem = {
@@ -921,6 +927,18 @@ export default function TodayFollowUpsPage() {
     [closeCustomer, openCustomer, queueOrder, scrollListElementIntoView]
   );
 
+  const handleSkip = useCallback(
+    (customerId: string) => {
+      const currentIndex = pendingQueueOrder.indexOf(customerId);
+      const nextId = pendingQueueOrder[currentIndex + 1]
+        ?? pendingQueueOrder.find((id) => id !== customerId)
+        ?? null;
+      if (nextId) openCustomer(nextId);
+      else closeCustomer();
+    },
+    [closeCustomer, openCustomer, pendingQueueOrder]
+  );
+
   const selectedPanel = selected ? (
     <ActionPanel
       customer={selected}
@@ -930,6 +948,7 @@ export default function TodayFollowUpsPage() {
       onClose={closeCustomer}
       onOptimistic={applyOptimisticAction}
       onSaved={handleSaved}
+      onSkip={handleSkip}
     />
   ) : null;
 
@@ -1962,6 +1981,7 @@ function ActionPanel({
   onClose,
   onOptimistic,
   onSaved,
+  onSkip,
 }: {
   customer: QueueCustomer | null;
   canAssignTask: boolean;
@@ -1970,6 +1990,7 @@ function ActionPanel({
   onClose: () => void;
   onOptimistic: (customer: QueueCustomer, status: QueueStatus, notes: string, nextDate: string | null, paidAmount?: number, addToDone?: boolean) => void;
   onSaved: (customerId: string) => Promise<void>;
+  onSkip: (customerId: string) => void;
 }) {
   const [primaryAction, setPrimaryAction] = useState<PrimaryFollowUpAction>("PAYMENT_UPDATE");
   const [status, setStatus] = useState<QueueStatus>("CONTACTED");
@@ -1983,6 +2004,9 @@ function ActionPanel({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [whatsAppMessage, setWhatsAppMessage] = useState("");
+  const [taskMessage, setTaskMessage] = useState("");
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const swipeStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
 
   useEffect(() => {
     if (!customer) return;
@@ -2002,7 +2026,18 @@ function ActionPanel({
     const existingDate = reminderInputFromDate(editingOrderFollowUp ? scheduledSource?.scheduledAt : customer.nextFollowupDate);
     setNextDate(existingDate);
     setWhatsAppMessage("");
+    setTaskMessage("");
+    setSwipeOffset(0);
   }, [customer]);
+
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 1279px)").matches) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
 
   if (!customer) {
     return (
@@ -2059,6 +2094,39 @@ function ActionPanel({
     } catch {
       setWhatsAppMessage("Could not copy the reminder message.");
     }
+  };
+
+  const startSwipe = (event: React.TouchEvent) => {
+    if (saving || (event.target as HTMLElement).closest("button, a, input, textarea, select, [role='dialog']")) return;
+    const touch = event.touches[0];
+    if (touch) swipeStartRef.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  };
+
+  const moveSwipe = (event: React.TouchEvent) => {
+    const start = swipeStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = Math.abs(touch.clientY - start.y);
+    if (dx > 0 && dx > dy * 1.35) setSwipeOffset(Math.min(dx, 180));
+  };
+
+  const endSwipe = (event: React.TouchEvent) => {
+    const start = swipeStartRef.current;
+    const touch = event.changedTouches[0];
+    swipeStartRef.current = null;
+    if (!start || !touch) {
+      setSwipeOffset(0);
+      return;
+    }
+    const dx = touch.clientX - start.x;
+    const dy = Math.abs(touch.clientY - start.y);
+    const elapsed = Math.max(1, Date.now() - start.at);
+    const safeDistance = Math.max(96, Math.min(window.innerWidth * 0.24, 140));
+    if (dx >= safeDistance && dx > dy * 1.5 && (elapsed < 900 || dx / elapsed > 0.25)) {
+      onSkip(customer.id);
+    }
+    setSwipeOffset(0);
   };
 
   const selectPrimaryAction = (action: PrimaryFollowUpAction) => {
@@ -2169,7 +2237,14 @@ function ActionPanel({
 
   return (
     <aside className="fixed inset-0 z-[60] bg-black/40 xl:relative xl:inset-auto xl:z-0 xl:h-auto xl:w-full xl:min-w-0 xl:self-start xl:bg-transparent">
-      <div className="ui-surface-elevated ml-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden border shadow-xl xl:max-h-[calc(100dvh-2rem)] xl:min-h-0 xl:max-w-none xl:rounded-xl xl:shadow-sm">
+      <div
+        className="ui-surface-elevated ml-auto flex h-[100dvh] max-h-[100dvh] w-full max-w-lg touch-pan-y flex-col overflow-hidden border shadow-xl transition-transform duration-150 xl:max-h-[calc(100dvh-2rem)] xl:min-h-0 xl:max-w-none xl:translate-x-0 xl:rounded-xl xl:shadow-sm"
+        style={{ transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined }}
+        onTouchStart={startSwipe}
+        onTouchMove={moveSwipe}
+        onTouchEnd={endSwipe}
+        onTouchCancel={() => { swipeStartRef.current = null; setSwipeOffset(0); }}
+      >
         <div className="ui-surface-muted grid shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-2 border-b px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:flex lg:items-start lg:justify-between lg:gap-3 lg:p-4">
           <button
             type="button"
@@ -2193,6 +2268,7 @@ function ActionPanel({
                   customerId: customer.id,
                   customerName: customer.partyName,
                   taskType: orderFollowUp ? "ORDER_FOLLOW_UP" : "PAYMENT_COLLECTION",
+                  title: `Follow up with ${customer.partyName}`,
                   notes: `Follow up with ${customer.partyName}\nOutstanding: ${formatCurrency(customer.outstandingBalance)}\n${latest?.notes ?? customer.notes ?? ""}`.trim(),
                   priority: derivedPriority(customer),
                   dueDate: reminderInputFromDate(scheduledSource?.scheduledAt ?? customer.nextFollowupDate) || undefined,
@@ -2200,6 +2276,7 @@ function ActionPanel({
                   sourceEntityId: scheduledSource?.id ?? latest?.id,
                   referenceUrl: `/customers/${customer.id}`,
                 }}
+                onAssigned={() => setTaskMessage("Task assigned successfully.")}
                 className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-brand-300 px-3 text-xs font-semibold text-brand-700"
               />
             )}
@@ -2237,10 +2314,33 @@ function ActionPanel({
                   Copy Message
                 </button>
               )}
+              {canAssignTask && (
+                <AssignTaskButton
+                  seed={{
+                    customerId: customer.id,
+                    customerName: customer.partyName,
+                    taskType: orderFollowUp ? "ORDER_FOLLOW_UP" : "PAYMENT_COLLECTION",
+                    title: `Follow up with ${customer.partyName}`,
+                    notes: `Follow up with ${customer.partyName}\nOutstanding: ${formatCurrency(customer.outstandingBalance)}\n${latest?.notes ?? customer.notes ?? ""}`.trim(),
+                    priority: derivedPriority(customer),
+                    dueDate: reminderInputFromDate(scheduledSource?.scheduledAt ?? customer.nextFollowupDate) || undefined,
+                    sourceEntityType: "FOLLOW_UP",
+                    sourceEntityId: scheduledSource?.id ?? latest?.id,
+                    referenceUrl: `/customers/${customer.id}`,
+                  }}
+                  onAssigned={() => setTaskMessage("Task assigned successfully.")}
+                  className="ui-control col-span-2 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold xl:hidden"
+                />
+              )}
             </div>
             {whatsAppMessage && (
               <p className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-xl" role="status">
                 {whatsAppMessage}
+              </p>
+            )}
+            {taskMessage && (
+              <p className="fixed bottom-5 left-1/2 z-[100] -translate-x-1/2 rounded-lg bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-xl" role="status">
+                {taskMessage}
               </p>
             )}
             {saveError && (
@@ -2523,7 +2623,7 @@ function ActionPanel({
             </div>
           </div>
 
-          <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-[1fr_auto] gap-2 border-t border-slate-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-[0_-8px_20px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
+          <div className="sticky bottom-0 z-10 grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 border-t border-slate-200 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-[0_-8px_20px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
             <button
               type="submit"
               disabled={saving}
@@ -2531,6 +2631,16 @@ function ActionPanel({
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
               Save and next
+            </button>
+            <button
+              type="button"
+              onClick={() => onSkip(customer.id)}
+              disabled={saving}
+              className="ui-control inline-flex min-h-12 items-center justify-center gap-1 rounded-lg border px-3 text-sm font-semibold disabled:opacity-50"
+              aria-label="Skip this follow-up without saving and show the next pending follow-up"
+            >
+              <SkipForward className="h-4 w-4" />
+              <span className="hidden sm:inline">Skip</span>
             </button>
             <Link
               href={`/customers/${customer.id}`}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ClipboardPlus, Search, X } from "lucide-react";
 import { taskPriorities, taskTypeLabels, taskTypes, type TaskType } from "@/lib/tasks";
 import { roleLabel } from "@/lib/operational-roles";
@@ -145,11 +145,9 @@ export function AssignTaskDialog({
     return () => window.clearTimeout(timer);
   }, [customer, customerQuery, seed?.customerId, seedShopId]);
 
-  const effectiveTitle = useMemo(() => title.trim() || taskTypeLabels[taskType], [taskType, title]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!assignedToId || !dueDate) return;
+    if (saving || !assignedToId || !title.trim() || !dueDate) return;
     setSaving(true);
     setError("");
     const response = await fetch("/api/tasks", {
@@ -164,7 +162,7 @@ export function AssignTaskDialog({
         assignedToId,
         customerId: customer?.id ?? seed?.customerId ?? null,
         taskType,
-        title: effectiveTitle,
+        title: title.trim(),
         notes: notes || null,
         priority,
         dueDate: toIstIso(dueDate),
@@ -228,7 +226,7 @@ export function AssignTaskDialog({
 
           <label className="sm:col-span-2">
             <span className="text-sm font-semibold">Title</span>
-            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={taskTypeLabels[taskType]} className="mt-1 min-h-12 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={taskTypeLabels[taskType]} className="mt-1 min-h-12 w-full rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" required maxLength={160} />
           </label>
 
           <label className="sm:col-span-2">
@@ -264,7 +262,7 @@ export function AssignTaskDialog({
           </label>
         </div>
 
-        <button type="submit" disabled={saving || !assignedToId || !dueDate} className="mt-5 min-h-12 w-full rounded-lg bg-brand-600 px-4 text-sm font-bold text-white disabled:opacity-50">
+        <button type="submit" disabled={saving || !assignedToId || !title.trim() || !dueDate} className="mt-5 min-h-12 w-full rounded-lg bg-brand-600 px-4 text-sm font-bold text-white disabled:opacity-50">
           {saving ? "Assigning..." : "Assign Task"}
         </button>
       </form>
