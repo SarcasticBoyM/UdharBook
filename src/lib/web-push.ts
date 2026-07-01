@@ -4,29 +4,110 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
 let vapidConfigured = false;
+let configuredSignature = "";
 let warnedMissingConfig = false;
 
+const PUBLIC_KEY_NAMES = [
+  "NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY",
+  "WEB_PUSH_VAPID_PUBLIC_KEY",
+  "VAPID_PUBLIC_KEY",
+] as const;
+const PRIVATE_KEY_NAMES = ["WEB_PUSH_VAPID_PRIVATE_KEY", "VAPID_PRIVATE_KEY"] as const;
+const SUBJECT_NAMES = ["WEB_PUSH_CONTACT_EMAIL", "VAPID_SUBJECT"] as const;
+
+function firstEnvironmentValue(names: readonly string[]) {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeSubject(value: string) {
+  if (/^mailto:[^@\s]+@[^@\s]+\.[^@\s]+$/i.test(value)) return value;
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) return `mailto:${value}`;
+  if (/^https?:\/\/\S+$/i.test(value)) return value;
+  return null;
+}
+
+export type WebPushConfigDiagnostics = {
+  publicKeyPresent: boolean;
+  privateKeyPresent: boolean;
+  subjectPresent: boolean;
+  publicKeyLength: number;
+  privateKeyLength: number;
+  subjectLooksValid: boolean;
+  runtime: "nodejs";
+};
+
 export function webPushConfig() {
-  const publicKey = process.env.NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY?.trim();
-  const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim();
-  const contact = process.env.WEB_PUSH_CONTACT_EMAIL?.trim();
-  if (!publicKey || !privateKey || !contact) {
+  // Dynamic lookup keeps the public key server-resolved instead of relying on a
+  // NEXT_PUBLIC value that may have been inlined in an older client build.
+  const publicKey = firstEnvironmentValue(PUBLIC_KEY_NAMES);
+  const privateKey = firstEnvironmentValue(PRIVATE_KEY_NAMES);
+  const rawSubject = firstEnvironmentValue(SUBJECT_NAMES);
+  const subject = rawSubject ? normalizeSubject(rawSubject) : null;
+  const diagnostics: WebPushConfigDiagnostics = {
+    publicKeyPresent: Boolean(publicKey),
+    privateKeyPresent: Boolean(privateKey),
+    subjectPresent: Boolean(rawSubject),
+    publicKeyLength: publicKey.length,
+    privateKeyLength: privateKey.length,
+    subjectLooksValid: Boolean(subject),
+    runtime: "nodejs",
+  };
+  const error = !publicKey
+    ? "Missing VAPID public key."
+    : !privateKey
+      ? "Missing VAPID private key."
+      : !rawSubject
+        ? "Missing push contact/subject."
+        : !subject
+          ? "Invalid push contact/subject format. Use mailto:email@example.com, a plain email, or an HTTPS URL."
+          : null;
+
+  if (error) {
     if (!warnedMissingConfig) {
       warnedMissingConfig = true;
       logger.error("web_push_vapid_config_missing", {
-        publicKeyConfigured: Boolean(publicKey),
-        privateKeyConfigured: Boolean(privateKey),
-        contactConfigured: Boolean(contact),
+        ...diagnostics,
+        error,
       });
     }
-    return { configured: false as const, publicKey: publicKey ?? null };
+    return {
+      configured: false as const,
+      publicKey: publicKey || null,
+      error,
+      diagnostics,
+    };
   }
-  if (!vapidConfigured) {
-    const subject = contact.startsWith("mailto:") ? contact : `mailto:${contact}`;
-    webpush.setVapidDetails(subject, publicKey, privateKey);
-    vapidConfigured = true;
+
+  if (!subject) {
+    throw new Error("Web Push subject validation reached an unexpected state.");
   }
-  return { configured: true as const, publicKey };
+  const signature = `${subject}\n${publicKey}\n${privateKey}`;
+  if (!vapidConfigured || configuredSignature !== signature) {
+    try {
+      webpush.setVapidDetails(subject, publicKey, privateKey);
+      vapidConfigured = true;
+      configuredSignature = signature;
+    } catch (configurationError) {
+      const message = configurationError instanceof Error
+        ? configurationError.message
+        : "Invalid VAPID key configuration.";
+      logger.error("web_push_vapid_config_invalid", {
+        ...diagnostics,
+        error: message,
+      });
+      return {
+        configured: false as const,
+        publicKey,
+        error: `Invalid VAPID configuration: ${message}`,
+        diagnostics,
+      };
+    }
+  }
+  return { configured: true as const, publicKey, error: null, diagnostics };
 }
 
 function safeBody(entityType?: string | null) {
@@ -116,7 +197,7 @@ export async function sendPushForNotification(notification: PushNotificationReco
 
 export async function sendTestPush(subscriptionId: string, userId: string, shopId: string) {
   const config = webPushConfig();
-  if (!config.configured) throw new Error("Web Push VAPID keys are not configured on the server.");
+  if (!config.configured) throw new Error(config.error);
   const subscription = await prisma.pushSubscription.findFirst({
     where: { id: subscriptionId, userId, shopId, isActive: true },
   });

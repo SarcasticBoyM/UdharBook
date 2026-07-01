@@ -4,6 +4,8 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { webPushConfig } from "@/lib/web-push";
 
+export const runtime = "nodejs";
+
 const subscriptionSchema = z.object({
   endpoint: z.string().url().max(2000),
   keys: z.object({
@@ -29,6 +31,8 @@ export async function GET() {
     success: true,
     configured: config.configured,
     publicKey: config.publicKey,
+    configError: config.error,
+    diagnostics: config.diagnostics,
     activeCount,
     latest,
   });
@@ -39,7 +43,10 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const config = webPushConfig();
   if (!config.configured) {
-    return NextResponse.json({ error: "Phone notifications are not configured on the server." }, { status: 503 });
+    return NextResponse.json({
+      error: config.error,
+      diagnostics: config.diagnostics,
+    }, { status: 503 });
   }
   try {
     const body = subscriptionSchema.parse(await request.json());

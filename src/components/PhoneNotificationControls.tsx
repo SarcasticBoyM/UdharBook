@@ -23,6 +23,7 @@ export function PhoneNotificationControls() {
   const [status, setStatus] = useState<PhoneNotificationSupport>("disabled");
   const [publicKey, setPublicKey] = useState("");
   const [configured, setConfigured] = useState(true);
+  const [configError, setConfigError] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -40,6 +41,10 @@ export function PhoneNotificationControls() {
     if (response.ok) {
       setConfigured(Boolean(data.configured));
       setPublicKey(data.publicKey ?? "");
+      setConfigError(typeof data.configError === "string" ? data.configError : "");
+    } else {
+      setConfigured(false);
+      setConfigError(typeof data.error === "string" ? data.error : "Could not check phone notification configuration.");
     }
     const subscription = await currentPushSubscription().catch(() => null);
     setStatus(subscription && Notification.permission === "granted"
@@ -56,7 +61,7 @@ export function PhoneNotificationControls() {
     setMessage("");
     try {
       if (!supportsWebPush()) throw new Error("This browser does not support background phone notifications. Use an installed Android Chrome/PWA over HTTPS.");
-      if (!configured || !publicKey) throw new Error("Phone notifications are not configured on the server.");
+      if (!configured || !publicKey) throw new Error(configError || "Missing VAPID public key.");
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         setStatus(permission);
