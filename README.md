@@ -25,7 +25,19 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the push-subscription migration. Generate a key pair with `npx web-push generate-vapid-keys`. The scheduled due-reminder endpoint is protected by `CRON_SECRET` and configured in `vercel.json` to run every five minutes.
+Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the push-subscription migration. Generate a key pair with `npx web-push generate-vapid-keys`.
+
+## Reminder scheduler
+
+`GET` or `POST /api/notifications/due` processes due follow-up, order follow-up, and task reminders. Automated requests require `CRON_SECRET` using either:
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+or `https://your-domain.example/api/notifications/due?secret=<CRON_SECRET>`. Prefer the Authorization header where the scheduler supports custom headers, because query strings may appear in provider logs.
+
+Vercel Hobby only supports daily cron execution, so `vercel.json` intentionally contains no frequent schedule. Configure cron-job.org, EasyCron, or a scheduled GitHub Actions workflow to call this endpoint every five minutes. Vercel Pro deployments may instead add a Vercel Cron schedule such as `*/5 * * * *`. Invalid credentials, or automated calls when `CRON_SECRET` is missing, receive `401 Unauthorized`.
 
 ## Production Checks
 

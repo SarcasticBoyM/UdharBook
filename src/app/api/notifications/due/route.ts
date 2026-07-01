@@ -8,7 +8,9 @@ import { processDueScheduledFollowUpReminders } from "@/lib/follow-up-reminders"
 function hasCronAuthorization(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
-  return request.headers.get("authorization") === `Bearer ${secret}`;
+  const authorization = request.headers.get("authorization");
+  const querySecret = new URL(request.url).searchParams.get("secret");
+  return authorization === `Bearer ${secret}` || querySecret === secret;
 }
 
 async function processRequest(request: Request) {

@@ -138,7 +138,10 @@ export async function middleware(request: NextRequest) {
   if (
     pathname === "/api/notifications/due" &&
     process.env.CRON_SECRET &&
-    request.headers.get("authorization") === `Bearer ${process.env.CRON_SECRET}`
+    (
+      request.headers.get("authorization") === `Bearer ${process.env.CRON_SECRET}` ||
+      request.nextUrl.searchParams.get("secret") === process.env.CRON_SECRET
+    )
   ) {
     return NextResponse.next();
   }
