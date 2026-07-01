@@ -34,6 +34,31 @@ ALTER TABLE "User"
     END
   )::"UserRole_fixed";
 
+-- A temporary pre-wipe backup schema may still have a role column backed by
+-- public."UserRole". Preserve that backup data as text so the legacy enum can
+-- be removed without touching the active public."User" table.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_attribute attribute
+    JOIN pg_class relation ON relation.oid = attribute.attrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'cleanup_backup_20260606_before_wipe'
+      AND relation.relname = 'User'
+      AND attribute.attname = 'role'
+      AND attribute.attnum > 0
+      AND NOT attribute.attisdropped
+      AND attribute.atttypid = to_regtype('public."UserRole"')
+  ) THEN
+    EXECUTE 'ALTER TABLE cleanup_backup_20260606_before_wipe."User" ALTER COLUMN "role" DROP DEFAULT';
+    EXECUTE 'ALTER TABLE cleanup_backup_20260606_before_wipe."User" ALTER COLUMN "role" TYPE text USING "role"::text';
+  END IF;
+END
+$$;
+
+-- PostgreSQL will refuse this non-CASCADE drop if any unexpected dependency
+-- remains, keeping unrelated production objects safe.
 DROP TYPE "UserRole";
 ALTER TYPE "UserRole_fixed" RENAME TO "UserRole";
 ALTER TABLE "User" ALTER COLUMN "role" SET DEFAULT 'ACCOUNT_STAFF';
