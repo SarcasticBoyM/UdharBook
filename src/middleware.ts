@@ -135,14 +135,9 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const traceId = crypto.randomUUID();
 
-  if (
-    pathname === "/api/notifications/due" &&
-    process.env.CRON_SECRET &&
-    (
-      request.headers.get("authorization") === `Bearer ${process.env.CRON_SECRET}` ||
-      request.nextUrl.searchParams.get("secret") === process.env.CRON_SECRET
-    )
-  ) {
+  // The route validates CRON_SECRET itself. Let external schedulers reach it
+  // without requiring an app session; invalid secrets still receive 401 there.
+  if (pathname === "/api/notifications/due") {
     return NextResponse.next();
   }
 

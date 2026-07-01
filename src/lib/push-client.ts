@@ -29,7 +29,7 @@ export async function savePushSubscription(subscription: PushSubscription) {
     body: JSON.stringify(subscription.toJSON()),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error ?? "Could not enable phone notifications.");
+  if (!response.ok) throw new Error(data.message ?? data.error ?? "Could not enable phone notifications.");
   return data;
 }
 

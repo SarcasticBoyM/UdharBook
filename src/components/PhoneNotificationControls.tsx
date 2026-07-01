@@ -36,7 +36,7 @@ export function PhoneNotificationControls() {
       setStatus("denied");
       return;
     }
-    const response = await fetch("/api/notifications/push", { credentials: "same-origin", cache: "no-store" });
+    const response = await fetch("/api/notifications/config", { credentials: "same-origin", cache: "no-store" });
     const data = await response.json().catch(() => ({}));
     if (response.ok) {
       setConfigured(Boolean(data.configured));
@@ -44,7 +44,7 @@ export function PhoneNotificationControls() {
       setConfigError(typeof data.configError === "string" ? data.configError : "");
     } else {
       setConfigured(false);
-      setConfigError(typeof data.error === "string" ? data.error : "Could not check phone notification configuration.");
+      setConfigError(typeof data.message === "string" ? data.message : typeof data.error === "string" ? data.error : "Could not check phone notification configuration.");
     }
     const subscription = await currentPushSubscription().catch(() => null);
     setStatus(subscription && Notification.permission === "granted"

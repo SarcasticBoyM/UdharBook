@@ -5,6 +5,8 @@ import { processDueOrderFollowUpReminders } from "@/lib/order-follow-up-reminder
 import { processDueCustomerTaskReminders } from "@/lib/customer-task-reminders";
 import { processDueScheduledFollowUpReminders } from "@/lib/follow-up-reminders";
 
+export const runtime = "nodejs";
+
 function hasCronAuthorization(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;

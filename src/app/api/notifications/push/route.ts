@@ -3,6 +3,11 @@ import { z } from "zod";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { webPushConfig } from "@/lib/web-push";
+import {
+  isPushSubscriptionStorageNotReady,
+  logPushSubscriptionStorageError,
+  pushSubscriptionStorageErrorResponse,
+} from "@/lib/push-subscription-storage";
 
 export const runtime = "nodejs";
 
@@ -18,24 +23,37 @@ const subscriptionSchema = z.object({
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const [activeCount, latest] = await Promise.all([
-    prisma.pushSubscription.count({ where: { userId: session.id, shopId: session.shopId, isActive: true } }),
-    prisma.pushSubscription.findFirst({
-      where: { userId: session.id, shopId: session.shopId, isActive: true },
-      select: { id: true, endpoint: true, updatedAt: true },
-      orderBy: { updatedAt: "desc" },
-    }),
-  ]);
   const config = webPushConfig();
-  return NextResponse.json({
-    success: true,
-    configured: config.configured,
-    publicKey: config.publicKey,
-    configError: config.error,
-    diagnostics: config.diagnostics,
-    activeCount,
-    latest,
-  });
+  try {
+    const [activeCount, latest] = await Promise.all([
+      prisma.pushSubscription.count({ where: { userId: session.id, shopId: session.shopId, isActive: true } }),
+      prisma.pushSubscription.findFirst({
+        where: { userId: session.id, shopId: session.shopId, isActive: true },
+        select: { id: true, endpoint: true, updatedAt: true },
+        orderBy: { updatedAt: "desc" },
+      }),
+    ]);
+    return NextResponse.json({
+      success: true,
+      configured: config.configured,
+      publicKey: config.publicKey,
+      configError: config.error,
+      diagnostics: config.diagnostics,
+      storageReady: true,
+      activeCount,
+      latest,
+    });
+  } catch (error) {
+    logPushSubscriptionStorageError("status", error);
+    if (isPushSubscriptionStorageNotReady(error)) {
+      return NextResponse.json(pushSubscriptionStorageErrorResponse(), { status: 503 });
+    }
+    return NextResponse.json({
+      ok: false,
+      error: "push_subscription_storage_unavailable",
+      message: "Push subscription storage is temporarily unavailable.",
+    }, { status: 503 });
+  }
 }
 
 export async function POST(request: Request) {
@@ -77,7 +95,15 @@ export async function POST(request: Request) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid push subscription." }, { status: 400 });
     }
-    return NextResponse.json({ error: "Could not save phone notification subscription." }, { status: 500 });
+    logPushSubscriptionStorageError("save", error);
+    if (isPushSubscriptionStorageNotReady(error)) {
+      return NextResponse.json(pushSubscriptionStorageErrorResponse(), { status: 503 });
+    }
+    return NextResponse.json({
+      ok: false,
+      error: "push_subscription_storage_unavailable",
+      message: "Could not save phone notification subscription.",
+    }, { status: 503 });
   }
 }
 
@@ -86,14 +112,26 @@ export async function DELETE(request: Request) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const body = await request.json().catch(() => ({})) as { endpoint?: unknown; all?: unknown };
   const endpoint = typeof body.endpoint === "string" ? body.endpoint : null;
-  await prisma.pushSubscription.updateMany({
-    where: {
-      userId: session.id,
-      shopId: session.shopId,
-      isActive: true,
-      ...(body.all === true ? {} : endpoint ? { endpoint } : { id: "__missing_endpoint__" }),
-    },
-    data: { isActive: false },
-  });
-  return NextResponse.json({ success: true });
+  try {
+    await prisma.pushSubscription.updateMany({
+      where: {
+        userId: session.id,
+        shopId: session.shopId,
+        isActive: true,
+        ...(body.all === true ? {} : endpoint ? { endpoint } : { id: "__missing_endpoint__" }),
+      },
+      data: { isActive: false },
+    });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    logPushSubscriptionStorageError("disable", error);
+    if (isPushSubscriptionStorageNotReady(error)) {
+      return NextResponse.json(pushSubscriptionStorageErrorResponse(), { status: 503 });
+    }
+    return NextResponse.json({
+      ok: false,
+      error: "push_subscription_storage_unavailable",
+      message: "Could not disable phone notification subscription.",
+    }, { status: 503 });
+  }
 }

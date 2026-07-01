@@ -25,7 +25,7 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the push-subscription migration. Generate a key pair with `npx web-push generate-vapid-keys`.
+Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the `20260701120000_web_push_subscriptions` migration. Deploy pending production migrations with `npm run prisma:migrate:deploy` (or `npx prisma migrate deploy`) using `DATABASE_URL`; do not use `prisma db push` as the normal production migration path. Generate a key pair with `npx web-push generate-vapid-keys`.
 
 ## Reminder scheduler
 
