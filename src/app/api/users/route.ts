@@ -68,15 +68,15 @@ type StaffListRow = {
 const fixedRoleSet = new Set<string>(fixedRoleValues);
 
 function safeStaffRole(role: string | null | undefined, userId?: string) {
-  const normalized = normalizeFixedRole(role || "ACCOUNT_STAFF");
+  const normalized = role ? normalizeFixedRole(role) : "UNKNOWN";
   if (fixedRoleSet.has(String(normalized))) {
     if (role && role !== normalized) {
       logger.warn("staff_role_legacy_value_normalized", { userId, originalRole: role, normalizedRole: normalized });
     }
     return normalized as FixedShopRole;
   }
-  logger.warn("staff_role_unknown_value_defaulted", { userId, originalRole: role, normalizedRole: "ACCOUNT_STAFF" });
-  return "ACCOUNT_STAFF" as FixedShopRole;
+  logger.warn("staff_role_unknown_value_denied", { userId, originalRole: role, normalizedRole: "UNKNOWN" });
+  return "UNKNOWN";
 }
 
 async function findUsers(shopId: string | null) {
@@ -212,7 +212,11 @@ export async function PATCH(request: Request) {
     if (existing.role === "SUPER_ADMIN") return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!isSuperAdmin(session) && existing.shopId !== session.shopId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    const role = fixedUserRole(body.role, normalizeFixedRole(existing.role || "ACCOUNT_STAFF") as UserRole);
+    const existingRole = normalizeFixedRole(existing.role || "UNKNOWN");
+    if (!body.role && !fixedRoleSet.has(String(existingRole))) {
+      return NextResponse.json({ error: "Existing role is unknown. Select an explicit valid role." }, { status: 400 });
+    }
+    const role = fixedUserRole(body.role, existingRole as UserRole);
     await ensureFixedUserRoleEnumValues();
     const updated = await prisma.user.update({
       where: { id: existing.id },

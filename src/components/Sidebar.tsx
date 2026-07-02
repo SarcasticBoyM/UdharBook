@@ -32,7 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useTheme } from "./ThemeProvider";
 import { ShopSwitcher } from "./ShopSwitcher";
-import { canAccessModule, roleLabel } from "@/lib/operational-roles";
+import { canAccessModule, normalizeFixedRole, roleLabel } from "@/lib/operational-roles";
 import { disableCurrentPushSubscription } from "@/lib/push-client";
 
 type SidebarLink = {
@@ -86,10 +86,11 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const isAdmin = role === "SHOP_ADMIN";
-  const isSuperAdmin = role === "SUPER_ADMIN";
-  const isDriver = role === "DRIVER";
-  const isSchoolDriver = role === "SCHOOL_DRIVER";
+  const normalizedRole = String(normalizeFixedRole(role));
+  const isAdmin = normalizedRole === "SHOP_ADMIN";
+  const isSuperAdmin = normalizedRole === "SUPER_ADMIN";
+  const isDriver = normalizedRole === "DRIVER";
+  const isSchoolDriver = normalizedRole === "SCHOOL_DRIVER";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
     if (isDriver) return link.href === "/driver-trip";
     if (isSchoolDriver) return link.href === "/school-transport/driver";
@@ -97,7 +98,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
     if (link.href === "/school-transport/driver") return false;
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly && isAdmin) return true;
-    return canAccessModule(role, link.href);
+    return canAccessModule(normalizedRole, link.href);
   });
   const displayRole = roleLabel(role);
 

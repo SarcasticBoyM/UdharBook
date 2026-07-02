@@ -42,10 +42,11 @@ function sessionLogMeta(user: SessionUser) {
 }
 
 function sessionRole(role: string | null | undefined) {
-  const normalized = normalizeFixedRole(role || "ACCOUNT_STAFF");
-  return (["SUPER_ADMIN", "SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS", "DRIVER"].includes(String(normalized))
-    ? normalized
-    : "ACCOUNT_STAFF") as SessionUser["role"];
+  if (!role) return null;
+  const normalized = normalizeFixedRole(role);
+  return ["SUPER_ADMIN", "SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS", "DRIVER", "SCHOOL_ADMIN", "SCHOOL_DRIVER"].includes(String(normalized))
+    ? normalized as SessionUser["role"]
+    : null;
 }
 
 async function findAuthUserById(userId: string) {
@@ -167,7 +168,7 @@ export async function getSession(): Promise<SessionUser | null> {
 
     logger.info("auth_trace_session_user_lookup_start", { userId });
     const user = await findAuthUserById(userId);
-    if (!user) {
+    if (!user || !user.role) {
       logger.warn("session_user_missing", { userId });
       await clearSessionIfWritable();
       return null;
@@ -222,10 +223,10 @@ export async function login(email: string, password: string, traceId?: string): 
     email: normalizedEmail,
     diagnostics: safeAuthRuntimeDiagnostics(),
   });
-  let user: (AuthUserRow & { passwordHash: string; role: SessionUser["role"] }) | null;
+  let user: (AuthUserRow & { passwordHash: string; role: SessionUser["role"] | null }) | null;
   try {
     logger.info("auth_trace_login_user_lookup_start", { traceId, email: normalizedEmail });
-    user = await findAuthUserByEmail(normalizedEmail, traceId) as (AuthUserRow & { passwordHash: string; role: SessionUser["role"] }) | null;
+    user = await findAuthUserByEmail(normalizedEmail, traceId) as (AuthUserRow & { passwordHash: string; role: SessionUser["role"] | null }) | null;
   } catch (error) {
     logger.error("login_user_lookup_failed", {
       traceId,
@@ -235,7 +236,7 @@ export async function login(email: string, password: string, traceId?: string): 
     });
     throw error;
   }
-  if (!user) {
+  if (!user || !user.role) {
     logger.warn("login_failed_user_missing", { traceId, email: normalizedEmail });
     return null;
   }

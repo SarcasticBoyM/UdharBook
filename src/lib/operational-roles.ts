@@ -25,13 +25,20 @@ export const assignableFixedRoles: FixedShopRole[] = [
 
 export function normalizeFixedRole(role: AppRole): AppRole {
   const value = String(role);
+  // School roles are intentionally resolved before every legacy/fuzzy rule.
+  // They must never fall through to DRIVER, STAFF, SALES, or ACCOUNT_STAFF.
+  if (value === "SCHOOL_ADMIN" || value === "SCHOOL_DRIVER") return value;
   if (value === "SALES_PERSON_CUM_ACCOUNTS" || (value.includes("SALES") && (value.includes("ACCOUNT") || value.includes("ACCOUNTING")))) return "SALES_PERSON_CUM_ACCOUNTS";
   if (value === "DRIVER") return "DRIVER";
-  if (value === "SCHOOL_ADMIN" || value === "SCHOOL_DRIVER") return value;
   if (value === "SALES_PERSON" || value === "SALES" || value.includes("FIELD")) return "SALES_PERSON";
   if (value === "ACCOUNT_STAFF" || value === "STAFF" || value === "ACCOUNTING" || value === "ACCOUNTS" || value.includes("ACCOUNTING")) return "ACCOUNT_STAFF";
   if (value === "SHOP_OWNER_ADMIN" || value === "ADMIN") return "SHOP_ADMIN";
   return value;
+}
+
+export function isRestrictedSchoolRole(role: AppRole) {
+  const normalized = normalizeFixedRole(role);
+  return normalized === "SCHOOL_ADMIN" || normalized === "SCHOOL_DRIVER";
 }
 
 export function roleLabel(role: AppRole) {

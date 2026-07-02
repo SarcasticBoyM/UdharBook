@@ -70,9 +70,9 @@ function pathStarts(pathname: string, prefixes: string[]) {
 
 function canAccessPage(role: string, pathname: string) {
   const normalized = normalizeRole(role);
-  if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return canAccessTasks(normalized ?? "");
   if (normalized === "SCHOOL_DRIVER") return pathname === SCHOOL_DRIVER_HOME;
   if (normalized === "SCHOOL_ADMIN") return pathname === "/school-transport";
+  if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return canAccessTasks(normalized ?? "");
   if (normalized === "DRIVER") return pathname === DRIVER_HOME;
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_PAGES.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/shops");
@@ -92,10 +92,18 @@ function canAccessPage(role: string, pathname: string) {
 
 function canAccessApi(role: string, pathname: string) {
   const normalized = normalizeRole(role);
+  if (normalized === "SCHOOL_DRIVER") {
+    return pathStarts(pathname, ["/api/auth"]) ||
+      pathname === "/api/school-transport/driver/options" ||
+      pathname === "/api/school-transport/trips/start" ||
+      /^\/api\/school-transport\/trips\/[^/]+\/(location|end)$/.test(pathname);
+  }
+  if (normalized === "SCHOOL_ADMIN") {
+    return pathStarts(pathname, ["/api/auth", "/api/school-transport/vehicles", "/api/school-transport/routes", "/api/school-transport/links"]) ||
+      pathname === "/api/school-transport/live";
+  }
   if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) return canAccessTasks(normalized ?? "");
   if (pathname === "/api/notifications" || pathname.startsWith("/api/notifications/")) return canAccessTasks(normalized ?? "");
-  if (normalized === "SCHOOL_DRIVER") return pathStarts(pathname, ["/api/auth", "/api/school-transport/driver", "/api/school-transport/trips"]);
-  if (normalized === "SCHOOL_ADMIN") return pathStarts(pathname, ["/api/auth", "/api/school-transport"]);
   if (normalized === "DRIVER") return pathStarts(pathname, ["/api/auth", "/api/driver"]);
   if (normalized === "SUPER_ADMIN") return !SUPER_ADMIN_BLOCKED_APIS.some((prefix) => pathname.startsWith(prefix));
   if (normalized === "SHOP_ADMIN") return !pathname.startsWith("/api/shops") && !pathname.startsWith("/api/onboarding");
@@ -245,7 +253,7 @@ export async function middleware(request: NextRequest) {
     }
     if (!pathname.startsWith("/api/") && !canAccessPage(role, pathname)) {
       logMiddleware("warn", "middleware_redirect_page_forbidden", { traceId, path: pathname, userId, role, shopId });
-      const home = role === "SALES_PERSON" ? SALES_HOME : role === "DRIVER" ? DRIVER_HOME : "/";
+      const home = role === "SALES_PERSON" ? SALES_HOME : role === "DRIVER" ? DRIVER_HOME : role === "SCHOOL_DRIVER" ? SCHOOL_DRIVER_HOME : role === "SCHOOL_ADMIN" ? "/school-transport" : "/";
       return secure(NextResponse.redirect(new URL(home, request.url)));
     }
     if (role !== "SUPER_ADMIN" && !shopId) {

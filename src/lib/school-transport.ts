@@ -12,7 +12,8 @@ export function isSchoolDriver(role: string) {
 }
 
 export function canOperateSchoolTrip(role: string) {
-  return isSchoolDriver(role) || isSchoolTransportAdmin(role);
+  const normalized = String(normalizeFixedRole(role));
+  return normalized === "SCHOOL_DRIVER" || normalized === "SHOP_ADMIN";
 }
 
 export function schoolTrackingToken() {

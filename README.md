@@ -29,6 +29,12 @@ Phone push notifications require HTTPS in production (localhost is allowed for d
 
 School Van Live Tracking uses the Mappls Web Maps SDK. Set `NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY` in the deployment environment and apply `20260702120000_school_van_live_tracking_mvp` with `prisma migrate deploy`. `MAPPLS_CLIENT_ID` and `MAPPLS_CLIENT_SECRET` are not required for the Phase 1 browser map.
 
+If a school user was created before the school-role enum/session fix and was accidentally stored as `ACCOUNT_STAFF`, correct that specific account after deploying the migration:
+
+```sql
+UPDATE "User" SET "role" = 'SCHOOL_DRIVER'::"UserRole" WHERE "email" = 'driver@school.example';
+```
+
 ## Reminder scheduler
 
 `GET` or `POST /api/notifications/due` processes due follow-up, order follow-up, and task reminders. Automated requests require `CRON_SECRET` using either:
