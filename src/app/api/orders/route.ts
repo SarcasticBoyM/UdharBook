@@ -10,7 +10,6 @@ import { canUseOrders } from "@/lib/permissions";
 import { notifyCustomerAdded, notifyOrderCreated, notifyOrderStatusChanged } from "@/lib/notifications";
 import { parseDeliveryLocation } from "@/lib/order-delivery-location";
 
-const finalStatuses = ["DELIVERED", "CANCELLED"];
 const prioritySchema = z.enum(["Normal", "High", "Urgent"]);
 const legacyReceivedStatus = "PENDING" as OrderStatus;
 const dateFilters = ["all", "today", "yesterday", "last7days", "thisMonth", "custom"] as const;
@@ -70,7 +69,7 @@ function parseOptionalDate(value?: string | null) {
 
 function normalizeStatus(status?: string | null) {
   if (!status) return null;
-  if (status === "PENDING") return "ORDER_RECEIVED";
+  if (["PENDING", "CONFIRMED", "READY", "READY_TO_DISPATCH"].includes(status)) return "ORDER_RECEIVED";
   if (status === "PROCESSING") return "DISPATCHED";
   return status;
 }
@@ -248,7 +247,8 @@ function orderFilterCondition(filter: OrderFilter, now: Date, upcoming: Date): P
 
 function transitionStatus(current: OrderStatus, action: string) {
   const normalized = normalizeStatus(current);
-  if (normalized && finalStatuses.includes(normalized)) throw new Error("ORDER_READ_ONLY");
+  if (normalized === "DELIVERED") throw new Error("DELIVERED_ORDER_READ_ONLY");
+  if (normalized === "CANCELLED") throw new Error("CANCELLED_ORDER_READ_ONLY");
 
   if (action === "EDIT") {
     if (!isReceivedStatus(current) && !isDispatchedStatus(current)) throw new Error("ONLY_ACTIVE_ORDERS_CAN_BE_EDITED");
@@ -700,9 +700,13 @@ export async function PATCH(request: Request) {
             deliveryLocationUrl: deliveryLocation.deliveryLocationUrl,
           } : {}),
           ...(body.priority ? { priority: body.priority } : {}),
-          status: nextStatus,
-          deliveredAt: nextStatus === "DELIVERED" ? now : existing.deliveredAt,
-          cancelledAt: nextStatus === "CANCELLED" ? now : existing.cancelledAt,
+          // Normal edits must never rewrite workflow state or delivery fields.
+          // Status actions remain explicit and separate through action.
+          ...(!isEdit ? {
+            status: nextStatus,
+            deliveredAt: nextStatus === "DELIVERED" ? now : existing.deliveredAt,
+            cancelledAt: nextStatus === "CANCELLED" ? now : existing.cancelledAt,
+          } : {}),
         },
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
@@ -725,7 +729,9 @@ export async function PATCH(request: Request) {
           userId: session.id,
           customerId: updated.customerId ?? undefined,
           action: isEdit ? "order_edited" : "order_status_updated",
-          details: isEdit ? "Order details edited" : `Order status changed from ${existing.status} to ${updated.status}`,
+          details: isEdit
+            ? isDispatchedStatus(existing.status) ? "Order updated while dispatched" : "Order details edited"
+            : `Order status changed from ${existing.status} to ${updated.status}`,
         },
       });
       return updated;
@@ -739,7 +745,7 @@ export async function PATCH(request: Request) {
       newStatus: order.status,
       action: action === "EDIT" ? "ORDER_UPDATED" : action,
       notes: action === "EDIT"
-        ? isDispatchedStatus(order.status) ? "Order details edited after dispatch." : "Order details updated."
+        ? isDispatchedStatus(order.status) ? "Order updated while dispatched." : "Order details updated."
         : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
     });
     logger.info("order_update_success", {
@@ -773,8 +779,10 @@ export async function PATCH(request: Request) {
       stack: error instanceof Error ? error.stack : undefined,
     });
     const message =
-      error instanceof Error && error.message === "ORDER_READ_ONLY"
-        ? "Delivered or cancelled orders are read-only."
+      error instanceof Error && error.message === "DELIVERED_ORDER_READ_ONLY"
+        ? "Delivered orders cannot be edited."
+        : error instanceof Error && error.message === "CANCELLED_ORDER_READ_ONLY"
+          ? "Cancelled orders cannot be edited."
         : error instanceof Error && error.message === "ONLY_ACTIVE_ORDERS_CAN_BE_EDITED"
           ? "Only pending or dispatched orders can be edited."
           : error instanceof Error && error.message === "ORDER_DETAILS_REQUIRED"

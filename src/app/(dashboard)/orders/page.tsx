@@ -148,7 +148,7 @@ function deliveryLocationLabel(order: Pick<OrderRow, "deliveryLocationText" | "d
 }
 
 function normalizedStatus(status: OrderStatus) {
-  if (status === "PENDING") return "ORDER_RECEIVED";
+  if (["PENDING", "CONFIRMED", "READY", "READY_TO_DISPATCH"].includes(status)) return "ORDER_RECEIVED";
   if (status === "PROCESSING") return "DISPATCHED";
   return status;
 }
@@ -782,6 +782,19 @@ export default function OrderDeskPage() {
 
   function openEdit(order: OrderRow) {
     setMessage("");
+    const status = normalizedStatus(order.status);
+    if (status === "DELIVERED") {
+      setMessage("Delivered orders cannot be edited.");
+      return;
+    }
+    if (status === "CANCELLED") {
+      setMessage("Cancelled orders cannot be edited.");
+      return;
+    }
+    if (!canEdit(order)) {
+      setMessage("Only pre-delivery orders can be edited.");
+      return;
+    }
     setOrderDetails(order.orderDetails);
     setStructuredItems(emptyStructuredItems());
     setDeliveryDate(toInputDate(order.preferredDeliveryDate));
@@ -1387,6 +1400,16 @@ export default function OrderDeskPage() {
                     Edit Order
                   </button>
                 )}
+                {normalizedStatus(order.status) === "DELIVERED" && (
+                  <button type="button" onClick={() => openEdit(order)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 dark:border-slate-800" title="Delivered orders cannot be edited.">
+                    Edit Locked
+                  </button>
+                )}
+                {normalizedStatus(order.status) === "CANCELLED" && (
+                  <button type="button" onClick={() => openEdit(order)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 dark:border-slate-800" title="Cancelled orders cannot be edited.">
+                    Edit Locked
+                  </button>
+                )}
                 {canClubOrder(order) && (
                   <button type="button" onClick={() => void openClubDispatch(order)} className="rounded-lg border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-700 dark:border-blue-800 dark:text-blue-300">
                     Club
@@ -1535,7 +1558,14 @@ export default function OrderDeskPage() {
           <div className="flex max-h-[100dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl dark:bg-slate-950 sm:max-h-[calc(100dvh-2rem)] sm:max-w-xl sm:rounded-2xl">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4 pt-[max(1rem,env(safe-area-inset-top))] dark:border-slate-800">
               <div>
-                <h2 className="text-lg font-bold">{editor.mode === "create" ? "New Order" : "Edit Order"}</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-bold">{editor.mode === "create" ? "New Order" : "Edit Order"}</h2>
+                  {editor.mode === "edit" && editor.order && (
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${statusClass(editor.order.status)}`}>
+                      {displayStatus(editor.order.status)}
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm text-slate-500">Use free-text order details for fast field and counter entry.</p>
               </div>
               <button type="button" onClick={() => setEditor(null)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close order form">
@@ -1546,7 +1576,7 @@ export default function OrderDeskPage() {
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-24">
               {editor.mode === "edit" && editor.order && normalizedStatus(editor.order.status) === "DISPATCHED" && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
-                  This order is already dispatched. Editing will only update order details; dispatch status will remain unchanged.
+                  This order is dispatched. Changes will update the order but will not mark it delivered.
                 </div>
               )}
               {editor.mode === "create" && (
@@ -1688,7 +1718,7 @@ export default function OrderDeskPage() {
               </button>
               <button type="button" onClick={submitEditor} disabled={savingOrder || !orderDetails.trim() || (editor.mode === "create" && (customerMode === "existing" ? !selectedCustomer : !newCustomer.partyName.trim() || !newCustomer.contactNumber.trim()))} className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
                 {savingOrder && <Loader2 className="h-4 w-4 animate-spin" />}
-                {savingOrder ? "Saving..." : "Save Order"}
+                {savingOrder ? "Saving..." : editor.mode === "edit" ? "Save Changes" : "Save Order"}
               </button>
             </div>
           </div>
