@@ -266,7 +266,7 @@ export default function StaffManagementPage() {
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{roleLabel(userRole)}</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                {!user.disabledAt && userRole !== "SHOP_ADMIN" && userRole !== "DRIVER" && (
+                {!user.disabledAt && !["SHOP_ADMIN", "DRIVER", "SCHOOL_ADMIN", "SCHOOL_DRIVER"].includes(String(userRole)) && (
                   <AssignTaskButton
                     seed={{
                       assignedToId: user.id,

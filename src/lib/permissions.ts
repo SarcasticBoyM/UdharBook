@@ -44,3 +44,13 @@ export function canUseFollowUps(role: UserRole | string): boolean {
 export function isSuperAdminRole(role: UserRole | string) {
   return normalizeFixedRole(role) === "SUPER_ADMIN";
 }
+
+export function canManageSchoolTransport(role: UserRole | string) {
+  const normalized = normalizeFixedRole(role);
+  return normalized === "SHOP_ADMIN" || normalized === "SCHOOL_ADMIN";
+}
+
+export function canDriveSchoolTransport(role: UserRole | string) {
+  const normalized = normalizeFixedRole(role);
+  return normalized === "SCHOOL_DRIVER" || normalized === "SHOP_ADMIN" || normalized === "SCHOOL_ADMIN";
+}

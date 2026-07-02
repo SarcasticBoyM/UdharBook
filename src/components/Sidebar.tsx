@@ -62,6 +62,8 @@ const links: SidebarLink[] = [
   { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
   { href: "/driver-tracking", label: "Driver Tracking", icon: Truck, adminOnly: true, section: "Team" },
   { href: "/driver-trip", label: "My Trip", icon: Truck, section: "Driver" },
+  { href: "/school-transport", label: "School Transport", icon: MapPinned, section: "Premium" },
+  { href: "/school-transport/driver", label: "My School Trip", icon: Truck, section: "School" },
   taskLink,
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
@@ -87,9 +89,12 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const isAdmin = role === "SHOP_ADMIN";
   const isSuperAdmin = role === "SUPER_ADMIN";
   const isDriver = role === "DRIVER";
+  const isSchoolDriver = role === "SCHOOL_DRIVER";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
     if (isDriver) return link.href === "/driver-trip";
+    if (isSchoolDriver) return link.href === "/school-transport/driver";
     if (link.href === "/driver-trip") return false;
+    if (link.href === "/school-transport/driver") return false;
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly && isAdmin) return true;
     return canAccessModule(role, link.href);

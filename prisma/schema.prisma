@@ -14,6 +14,8 @@ enum UserRole {
   ACCOUNT_STAFF
   SALES_PERSON_CUM_ACCOUNTS
   DRIVER
+  SCHOOL_ADMIN
+  SCHOOL_DRIVER
 }
 
 enum OperationalRole {
@@ -153,54 +155,59 @@ enum NotificationRetryStatus {
 }
 
 model Shop {
-  id                 String             @id @default(cuid())
-  shopName           String             @map("name")
-  ownerName          String
-  email              String?
-  gstNumber          String?
-  mobile             String?            @map("mobileNumber")
-  address            String?
-  city               String?
-  businessType       String?
-  logoUrl            String?
-  onboardingCompleted Boolean           @default(true)
-  setupStep          String?
-  setupCompletedAt   DateTime?
-  recoveryPreferences Json?
-  subscriptionStatus SubscriptionStatus @default(TRIAL)
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-  users              User[]
-  customers          Customer[]
-  followUps          FollowUp[]
-  payments           PaymentEntry[]
-  notes              CustomerNote[]
-  activityLogs       ActivityLog[]
-  cheques            Cheque[]
-  chequeActivities   ChequeActivity[]
-  chequeDepositAccounts ChequeDepositAccount[]
-  staffLocations     StaffLocation[]
-  staffVisits        StaffVisit[]
-  attendances        Attendance[]
-  routeHistories     RouteHistory[]
-  visitPhotos        VisitPhoto[]
-  supportAccessGrants SupportAccessGrant[]
-  orders             Order[]
-  orderPublicLink    OrderPublicLink?
-  userRoleAssignments UserRoleAssignment[]
-  orderActivities    OrderActivity[]
-  whatsappOrderSetting WhatsAppOrderNotificationSetting?
+  id                       String                            @id @default(cuid())
+  shopName                 String                            @map("name")
+  ownerName                String
+  email                    String?
+  gstNumber                String?
+  mobile                   String?                           @map("mobileNumber")
+  address                  String?
+  city                     String?
+  businessType             String?
+  logoUrl                  String?
+  onboardingCompleted      Boolean                           @default(true)
+  setupStep                String?
+  setupCompletedAt         DateTime?
+  recoveryPreferences      Json?
+  subscriptionStatus       SubscriptionStatus                @default(TRIAL)
+  createdAt                DateTime                          @default(now())
+  updatedAt                DateTime                          @updatedAt
+  users                    User[]
+  customers                Customer[]
+  followUps                FollowUp[]
+  payments                 PaymentEntry[]
+  notes                    CustomerNote[]
+  activityLogs             ActivityLog[]
+  cheques                  Cheque[]
+  chequeActivities         ChequeActivity[]
+  chequeDepositAccounts    ChequeDepositAccount[]
+  staffLocations           StaffLocation[]
+  staffVisits              StaffVisit[]
+  attendances              Attendance[]
+  routeHistories           RouteHistory[]
+  visitPhotos              VisitPhoto[]
+  supportAccessGrants      SupportAccessGrant[]
+  orders                   Order[]
+  orderPublicLink          OrderPublicLink?
+  userRoleAssignments      UserRoleAssignment[]
+  orderActivities          OrderActivity[]
+  whatsappOrderSetting     WhatsAppOrderNotificationSetting?
   whatsappNotificationJobs WhatsAppNotificationJob[]
-  whatsappSessionSecrets WhatsAppSessionSecret[]
-  productPresets     ProductPreset[]
-  qrVCard            QRVCard?
-  notifications      Notification[]
-  notificationRetries NotificationRetry[]
-  pushSubscriptions  PushSubscription[]
-  tasks              Task[]
-  driverTrackingLinks DriverTrackingLink[]
-  driverTrips        DriverTrip[]
-  driverLocationPoints DriverLocationPoint[]
+  whatsappSessionSecrets   WhatsAppSessionSecret[]
+  productPresets           ProductPreset[]
+  qrVCard                  QRVCard?
+  notifications            Notification[]
+  notificationRetries      NotificationRetry[]
+  pushSubscriptions        PushSubscription[]
+  tasks                    Task[]
+  driverTrackingLinks      DriverTrackingLink[]
+  driverTrips              DriverTrip[]
+  driverLocationPoints     DriverLocationPoint[]
+  schoolVehicles           SchoolVehicle[]
+  schoolRoutes             SchoolTransportRoute[]
+  schoolTrackingLinks      SchoolTrackingLink[]
+  schoolTrips              SchoolTrip[]
+  schoolTripPoints         SchoolTripPoint[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -226,42 +233,42 @@ model ProductPreset {
 }
 
 model QRVCard {
-  id              String   @id @default(cuid())
-  shopId          String   @unique
-  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  slug            String   @unique
-  businessName    String
-  tagline         String?
-  gstNumber       String?
-  ownerName       String?
-  mobile1         String?
-  mobile2         String?
-  whatsappNumber  String?
-  email           String?
-  address         String?
-  mapUrl          String?
-  mapsLink        String?
-  website         String?
-  instagram       String?
-  facebook        String?
-  youtube         String?
-  logoUrl         String?
-  bannerUrl       String?
-  category        String?
-  aboutBusiness   String?
-  categories      String[] @default([])
-  socialLinks     Json?
-  products        Json?
-  galleryImages   Json?
-  theme           String   @default("professional-blue")
-  isPublic        Boolean  @default(true)
-  viewCount       Int      @default(0)
-  clickCount      Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  gallery         QRVCardGallery[]
-  brands          QRVCardBrand[]
-  analytics       QRVCardAnalytics[]
+  id             String             @id @default(cuid())
+  shopId         String             @unique
+  shop           Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  slug           String             @unique
+  businessName   String
+  tagline        String?
+  gstNumber      String?
+  ownerName      String?
+  mobile1        String?
+  mobile2        String?
+  whatsappNumber String?
+  email          String?
+  address        String?
+  mapUrl         String?
+  mapsLink       String?
+  website        String?
+  instagram      String?
+  facebook       String?
+  youtube        String?
+  logoUrl        String?
+  bannerUrl      String?
+  category       String?
+  aboutBusiness  String?
+  categories     String[]           @default([])
+  socialLinks    Json?
+  products       Json?
+  galleryImages  Json?
+  theme          String             @default("professional-blue")
+  isPublic       Boolean            @default(true)
+  viewCount      Int                @default(0)
+  clickCount     Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  gallery        QRVCardGallery[]
+  brands         QRVCardBrand[]
+  analytics      QRVCardAnalytics[]
 
   @@index([shopId])
   @@index([slug])
@@ -310,52 +317,55 @@ model QRVCardAnalytics {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  name         String
-  email        String     @unique
-  mobile       String?
-  passwordHash String
-  role         UserRole   @default(ACCOUNT_STAFF)
-  jobTitle     String?
-  shopId       String
-  shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Restrict)
-  disabledAt   DateTime?
-  lastLoginAt  DateTime?
-  firstLoginAt DateTime?
-  passwordResetRequired Boolean @default(false)
-  tempPasswordExpiresAt DateTime?
-  createdAt    DateTime   @default(now())
-  followUps    FollowUp[] @relation("FollowUpCreatedBy")
-  assignedFollowUps FollowUp[] @relation("FollowUpAssignedTo")
-  statusHistory StatusHistory[]
-  notes        CustomerNote[]
-  payments     PaymentEntry[]
-  activityLogs ActivityLog[]
-  passwordResetTokens PasswordResetToken[]
-  collectedCheques Cheque[] @relation("ChequeCollectedBy")
-  depositedCheques Cheque[] @relation("ChequeDepositedBy")
-  receiptUploadedCheques Cheque[] @relation("ChequeReceiptUploadedBy")
-  chequeActivities ChequeActivity[]
-  staffLocations StaffLocation[]
-  staffVisits StaffVisit[]
-  attendances Attendance[]
-  routeHistories RouteHistory[]
-  visitPhotos VisitPhoto[]
-  supportAccessRequested SupportAccessGrant[] @relation("SupportAccessRequestedBy")
-  supportAccessAssigned SupportAccessGrant[] @relation("SupportAccessSuperAdmin")
-  ordersCreated Order[] @relation("OrderCreatedBy")
-  orderActivities OrderActivity[]
-  roleAssignments UserRoleAssignment[] @relation("UserRoleAssignments")
-  roleAssignmentsCreated UserRoleAssignment[] @relation("UserRoleAssignmentsCreatedBy")
-  notifications Notification[] @relation("NotificationTargetUser")
-  notificationRetries NotificationRetry[] @relation("NotificationRetryTargetUser")
-  pushSubscriptions PushSubscription[]
-  assignedTasks Task[] @relation("TaskAssignedTo")
-  createdTasks Task[] @relation("TaskAssignedBy")
-  driverTrackingLink DriverTrackingLink? @relation("DriverTrackingLinkDriver")
-  driverTrips DriverTrip[] @relation("DriverTripDriver")
-  driverLocationPoints DriverLocationPoint[] @relation("DriverLocationPointDriver")
-  customerLocationsUpdated Customer[] @relation("CustomerLocationUpdatedBy")
+  id                       String                @id @default(cuid())
+  name                     String
+  email                    String                @unique
+  mobile                   String?
+  passwordHash             String
+  role                     UserRole              @default(ACCOUNT_STAFF)
+  jobTitle                 String?
+  shopId                   String
+  shop                     Shop                  @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  disabledAt               DateTime?
+  lastLoginAt              DateTime?
+  firstLoginAt             DateTime?
+  passwordResetRequired    Boolean               @default(false)
+  tempPasswordExpiresAt    DateTime?
+  createdAt                DateTime              @default(now())
+  followUps                FollowUp[]            @relation("FollowUpCreatedBy")
+  assignedFollowUps        FollowUp[]            @relation("FollowUpAssignedTo")
+  statusHistory            StatusHistory[]
+  notes                    CustomerNote[]
+  payments                 PaymentEntry[]
+  activityLogs             ActivityLog[]
+  passwordResetTokens      PasswordResetToken[]
+  collectedCheques         Cheque[]              @relation("ChequeCollectedBy")
+  depositedCheques         Cheque[]              @relation("ChequeDepositedBy")
+  receiptUploadedCheques   Cheque[]              @relation("ChequeReceiptUploadedBy")
+  chequeActivities         ChequeActivity[]
+  staffLocations           StaffLocation[]
+  staffVisits              StaffVisit[]
+  attendances              Attendance[]
+  routeHistories           RouteHistory[]
+  visitPhotos              VisitPhoto[]
+  supportAccessRequested   SupportAccessGrant[]  @relation("SupportAccessRequestedBy")
+  supportAccessAssigned    SupportAccessGrant[]  @relation("SupportAccessSuperAdmin")
+  ordersCreated            Order[]               @relation("OrderCreatedBy")
+  orderActivities          OrderActivity[]
+  roleAssignments          UserRoleAssignment[]  @relation("UserRoleAssignments")
+  roleAssignmentsCreated   UserRoleAssignment[]  @relation("UserRoleAssignmentsCreatedBy")
+  notifications            Notification[]        @relation("NotificationTargetUser")
+  notificationRetries      NotificationRetry[]   @relation("NotificationRetryTargetUser")
+  pushSubscriptions        PushSubscription[]
+  assignedTasks            Task[]                @relation("TaskAssignedTo")
+  createdTasks             Task[]                @relation("TaskAssignedBy")
+  driverTrackingLink       DriverTrackingLink?   @relation("DriverTrackingLinkDriver")
+  driverTrips              DriverTrip[]          @relation("DriverTripDriver")
+  driverLocationPoints     DriverLocationPoint[] @relation("DriverLocationPointDriver")
+  customerLocationsUpdated Customer[]            @relation("CustomerLocationUpdatedBy")
+  assignedSchoolVehicles   SchoolVehicle[]       @relation("SchoolVehicleDriver")
+  schoolTrips              SchoolTrip[]          @relation("SchoolTripDriver")
+  schoolTripPoints         SchoolTripPoint[]     @relation("SchoolTripPointDriver")
 
   @@index([shopId])
   @@index([role])
@@ -452,19 +462,19 @@ model Task {
 }
 
 model PushSubscription {
-  id         String   @id @default(cuid())
+  id         String         @id @default(cuid())
   userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   shopId     String
-  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  endpoint   String   @unique
+  shop       Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  endpoint   String         @unique
   p256dhKey  String
   authKey    String
   userAgent  String?
   deviceInfo String?
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
   deliveries PushDelivery[]
 
   @@index([userId, isActive])
@@ -485,6 +495,122 @@ model PushDelivery {
   @@index([status, updatedAt])
 }
 
+model SchoolVehicle {
+  id            String               @id @default(cuid())
+  shopId        String
+  shop          Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name          String
+  vehicleNumber String?
+  driverId      String?
+  driver        User?                @relation("SchoolVehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  isActive      Boolean              @default(true)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  trackingLinks SchoolTrackingLink[]
+  trips         SchoolTrip[]
+  tripPoints    SchoolTripPoint[]
+
+  @@index([shopId])
+  @@index([shopId, isActive])
+  @@index([driverId])
+}
+
+model SchoolTransportRoute {
+  id             String               @id @default(cuid())
+  shopId         String
+  shop           Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  startPointName String?
+  endPointName   String?
+  isActive       Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  trackingLinks  SchoolTrackingLink[]
+  trips          SchoolTrip[]
+
+  @@index([shopId])
+  @@index([shopId, isActive])
+}
+
+model SchoolTrackingLink {
+  id            String                @id @default(cuid())
+  shopId        String
+  shop          Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  vehicleId     String
+  vehicle       SchoolVehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  routeId       String?
+  route         SchoolTransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  token         String                @unique
+  isEnabled     Boolean               @default(true)
+  expiresAt     DateTime?
+  regeneratedAt DateTime?
+  disabledAt    DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([shopId])
+  @@index([vehicleId])
+  @@index([routeId])
+}
+
+model SchoolTrip {
+  id             String                @id @default(cuid())
+  shopId         String
+  shop           Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  vehicleId      String
+  vehicle        SchoolVehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  routeId        String?
+  route          SchoolTransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  driverId       String
+  driver         User                  @relation("SchoolTripDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  status         String                @default("RUNNING")
+  tripLabel      String?
+  startedAt      DateTime              @default(now())
+  endedAt        DateTime?
+  lastLatitude   Float?
+  lastLongitude  Float?
+  lastAccuracyM  Float?
+  lastSpeedKmph  Float?
+  lastHeading    Float?
+  lastBatteryPct Int?
+  lastLocationAt DateTime?
+  pointCount     Int                   @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  points         SchoolTripPoint[]
+
+  @@index([shopId, status])
+  @@index([vehicleId, status])
+  @@index([driverId, status])
+  @@index([startedAt])
+}
+
+model SchoolTripPoint {
+  id         String        @id @default(cuid())
+  shopId     String
+  shop       Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  tripId     String
+  trip       SchoolTrip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicleId  String
+  vehicle    SchoolVehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driverId   String
+  driver     User          @relation("SchoolTripPointDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  latitude   Float
+  longitude  Float
+  accuracyM  Float?
+  speedKmph  Float?
+  heading    Float?
+  batteryPct Int?
+  recordedAt DateTime
+  receivedAt DateTime      @default(now())
+  createdAt  DateTime      @default(now())
+
+  @@index([tripId, recordedAt])
+  @@index([shopId, receivedAt])
+  @@index([vehicleId, receivedAt])
+}
+
 model DriverTrackingLink {
   id        String   @id @default(cuid())
   shopId    String
@@ -501,34 +627,34 @@ model DriverTrackingLink {
 }
 
 model DriverTrip {
-  id             String           @id @default(cuid())
-  shopId         String
-  shop           Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  driverId       String
-  driver         User             @relation("DriverTripDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  status         DriverTripStatus @default(ACTIVE)
-  startedAt      DateTime         @default(now())
-  endedAt        DateTime?
-  startLat       Float?
-  startLng       Float?
-  endLat         Float?
-  endLng         Float?
-  lastLat        Float?
-  lastLng        Float?
-  lastAccuracy   Float?
-  lastSpeed      Float?
-  lastHeading    Float?
-  lastLocationAt DateTime?
-  totalDistanceMeters Float       @default(0)
-  movingDurationSeconds Int       @default(0)
-  idleDurationSeconds Int         @default(0)
-  pointCount     Int              @default(0)
-  maxSpeedKmph   Float?
-  avgSpeedKmph   Float?
-  lastMovementAt DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  points         DriverLocationPoint[]
+  id                    String                @id @default(cuid())
+  shopId                String
+  shop                  Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  driverId              String
+  driver                User                  @relation("DriverTripDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  status                DriverTripStatus      @default(ACTIVE)
+  startedAt             DateTime              @default(now())
+  endedAt               DateTime?
+  startLat              Float?
+  startLng              Float?
+  endLat                Float?
+  endLng                Float?
+  lastLat               Float?
+  lastLng               Float?
+  lastAccuracy          Float?
+  lastSpeed             Float?
+  lastHeading           Float?
+  lastLocationAt        DateTime?
+  totalDistanceMeters   Float                 @default(0)
+  movingDurationSeconds Int                   @default(0)
+  idleDurationSeconds   Int                   @default(0)
+  pointCount            Int                   @default(0)
+  maxSpeedKmph          Float?
+  avgSpeedKmph          Float?
+  lastMovementAt        DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  points                DriverLocationPoint[]
 
   @@index([shopId, driverId])
   @@index([shopId, driverId, status])
@@ -536,24 +662,24 @@ model DriverTrip {
 }
 
 model DriverLocationPoint {
-  id         String      @id @default(cuid())
-  shopId     String
-  shop       Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  driverId   String
-  driver     User        @relation("DriverLocationPointDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  tripId     String?
-  trip       DriverTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  lat        Float
-  lng        Float
-  accuracy   Float?
-  speed      Float?
-  heading    Float?
+  id                         String      @id @default(cuid())
+  shopId                     String
+  shop                       Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  driverId                   String
+  driver                     User        @relation("DriverLocationPointDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  tripId                     String?
+  trip                       DriverTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  lat                        Float
+  lng                        Float
+  accuracy                   Float?
+  speed                      Float?
+  heading                    Float?
   distanceFromPreviousMeters Float?
-  calculatedSpeedKmph Float?
-  isDistanceIgnored Boolean     @default(false)
-  ignoreReason String?
-  capturedAt DateTime
-  createdAt  DateTime    @default(now())
+  calculatedSpeedKmph        Float?
+  isDistanceIgnored          Boolean     @default(false)
+  ignoreReason               String?
+  capturedAt                 DateTime
+  createdAt                  DateTime    @default(now())
 
   @@index([shopId, driverId])
   @@index([shopId, driverId, capturedAt])
@@ -561,15 +687,15 @@ model DriverLocationPoint {
 }
 
 model UserRoleAssignment {
-  id          String          @id @default(cuid())
-  shopId      String
-  shop        Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  userId      String
-  user        User            @relation("UserRoleAssignments", fields: [userId], references: [id], onDelete: Cascade)
-  role        OperationalRole
+  id           String          @id @default(cuid())
+  shopId       String
+  shop         Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User            @relation("UserRoleAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  role         OperationalRole
   assignedById String?
-  assignedBy   User?          @relation("UserRoleAssignmentsCreatedBy", fields: [assignedById], references: [id], onDelete: SetNull)
-  createdAt   DateTime        @default(now())
+  assignedBy   User?           @relation("UserRoleAssignmentsCreatedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime        @default(now())
 
   @@unique([userId, role])
   @@index([shopId, role])
@@ -577,42 +703,42 @@ model UserRoleAssignment {
 }
 
 model Customer {
-  id                 String         @id @default(cuid())
-  shopId             String
-  shop               Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  partyName          String
-  contactNumber      String
-  batchTag           String?
-  outstandingBalance Float          @default(0)
-  lastFollowupDate   DateTime?
-  nextFollowupDate   DateTime?
-  status             CustomerStatus @default(PENDING)
-  notes              String?
-  totalCallsMade     Int            @default(0)
-  balanceAsOfDate    DateTime       @default(now())
-  isArchived         Boolean        @default(false)
-  archivedAt         DateTime?
-  archivedById       String?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
-  followUps          FollowUp[]
-  statusHistory      StatusHistory[]
-  payments           PaymentEntry[]
-  comments           CustomerNote[]
-  activityLogs       ActivityLog[]
-  cheques            Cheque[]
-  latitude           Float?
-  longitude          Float?
-  geoAddress         String?
-  locationName       String?
-  googleMapsUrl      String?
-  geofenceRadiusM    Int            @default(100)
-  locationVerifiedAt DateTime?
+  id                  String          @id @default(cuid())
+  shopId              String
+  shop                Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  partyName           String
+  contactNumber       String
+  batchTag            String?
+  outstandingBalance  Float           @default(0)
+  lastFollowupDate    DateTime?
+  nextFollowupDate    DateTime?
+  status              CustomerStatus  @default(PENDING)
+  notes               String?
+  totalCallsMade      Int             @default(0)
+  balanceAsOfDate     DateTime        @default(now())
+  isArchived          Boolean         @default(false)
+  archivedAt          DateTime?
+  archivedById        String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  followUps           FollowUp[]
+  statusHistory       StatusHistory[]
+  payments            PaymentEntry[]
+  comments            CustomerNote[]
+  activityLogs        ActivityLog[]
+  cheques             Cheque[]
+  latitude            Float?
+  longitude           Float?
+  geoAddress          String?
+  locationName        String?
+  googleMapsUrl       String?
+  geofenceRadiusM     Int             @default(100)
+  locationVerifiedAt  DateTime?
   locationUpdatedById String?
-  locationUpdatedBy  User?          @relation("CustomerLocationUpdatedBy", fields: [locationUpdatedById], references: [id], onDelete: SetNull)
-  staffVisits        StaffVisit[]
-  orders             Order[]
-  tasks              Task[]
+  locationUpdatedBy   User?           @relation("CustomerLocationUpdatedBy", fields: [locationUpdatedById], references: [id], onDelete: SetNull)
+  staffVisits         StaffVisit[]
+  orders              Order[]
+  tasks               Task[]
 
   @@index([nextFollowupDate])
   @@index([status])
@@ -676,54 +802,54 @@ model Attendance {
 }
 
 model StaffVisit {
-  id              String           @id @default(cuid())
-  shopId          String
-  shop            Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  staffId         String
-  staff           User             @relation(fields: [staffId], references: [id], onDelete: Cascade)
-  customerId      String
-  customer        Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  status          StaffVisitStatus @default(CHECKED_IN)
-  checkInAt       DateTime         @default(now())
-  checkOutAt      DateTime?
-  checkInLat      Float
-  checkInLng      Float
-  checkOutLat     Float?
-  checkOutLng     Float?
-  accuracy        Float?
-  distanceMeters  Float?
-  verified        Boolean          @default(false)
-  outsideWarning  Boolean          @default(false)
-  geoFenceStatus  String?
-  geoFenceRadiusM Int?
-  locationCapturedAt DateTime?
-  deviceInfo      String?
+  id                     String           @id @default(cuid())
+  shopId                 String
+  shop                   Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId                String
+  staff                  User             @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  customerId             String
+  customer               Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status                 StaffVisitStatus @default(CHECKED_IN)
+  checkInAt              DateTime         @default(now())
+  checkOutAt             DateTime?
+  checkInLat             Float
+  checkInLng             Float
+  checkOutLat            Float?
+  checkOutLng            Float?
+  accuracy               Float?
+  distanceMeters         Float?
+  verified               Boolean          @default(false)
+  outsideWarning         Boolean          @default(false)
+  geoFenceStatus         String?
+  geoFenceRadiusM        Int?
+  locationCapturedAt     DateTime?
+  deviceInfo             String?
   geoFenceOverrideReason String?
-  notes           String?
-  result          String?
-  visitType       String           @default("Follow-up")
-  outcome         String?
-  nextAction      String?
-  nextVisitDate   DateTime?
-  orderAmount     Float?
-  orderQuantity   Float?
-  orderExpectedDelivery DateTime?
-  orderProductCategory String?
-  orderPriority   String?
-  paymentMode     String?
-  paymentReference String?
-  paymentBankName String?
-  paymentScreenshotUrl String?
-  leadArea        String?
-  leadContactPerson String?
-  visitMetadata   Json?
-  recoveryAmount  Float            @default(0)
-  travelKm        Float            @default(0)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  photos          VisitPhoto[]
-  cheques         Cheque[]
-  orders          Order[]
+  notes                  String?
+  result                 String?
+  visitType              String           @default("Follow-up")
+  outcome                String?
+  nextAction             String?
+  nextVisitDate          DateTime?
+  orderAmount            Float?
+  orderQuantity          Float?
+  orderExpectedDelivery  DateTime?
+  orderProductCategory   String?
+  orderPriority          String?
+  paymentMode            String?
+  paymentReference       String?
+  paymentBankName        String?
+  paymentScreenshotUrl   String?
+  leadArea               String?
+  leadContactPerson      String?
+  visitMetadata          Json?
+  recoveryAmount         Float            @default(0)
+  travelKm               Float            @default(0)
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  photos                 VisitPhoto[]
+  cheques                Cheque[]
+  orders                 Order[]
 
   @@index([shopId, checkInAt])
   @@index([staffId, checkInAt])
@@ -738,33 +864,33 @@ model StaffVisit {
 }
 
 model Order {
-  id                    String      @id @default(cuid())
-  shopId                String
-  shop                  Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  customerId            String?
-  customer              Customer?   @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  createdById           String
-  createdBy             User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
-  staffVisitId          String?
-  staffVisit            StaffVisit? @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
-  orderDetails          String
-  preferredDeliveryDate DateTime?
-  deliveryLocationText  String?
-  deliveryLocationUrl   String?
-  priority              String      @default("Normal")
-  status                OrderStatus @default(ORDER_RECEIVED)
-  sourceModule          String      @default("FIELD_VISIT")
-  visitSource           String?
-  customerMatchStatus   String?
-  submittedCustomerName String?
+  id                      String          @id @default(cuid())
+  shopId                  String
+  shop                    Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId              String?
+  customer                Customer?       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdById             String
+  createdBy               User            @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  staffVisitId            String?
+  staffVisit              StaffVisit?     @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
+  orderDetails            String
+  preferredDeliveryDate   DateTime?
+  deliveryLocationText    String?
+  deliveryLocationUrl     String?
+  priority                String          @default("Normal")
+  status                  OrderStatus     @default(ORDER_RECEIVED)
+  sourceModule            String          @default("FIELD_VISIT")
+  visitSource             String?
+  customerMatchStatus     String?
+  submittedCustomerName   String?
   submittedCustomerMobile String?
-  submittedAddress      String?
-  deliveredAt           DateTime?
-  cancelledAt           DateTime?
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
-  activities            OrderActivity[]
-  followUps              FollowUp[]
+  submittedAddress        String?
+  deliveredAt             DateTime?
+  cancelledAt             DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  activities              OrderActivity[]
+  followUps               FollowUp[]
 
   @@unique([shopId, staffVisitId])
   @@index([shopId, status, priority])
@@ -794,35 +920,35 @@ model OrderActivity {
 }
 
 model OrderPublicLink {
-  id            String   @id @default(cuid())
-  shopId        String   @unique
-  shop          Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  token         String   @unique
-  isEnabled     Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id            String    @id @default(cuid())
+  shopId        String    @unique
+  shop          Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  token         String    @unique
+  isEnabled     Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   regeneratedAt DateTime?
 
   @@index([shopId])
 }
 
 model WhatsAppOrderNotificationSetting {
-  id                String                   @id @default(cuid())
-  shopId            String                   @unique
-  shop              Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  enabled           Boolean                  @default(false)
-  groupJid          String?
-  groupName         String?
-  selectedEvents    String[]                 @default(["ORDER_CREATED", "ORDER_EDITED", "ORDER_DISPATCHED", "ORDER_DELIVERED", "ORDER_CANCELLED"])
-  templates         Json?
-  connectionStatus  WhatsAppConnectionStatus @default(DISCONNECTED)
-  lastQrCode        String?
-  lastConnectedAt   DateTime?
+  id                 String                   @id @default(cuid())
+  shopId             String                   @unique
+  shop               Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  enabled            Boolean                  @default(false)
+  groupJid           String?
+  groupName          String?
+  selectedEvents     String[]                 @default(["ORDER_CREATED", "ORDER_EDITED", "ORDER_DISPATCHED", "ORDER_DELIVERED", "ORDER_CANCELLED"])
+  templates          Json?
+  connectionStatus   WhatsAppConnectionStatus @default(DISCONNECTED)
+  lastQrCode         String?
+  lastConnectedAt    DateTime?
   lastDisconnectedAt DateTime?
-  lastTestSentAt    DateTime?
-  lastError         String?
-  createdAt         DateTime                 @default(now())
-  updatedAt         DateTime                 @updatedAt
+  lastTestSentAt     DateTime?
+  lastError          String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
 
   @@index([shopId, enabled])
   @@index([connectionStatus])
@@ -854,100 +980,100 @@ model WhatsAppNotificationJob {
 }
 
 model WhatsAppSessionSecret {
-  id          String   @id @default(cuid())
-  shopId      String
-  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  key         String
-  value       String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([shopId, key])
   @@index([shopId])
 }
 
 model VisitPhoto {
-  id          String     @id @default(cuid())
-  shopId      String
-  shop        Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  visitId     String
-  visit       StaffVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  id           String     @id @default(cuid())
+  shopId       String
+  shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  visitId      String
+  visit        StaffVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
   uploadedById String
-  uploadedBy  User       @relation(fields: [uploadedById], references: [id])
-  url         String
-  fileType    String?
-  notes       String?
-  createdAt   DateTime   @default(now())
+  uploadedBy   User       @relation(fields: [uploadedById], references: [id])
+  url          String
+  fileType     String?
+  notes        String?
+  createdAt    DateTime   @default(now())
 
   @@index([shopId, createdAt])
   @@index([visitId])
 }
 
 model RouteHistory {
-  id             String   @id @default(cuid())
-  shopId         String
-  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  staffId        String
-  staff          User     @relation(fields: [staffId], references: [id], onDelete: Cascade)
-  routeDate      DateTime
-  totalKm        Float    @default(0)
-  totalVisits    Int      @default(0)
-  productiveHours Float   @default(0)
-  startedAt      DateTime?
-  endedAt        DateTime?
-  path           Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  staffId         String
+  staff           User      @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  routeDate       DateTime
+  totalKm         Float     @default(0)
+  totalVisits     Int       @default(0)
+  productiveHours Float     @default(0)
+  startedAt       DateTime?
+  endedAt         DateTime?
+  path            Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@unique([staffId, routeDate])
   @@index([shopId, routeDate])
 }
 
 model FollowUp {
-  id               String         @id @default(cuid())
-  shopId           String
-  shop             Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  customerId       String
-  customer         Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  followupDate     DateTime       @default(now())
-  status           FollowUpStatus
-  priority         FollowUpPriority @default(MEDIUM)
-  notes            String?
-  reminderNotes    String?
-  customerResponse String?
-  sourceModule     String         @default("TODAY_FOLLOWUPS")
-  followUpType     String?
-  summary          String?
-  detailedNotes    String?
-  recoveryAmount   Float?
-  paymentStatus    String?
-  chequeId         String?
-  chequeStatus     String?
-  promiseDate      DateTime?
-  visitId          String?
-  activitySource   String?
-  metadata         Json?
-  nextFollowupDate DateTime?
+  id                   String           @id @default(cuid())
+  shopId               String
+  shop                 Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId           String
+  customer             Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  followupDate         DateTime         @default(now())
+  status               FollowUpStatus
+  priority             FollowUpPriority @default(MEDIUM)
+  notes                String?
+  reminderNotes        String?
+  customerResponse     String?
+  sourceModule         String           @default("TODAY_FOLLOWUPS")
+  followUpType         String?
+  summary              String?
+  detailedNotes        String?
+  recoveryAmount       Float?
+  paymentStatus        String?
+  chequeId             String?
+  chequeStatus         String?
+  promiseDate          DateTime?
+  visitId              String?
+  activitySource       String?
+  metadata             Json?
+  nextFollowupDate     DateTime?
   nextFollowUpDateTime DateTime?
-  scheduledAt      DateTime?
-  completedAt      DateTime?
-  rescheduledAt    DateTime?
-  remindedAt       DateTime?
-  reminderEnabled  Boolean        @default(false)
-  manualReminder   Boolean        @default(false)
-  reminderSentAt   DateTime?
-  assignedToId     String?
-  assignedTo       User?          @relation("FollowUpAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
-  orderId          String?
-  order            Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  supersededAt     DateTime?
-  cancelledAt      DateTime?
-  actionLoggedAt   DateTime       @default(now())
-  queueRank        Int?
-  createdById      String
-  createdBy        User           @relation("FollowUpCreatedBy", fields: [createdById], references: [id])
-  linkedTask       Task?          @relation("TaskLinkedFollowUp")
-  createdAt        DateTime       @default(now())
+  scheduledAt          DateTime?
+  completedAt          DateTime?
+  rescheduledAt        DateTime?
+  remindedAt           DateTime?
+  reminderEnabled      Boolean          @default(false)
+  manualReminder       Boolean          @default(false)
+  reminderSentAt       DateTime?
+  assignedToId         String?
+  assignedTo           User?            @relation("FollowUpAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  orderId              String?
+  order                Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  supersededAt         DateTime?
+  cancelledAt          DateTime?
+  actionLoggedAt       DateTime         @default(now())
+  queueRank            Int?
+  createdById          String
+  createdBy            User             @relation("FollowUpCreatedBy", fields: [createdById], references: [id])
+  linkedTask           Task?            @relation("TaskLinkedFollowUp")
+  createdAt            DateTime         @default(now())
 
   @@index([customerId, followupDate])
   @@index([nextFollowupDate])
@@ -1010,64 +1136,64 @@ model PaymentEntry {
 }
 
 model Cheque {
-  id                 String       @id @default(cuid())
-  shopId             String
-  shop               Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  customerId         String
-  customer           Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  customerCode       String?
-  chequeNumber       String
-  bankName           String
-  branch             String?
-  chequeDate         DateTime
-  amount             Float
-  accountHolderName  String
-  collectedById      String
-  collectedBy        User         @relation("ChequeCollectedBy", fields: [collectedById], references: [id])
-  staffVisitId       String?
-  staffVisit         StaffVisit?  @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
-  collectionLatitude Float?
-  collectionLongitude Float?
-  collectionAccuracy Float?
-  collectionDateTime DateTime
-  collectionNotes    String?
-  frontImageUrl      String?
-  backImageUrl       String?
-  micrCode           String?
-  ifscCode           String?
-  ocrRawText         String?
-  ocrExtractedData   Json?
-  ocrConfidence      Float?
-  ocrEditedFields    Json?
-  depositDateTime    DateTime?
-  depositBankAccount String?
-  depositSlipUrl     String?
-  depositReceiptUrl  String?
-  depositReceiptType String?
-  depositReceiptUploadedAt DateTime?
-  depositReceiptUploadedById String?
-  depositReceiptUploadedBy User? @relation("ChequeReceiptUploadedBy", fields: [depositReceiptUploadedById], references: [id])
-  depositedById      String?
-  depositedBy        User?        @relation("ChequeDepositedBy", fields: [depositedById], references: [id])
-  depositedAccountId String?
-  depositedAccount   ChequeDepositAccount? @relation(fields: [depositedAccountId], references: [id])
-  status             ChequeStatus @default(COLLECTED)
-  bounceReason       String?
-  bouncedAt          DateTime?
-  clearedAt          DateTime?
-  cancelledAt        DateTime?
-  balanceAppliedAt   DateTime?
-  balanceAppliedAmount Float?
-  balanceAppliedCustomerId String?
-  balancePaymentEntryId String? @unique
-  balanceReversedAt  DateTime?
-  balanceReversalReason String?
-  balanceReversalTransactionId String? @unique
-  balanceReappliedAt DateTime?
-  replacedByChequeId String?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
-  activities         ChequeActivity[]
+  id                           String                @id @default(cuid())
+  shopId                       String
+  shop                         Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId                   String
+  customer                     Customer              @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerCode                 String?
+  chequeNumber                 String
+  bankName                     String
+  branch                       String?
+  chequeDate                   DateTime
+  amount                       Float
+  accountHolderName            String
+  collectedById                String
+  collectedBy                  User                  @relation("ChequeCollectedBy", fields: [collectedById], references: [id])
+  staffVisitId                 String?
+  staffVisit                   StaffVisit?           @relation(fields: [staffVisitId], references: [id], onDelete: SetNull)
+  collectionLatitude           Float?
+  collectionLongitude          Float?
+  collectionAccuracy           Float?
+  collectionDateTime           DateTime
+  collectionNotes              String?
+  frontImageUrl                String?
+  backImageUrl                 String?
+  micrCode                     String?
+  ifscCode                     String?
+  ocrRawText                   String?
+  ocrExtractedData             Json?
+  ocrConfidence                Float?
+  ocrEditedFields              Json?
+  depositDateTime              DateTime?
+  depositBankAccount           String?
+  depositSlipUrl               String?
+  depositReceiptUrl            String?
+  depositReceiptType           String?
+  depositReceiptUploadedAt     DateTime?
+  depositReceiptUploadedById   String?
+  depositReceiptUploadedBy     User?                 @relation("ChequeReceiptUploadedBy", fields: [depositReceiptUploadedById], references: [id])
+  depositedById                String?
+  depositedBy                  User?                 @relation("ChequeDepositedBy", fields: [depositedById], references: [id])
+  depositedAccountId           String?
+  depositedAccount             ChequeDepositAccount? @relation(fields: [depositedAccountId], references: [id])
+  status                       ChequeStatus          @default(COLLECTED)
+  bounceReason                 String?
+  bouncedAt                    DateTime?
+  clearedAt                    DateTime?
+  cancelledAt                  DateTime?
+  balanceAppliedAt             DateTime?
+  balanceAppliedAmount         Float?
+  balanceAppliedCustomerId     String?
+  balancePaymentEntryId        String?               @unique
+  balanceReversedAt            DateTime?
+  balanceReversalReason        String?
+  balanceReversalTransactionId String?               @unique
+  balanceReappliedAt           DateTime?
+  replacedByChequeId           String?
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+  activities                   ChequeActivity[]
 
   @@unique([shopId, chequeNumber, bankName])
   @@index([shopId, status])
@@ -1139,16 +1265,16 @@ model CustomerNote {
 }
 
 model ActivityLog {
-  id          String    @id @default(cuid())
-  shopId      String?
-  shop        Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
-  userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  customerId  String?
-  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  action      String
-  details     String?
-  createdAt   DateTime  @default(now())
+  id         String    @id @default(cuid())
+  shopId     String?
+  shop       Shop?     @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  action     String
+  details    String?
+  createdAt  DateTime  @default(now())
 
   @@index([createdAt])
   @@index([shopId, createdAt])
@@ -1158,19 +1284,19 @@ model ActivityLog {
 }
 
 model SupportAccessGrant {
-  id             String    @id @default(cuid())
-  shopId         String
-  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  requestedById  String
-  requestedBy    User      @relation("SupportAccessRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
-  superAdminId   String?
-  superAdmin     User?     @relation("SupportAccessSuperAdmin", fields: [superAdminId], references: [id], onDelete: SetNull)
-  reason         String
-  status         String    @default("ACTIVE")
-  expiresAt      DateTime
-  revokedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  shopId        String
+  shop          Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  requestedById String
+  requestedBy   User      @relation("SupportAccessRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  superAdminId  String?
+  superAdmin    User?     @relation("SupportAccessSuperAdmin", fields: [superAdminId], references: [id], onDelete: SetNull)
+  reason        String
+  status        String    @default("ACTIVE")
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([shopId, status, expiresAt])
   @@index([superAdminId, status, expiresAt])
@@ -1178,13 +1304,13 @@ model SupportAccessGrant {
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
-  tokenHash String   @unique
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId])
   @@index([expiresAt])
