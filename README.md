@@ -27,7 +27,13 @@ Open `http://localhost:3000`.
 
 Phone push notifications require HTTPS in production (localhost is allowed for development), the three VAPID environment variables from `.env.example`, and the `20260701120000_web_push_subscriptions` migration. Deploy pending production migrations with `npm run prisma:migrate:deploy` (or `npx prisma migrate deploy`) using `DATABASE_URL`; do not use `prisma db push` as the normal production migration path. Generate a key pair with `npx web-push generate-vapid-keys`.
 
-School Van Live Tracking uses the Mappls Web Maps SDK. Set `NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY` in the deployment environment and apply `20260702120000_school_van_live_tracking_mvp` with `prisma migrate deploy`. `MAPPLS_CLIENT_ID` and `MAPPLS_CLIENT_SECRET` are not required for the Phase 1 browser map.
+School Van Live Tracking uses the Mappls Web Maps SDK. Configure this browser-safe variable locally and in Vercel:
+
+```env
+NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY=your_mappls_web_sdk_key
+```
+
+Add `app.qrvcard.in` to the domain whitelist in the Mappls console, then redeploy Vercel after adding or changing the variable. Use a Map SDK/static key/access token, not a client secret. Apply `20260702120000_school_van_live_tracking_mvp` with `prisma migrate deploy`.
 
 If a school user was created before the school-role enum/session fix and was accidentally stored as `ACCOUNT_STAFF`, correct that specific account after deploying the migration:
 
