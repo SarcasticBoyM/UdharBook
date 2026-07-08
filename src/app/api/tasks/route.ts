@@ -40,12 +40,25 @@ const patchSchema = z.object({
   dueDate: z.string().datetime().optional(),
 });
 
-const taskInclude = {
+const taskSelect = {
+  id: true,
+  title: true,
+  notes: true,
+  progressNotes: true,
+  taskType: true,
+  priority: true,
+  status: true,
+  dueDate: true,
+  createdAt: true,
+  referenceUrl: true,
+  assignedToId: true,
+  assignedById: true,
+  linkedFollowUpId: true,
   customer: { select: { id: true, partyName: true, outstandingBalance: true, contactNumber: true } },
   assignedTo: { select: { id: true, name: true, role: true } },
   assignedBy: { select: { id: true, name: true, role: true } },
   linkedFollowUp: { select: { id: true, followUpType: true, status: true, nextFollowUpDateTime: true, cancelledAt: true } },
-} satisfies Prisma.TaskInclude;
+} satisfies Prisma.TaskSelect;
 
 function isAssignableRole(role: string) {
   const normalized = normalizeFixedRole(role);
@@ -66,6 +79,7 @@ export async function GET(request: Request) {
   const shopId = requireShopId(request, session);
   const { searchParams } = new URL(request.url);
   const view = searchParams.get("view");
+  const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 100)));
 
   if (view === "staff") {
     if (!canAssignTasks(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -97,9 +111,9 @@ export async function GET(request: Request) {
   const [tasks, pending, inProgress, completed, cancelled] = await prisma.$transaction([
     prisma.task.findMany({
       where,
-      include: taskInclude,
+      select: taskSelect,
       orderBy: [{ status: "asc" }, { dueDate: "asc" }, { createdAt: "desc" }],
-      take: 300,
+      take: limit,
     }),
     prisma.task.count({ where: { ...ownershipWhere, status: "PENDING" } }),
     prisma.task.count({ where: { ...ownershipWhere, status: "IN_PROGRESS" } }),
@@ -177,7 +191,7 @@ export async function POST(request: Request) {
           }),
           idempotencyKey,
         });
-        const task = await tx.task.findUniqueOrThrow({ where: { id: synced.task.id }, include: taskInclude });
+        const task = await tx.task.findUniqueOrThrow({ where: { id: synced.task.id }, select: taskSelect });
         return { task, followUp: synced.followUp, created: synced.created };
       });
     } catch (error) {
@@ -188,7 +202,7 @@ export async function POST(request: Request) {
             assignedById: session.id,
             idempotencyKey,
           },
-          include: taskInclude,
+          select: taskSelect,
         });
         if (existing) {
           result = { task: existing, followUp: existing.linkedFollowUp, created: false };
@@ -253,7 +267,7 @@ export async function PATCH(request: Request) {
     const shopId = requireShopId(request, session);
     const existing = await prisma.task.findFirst({
       where: { id: body.id, shopId },
-      include: taskInclude,
+      select: taskSelect,
     });
     if (!existing) return NextResponse.json({ error: "Task not found." }, { status: 404 });
 
@@ -286,7 +300,7 @@ export async function PATCH(request: Request) {
         progressNotes: body.progressNotes,
         dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
       });
-      return tx.task.findUniqueOrThrow({ where: { id: existing.id }, include: taskInclude });
+      return tx.task.findUniqueOrThrow({ where: { id: existing.id }, select: taskSelect });
     });
 
     const notification = completedNow

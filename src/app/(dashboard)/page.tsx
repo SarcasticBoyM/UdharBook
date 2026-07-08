@@ -41,10 +41,16 @@ const emptyStats: DashboardStats = {
 const CLOSED_FOLLOW_UP_STATUSES = new Set(["PAID", "COMPLETED", "WRONG_NUMBER"]);
 
 type RecentActivityItem = Prisma.ActivityLogGetPayload<{
-  include: {
+  select: {
+    id: true;
+    action: true;
+    createdAt: true;
     user: { select: { name: true } };
     customer: { select: { partyName: true; id: true } };
   };
+}>;
+type HighBalanceCustomerItem = Prisma.CustomerGetPayload<{
+  select: { id: true; partyName: true; outstandingBalance: true };
 }>;
 
 async function selectedShopId() {
@@ -88,7 +94,13 @@ async function getStats(shopId: string): Promise<DashboardStats> {
 
   const customers = await prisma.customer.findMany({
     where: { shopId },
-    include: { followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } } },
+    select: {
+      status: true,
+      outstandingBalance: true,
+      nextFollowupDate: true,
+      balanceAsOfDate: true,
+      followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } },
+    },
   });
   const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0 && !CLOSED_FOLLOW_UP_STATUSES.has(c.followUps[0]?.status ?? ""));
 
@@ -107,6 +119,7 @@ async function getStats(shopId: string): Promise<DashboardStats> {
     where: { shopId },
     orderBy: { paidAt: "asc" },
     take: 200,
+    select: { paidAt: true, amount: true },
   });
   const monthMap = new Map<string, number>();
   for (const payment of payments) {
@@ -176,7 +189,7 @@ export default async function DashboardPage() {
   const shopId = await selectedShopId();
   let dashboardError = false;
   let stats = emptyStats;
-  let highBalanceCustomers: Awaited<ReturnType<typeof prisma.customer.findMany>> = [];
+  let highBalanceCustomers: HighBalanceCustomerItem[] = [];
   let recentActivity: RecentActivityItem[] = [];
   let staffCount = 0;
 
@@ -194,12 +207,16 @@ export default async function DashboardPage() {
         where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
         orderBy: { outstandingBalance: "desc" },
         take: 5,
+        select: { id: true, partyName: true, outstandingBalance: true },
       });
       recentActivity = await prisma.activityLog.findMany({
         where: { shopId },
         orderBy: { createdAt: "desc" },
         take: 8,
-        include: {
+        select: {
+          id: true,
+          action: true,
+          createdAt: true,
           user: { select: { name: true } },
           customer: { select: { partyName: true, id: true } },
         },

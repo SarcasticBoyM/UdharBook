@@ -107,7 +107,27 @@ export async function GET(request: Request) {
       : { outstandingBalance: order };
 
   const [items, total] = await Promise.all([
-    prisma.customer.findMany({ where, orderBy, skip, take: limit }),
+    prisma.customer.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        partyName: true,
+        contactNumber: true,
+        outstandingBalance: true,
+        lastFollowupDate: true,
+        nextFollowupDate: true,
+        status: true,
+        batchTag: true,
+        latitude: true,
+        longitude: true,
+        isArchived: true,
+        archivedAt: true,
+        archivedById: true,
+      },
+    }),
     prisma.customer.count({ where }),
   ]);
 

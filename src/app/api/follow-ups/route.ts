@@ -323,7 +323,18 @@ export async function GET(request: Request) {
         scheduledAt: { gte: from, lte: to },
         customer: { isArchived: false },
       },
-      include: { customer: true, createdBy: { select: { name: true } } },
+      select: {
+        id: true,
+        status: true,
+        priority: true,
+        notes: true,
+        followupDate: true,
+        scheduledAt: true,
+        nextFollowupDate: true,
+        createdAt: true,
+        customer: { select: { id: true, partyName: true, contactNumber: true, outstandingBalance: true, status: true, batchTag: true } },
+        createdBy: { select: { name: true } },
+      },
       orderBy: { scheduledAt: "asc" },
     });
     return NextResponse.json(followUps);
@@ -332,16 +343,37 @@ export async function GET(request: Request) {
   const [customers, total] = await prisma.$transaction([
     prisma.customer.findMany({
       where,
-      include: {
+      select: {
+        id: true,
+        partyName: true,
+        contactNumber: true,
+        outstandingBalance: true,
+        status: true,
+        lastFollowupDate: true,
+        nextFollowupDate: true,
+        balanceAsOfDate: true,
+        batchTag: true,
         followUps: {
           orderBy: { followupDate: "desc" },
           take: 8,
-          include: { createdBy: { select: { name: true } } },
+          select: {
+            id: true,
+            status: true,
+            priority: true,
+            notes: true,
+            customerResponse: true,
+            followupDate: true,
+            nextFollowupDate: true,
+            nextFollowUpDateTime: true,
+            completedAt: true,
+            createdAt: true,
+            createdBy: { select: { name: true } },
+          },
         },
         payments: {
           orderBy: { paidAt: "desc" },
           take: 1,
-          include: { createdBy: { select: { name: true } } },
+          select: { id: true, amount: true, paidAt: true, method: true, notes: true, createdBy: { select: { name: true } } },
         },
       },
       orderBy: [{ nextFollowupDate: "asc" }, { outstandingBalance: "desc" }],

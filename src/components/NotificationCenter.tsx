@@ -333,7 +333,7 @@ export function NotificationCenter() {
 
   useEffect(() => {
     void loadNotificationCounts(true);
-    const interval = window.setInterval(() => void loadNotificationCounts(true), 90000);
+    const interval = window.setInterval(() => void loadNotificationCounts(true), 180000);
     const onFocus = () => void loadNotificationCounts(true);
     const onVisible = () => {
       if (document.visibilityState === "visible") void loadNotificationCounts(true);

@@ -180,7 +180,7 @@ function chequeInclude() {
     activities: {
       orderBy: { createdAt: "desc" as const },
       include: { user: { select: { name: true } } },
-      take: 20,
+      take: 5,
     },
   };
 }

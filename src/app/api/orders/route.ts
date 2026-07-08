@@ -370,26 +370,43 @@ export async function GET(request: Request) {
       ...(conditions.length > 0 ? { AND: conditions } : {}),
     };
 
-    const baseInclude = {
+    const baseSelect = {
+      id: true,
+      orderDetails: true,
+      preferredDeliveryDate: true,
+      deliveryLocationText: true,
+      deliveryLocationUrl: true,
+      priority: true,
+      status: true,
+      visitSource: true,
+      sourceModule: true,
+      createdAt: true,
+      updatedAt: true,
+      deliveredAt: true,
+      cancelledAt: true,
+      customerMatchStatus: true,
+      submittedCustomerName: true,
+      submittedCustomerMobile: true,
+      submittedAddress: true,
       customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
-      createdBy: { select: { name: true } },
-    } satisfies Prisma.OrderInclude;
-    const fullInclude = {
-      ...baseInclude,
+      createdBy: { select: { name: true, role: true } },
+    } satisfies Prisma.OrderSelect;
+    const fullSelect = {
+      ...baseSelect,
       activities: {
         orderBy: { createdAt: "desc" },
         take: 1,
-        include: { user: { select: { name: true } } },
+        select: { action: true, newStatus: true, createdAt: true, user: { select: { name: true, role: true } } },
       },
-    } satisfies Prisma.OrderInclude;
+    } satisfies Prisma.OrderSelect;
 
     let rows;
     try {
       rows = await prisma.order.findMany({
         where,
-        include: fullInclude,
+        select: fullSelect,
         orderBy: latestOrderSort(),
-        take: 500,
+        take: 200,
       });
     } catch (error) {
       logger.error("orders_fetch_with_activity_failed_retrying_without_activity", {
@@ -403,9 +420,9 @@ export async function GET(request: Request) {
       });
       const fallbackRows = await prisma.order.findMany({
         where,
-        include: baseInclude,
+        select: baseSelect,
         orderBy: latestOrderSort(),
-        take: 500,
+        take: 200,
       });
       rows = fallbackRows.map((order) => ({ ...order, activities: [] }));
     }

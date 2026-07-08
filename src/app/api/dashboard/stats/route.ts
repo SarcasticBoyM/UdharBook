@@ -74,7 +74,13 @@ export async function GET(request: Request) {
 
   const customers = await prisma.customer.findMany({
     where: { shopId, isArchived: false },
-    include: { followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } } },
+    select: {
+      status: true,
+      outstandingBalance: true,
+      nextFollowupDate: true,
+      balanceAsOfDate: true,
+      followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } },
+    },
   });
   const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0 && !CLOSED_FOLLOW_UP_STATUSES.has(c.followUps[0]?.status ?? ""));
 
@@ -107,6 +113,7 @@ export async function GET(request: Request) {
     where: { shopId },
     orderBy: { paidAt: "asc" },
     take: 200,
+    select: { paidAt: true, amount: true },
   });
 
   const monthMap = new Map<string, number>();
