@@ -331,6 +331,43 @@ function statusClass(status: OrderStatus) {
   return "bg-amber-100 text-amber-800";
 }
 
+function orderStatusRank(status: OrderStatus) {
+  const normalized = normalizedStatus(status);
+  if (normalized === "ORDER_RECEIVED") return 0;
+  if (normalized === "DISPATCHED") return 1;
+  if (normalized === "DELIVERED") return 2;
+  if (normalized === "CANCELLED") return 3;
+  return 4;
+}
+
+function orderCreatedAtTime(order: OrderRow) {
+  const time = new Date(order.createdAt).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function statusAwareSort(orders: OrderRow[]) {
+  return [...orders].sort((left, right) => {
+    const statusDifference = orderStatusRank(left.status) - orderStatusRank(right.status);
+    if (statusDifference !== 0) return statusDifference;
+    return orderCreatedAtTime(right) - orderCreatedAtTime(left);
+  });
+}
+
+function orderCardClass(status: OrderStatus) {
+  const base = "rounded-lg border p-4 shadow-sm transition-colors";
+  const normalized = normalizedStatus(status);
+  if (normalized === "ORDER_RECEIVED") {
+    return `${base} border-emerald-100 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20`;
+  }
+  if (normalized === "DISPATCHED") {
+    return `${base} border-slate-200 border-l-4 border-l-blue-200 bg-white dark:border-slate-800 dark:border-l-indigo-800 dark:bg-slate-900`;
+  }
+  if (normalized === "CANCELLED") {
+    return `${base} border-rose-100 border-l-4 border-l-rose-200 bg-white opacity-80 dark:border-rose-950/70 dark:border-l-rose-900 dark:bg-slate-900`;
+  }
+  return `${base} border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900`;
+}
+
 function canEdit(order: OrderRow) {
   return ["ORDER_RECEIVED", "DISPATCHED"].includes(normalizedStatus(order.status));
 }
@@ -613,8 +650,10 @@ export default function OrderDeskPage() {
   }, [orders, query]);
   const filteredOrders = useMemo(() => {
     const tag = batchFilter.trim().toLowerCase();
-    if (!tag) return visibleOrders;
-    return visibleOrders.filter((order) => orderCustomerBatch(order).toLowerCase().includes(tag));
+    const list = tag
+      ? visibleOrders.filter((order) => orderCustomerBatch(order).toLowerCase().includes(tag))
+      : visibleOrders;
+    return statusAwareSort(list);
   }, [batchFilter, visibleOrders]);
 
   const clubVisibleOrders = useMemo(() => {
@@ -1323,7 +1362,7 @@ export default function OrderDeskPage() {
           <article
             id={`order-${order.id}`}
             key={order.id}
-            className={`rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${["DELIVERED", "CANCELLED"].includes(normalizedStatus(order.status)) ? "opacity-70" : ""} ${highlightedId === order.id ? "ring-2 ring-brand-500" : ""}`}
+            className={`${orderCardClass(order.status)} ${highlightedId === order.id ? "ring-2 ring-brand-500" : ""}`}
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
