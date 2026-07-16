@@ -10,7 +10,7 @@ type MapLike = { setCenter?: (position: Position | [number, number]) => void; re
 type MarkerLike = { setPosition?: (position: Position) => void; remove?: () => void };
 type MapplsGlobal = { Map: new (id: string, options: Record<string, unknown>) => MapLike; Marker: new (options: Record<string, unknown>) => MarkerLike };
 
-const MISSING_KEY = "Mappls map key is missing. Add NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY in Vercel and redeploy.";
+const MISSING_KEY = "Mappls browser configuration is missing. Add NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY, then restart locally or redeploy.";
 
 function isValidPoint(point: Point) {
   return Number.isFinite(point.latitude) && Number.isFinite(point.longitude) && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180;
@@ -22,10 +22,11 @@ function escapeHtml(value: string) {
 
 function safeMapError(error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown Mappls error";
-  if (process.env.NODE_ENV !== "production") console.error("Mappls map error:", error);
-  if (message.includes("SDK script failed")) return "SDK script failed";
-  if (message.includes("SDK object not found")) return "Mappls SDK object not found after load";
-  return "SDK script failed";
+  console.error("[Mappls] Map initialization failed:", error);
+  if (message === "MAPPLS_KEY_MISSING") return MISSING_KEY;
+  if (message === "MAPPLS_GLOBAL_UNAVAILABLE") return "The Mappls SDK loaded but did not initialize. Verify that Web Maps is enabled for the key.";
+  if (message === "MAPPLS_SCRIPT_LOAD_FAILED") return "The Mappls SDK could not load. Verify the browser key and allowed domains in the Mappls console.";
+  return "The Mappls map could not initialize. You can still open the coordinates below.";
 }
 
 export function MapplsLiveMap({ latitude, longitude, accuracyM, heading, vehicleName, routeName, lastLocationAt, isLive, height = "320px", autoCenter = true, locations }: { latitude?: number | null; longitude?: number | null; accuracyM?: number | null; heading?: number | null; vehicleName?: string; routeName?: string; lastLocationAt?: string | null; isLive: boolean; height?: string; autoCenter?: boolean; showAccuracyCircle?: boolean; showPopup?: boolean; locations?: Point[] }) {
@@ -40,12 +41,15 @@ export function MapplsLiveMap({ latitude, longitude, accuracyM, heading, vehicle
   const locationMissing = points.length === 0;
 
   useEffect(() => {
-    if (!key || locationMissing || !containerRef.current) return;
+    if (locationMissing || !containerRef.current) return;
     let cancelled = false;
-    loadMapplsSdk(key).then(() => {
+    loadMapplsSdk(key).then((loadedSdk) => {
       if (cancelled || !containerRef.current) return;
-      const sdk = (window as Window & { mappls?: MapplsGlobal }).mappls;
-      if (!sdk?.Map || !sdk?.Marker) throw new Error("Mappls SDK object not found after load");
+      const sdk = loadedSdk as MapplsGlobal;
+      if (!sdk?.Map || !sdk?.Marker) {
+        console.error("[Mappls] window.mappls/window.Mappls is missing Map or Marker after SDK load.");
+        throw new Error("MAPPLS_GLOBAL_UNAVAILABLE");
+      }
       const first = points[0];
       if (!mapRef.current) mapRef.current = new sdk.Map(id, { center: [first.latitude, first.longitude], zoom: 15 });
 

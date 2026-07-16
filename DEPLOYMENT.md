@@ -4,6 +4,7 @@
 
 1. Connect the GitHub repository to Vercel.
 2. Set the environment variables from `ENV_SETUP.md`.
+   For School Transport maps, set `NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY` to a browser-safe Mappls static Web Maps SDK key. Allow the Vercel/production hostname in the key's Mappls domain whitelist; preview hostnames must also be allowed if maps are required in previews. Redeploy after changing a `NEXT_PUBLIC_` variable.
 3. Ensure Supabase allows the Vercel deployment region to connect.
 4. Run database migrations before or during deployment:
 

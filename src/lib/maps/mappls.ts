@@ -1,19 +1,26 @@
 const SCRIPT_ID = "mappls-web-map-sdk";
 const SDK_WAIT_MS = 10_000;
 
-let loader: Promise<void> | null = null;
+type MapplsSdk = { Map?: unknown; Marker?: unknown };
+type MapplsWindow = Window & { Mappls?: MapplsSdk; mappls?: MapplsSdk };
 
-function hasMapplsSdk() {
-  return Boolean((window as Window & { mappls?: { Map?: unknown } }).mappls?.Map);
+let loader: Promise<MapplsSdk> | null = null;
+
+function getMapplsSdk(): MapplsSdk | undefined {
+  if (typeof window === "undefined") return undefined;
+  const mapWindow = window as MapplsWindow;
+  return mapWindow.mappls?.Map ? mapWindow.mappls : mapWindow.Mappls?.Map ? mapWindow.Mappls : undefined;
 }
 
 function waitForMapplsSdk() {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<MapplsSdk>((resolve, reject) => {
     const startedAt = Date.now();
     const check = () => {
-      if (hasMapplsSdk()) return resolve();
+      const sdk = getMapplsSdk();
+      if (sdk) return resolve(sdk);
       if (Date.now() - startedAt >= SDK_WAIT_MS) {
-        return reject(new Error("Mappls SDK object not found after load"));
+        console.error("[Mappls] SDK script loaded, but neither window.mappls nor window.Mappls is available.");
+        return reject(new Error("MAPPLS_GLOBAL_UNAVAILABLE"));
       }
       window.setTimeout(check, 50);
     };
@@ -21,39 +28,50 @@ function waitForMapplsSdk() {
   });
 }
 
-export function loadMapplsSdk(key: string) {
+export function loadMapplsSdk(key: string | undefined) {
   if (typeof window === "undefined" || typeof document === "undefined") {
-    return Promise.reject(new Error("Mappls SDK can only load in the browser"));
+    return Promise.reject(new Error("MAPPLS_BROWSER_REQUIRED"));
   }
-  if (hasMapplsSdk()) return Promise.resolve();
+
+  const browserKey = key?.trim();
+  if (!browserKey) {
+    console.error("[Mappls] Missing NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY; the browser SDK was not requested.");
+    return Promise.reject(new Error("MAPPLS_KEY_MISSING"));
+  }
+
+  const availableSdk = getMapplsSdk();
+  if (availableSdk) return Promise.resolve(availableSdk);
   if (loader) return loader;
 
-  loader = new Promise<void>((resolve, reject) => {
+  loader = new Promise<MapplsSdk>((resolve, reject) => {
     const existing = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
     const script = existing ?? document.createElement("script");
-    let failed = false;
 
-    const ready = () => {
-      if (failed) return;
-      void waitForMapplsSdk().then(resolve, reject);
-    };
     const fail = () => {
-      failed = true;
-      reject(new Error("SDK script failed"));
+      console.error("[Mappls] Browser SDK script failed to load. Verify the static key, enabled Web Maps API, network access, and the Mappls domain whitelist.");
+      reject(new Error("MAPPLS_SCRIPT_LOAD_FAILED"));
     };
+    const ready = () => void waitForMapplsSdk().then(resolve, reject);
 
     script.addEventListener("load", ready, { once: true });
     script.addEventListener("error", fail, { once: true });
+
     if (existing) {
+      // A script inserted elsewhere may already have completed before listeners were attached.
       ready();
       return;
     }
 
     script.id = SCRIPT_ID;
-    script.src = `https://apis.mappls.com/advancedmaps/api/${encodeURIComponent(key)}/map_sdk?v=3.0&layer=vector`;
+    script.src = `https://sdk.mappls.com/map/sdk/web?v=3.0&access_token=${encodeURIComponent(browserKey)}`;
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
+  }).catch((error) => {
+    // Keep successful loads singleton, but permit recovery after a transient network/config failure.
+    loader = null;
+    document.getElementById(SCRIPT_ID)?.remove();
+    throw error;
   });
 
   return loader;
