@@ -25,8 +25,24 @@ function safeMapError(error: unknown) {
   console.error("[Mappls] Map initialization failed:", error);
   if (message === "MAPPLS_KEY_MISSING") return MISSING_KEY;
   if (message === "MAPPLS_GLOBAL_UNAVAILABLE") return "The Mappls SDK loaded but did not initialize. Verify that Web Maps is enabled for the key.";
-  if (message === "MAPPLS_SCRIPT_LOAD_FAILED") return "The Mappls SDK could not load. Verify the browser key and allowed domains in the Mappls console.";
+  if (message === "MAPPLS_SCRIPT_BLOCKED_OR_FAILED") return "The Mappls SDK was blocked or could not load.";
   return "The Mappls map could not initialize. You can still open the coordinates below.";
+}
+
+function openStreetMapEmbedUrl(latitude: number, longitude: number) {
+  const latitudeDelta = 0.012;
+  const longitudeDelta = 0.018;
+  const bbox = [
+    longitude - longitudeDelta,
+    latitude - latitudeDelta,
+    longitude + longitudeDelta,
+    latitude + latitudeDelta,
+  ].map((value) => value.toFixed(6)).join(",");
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${latitude},${longitude}`)}`;
+}
+
+function openStreetMapUrl(latitude: number, longitude: number) {
+  return `https://www.openstreetmap.org/?mlat=${encodeURIComponent(latitude)}&mlon=${encodeURIComponent(longitude)}#map=16/${encodeURIComponent(latitude)}/${encodeURIComponent(longitude)}`;
 }
 
 export function MapplsLiveMap({ latitude, longitude, accuracyM, heading, vehicleName, routeName, lastLocationAt, isLive, height = "320px", autoCenter = true, locations }: { latitude?: number | null; longitude?: number | null; accuracyM?: number | null; heading?: number | null; vehicleName?: string; routeName?: string; lastLocationAt?: string | null; isLive: boolean; height?: string; autoCenter?: boolean; showAccuracyCircle?: boolean; showPopup?: boolean; locations?: Point[] }) {
@@ -41,7 +57,7 @@ export function MapplsLiveMap({ latitude, longitude, accuracyM, heading, vehicle
   const locationMissing = points.length === 0;
 
   useEffect(() => {
-    if (locationMissing || !containerRef.current) return;
+    if (locationMissing) return;
     let cancelled = false;
     loadMapplsSdk(key).then((loadedSdk) => {
       if (cancelled || !containerRef.current) return;
@@ -87,5 +103,41 @@ export function MapplsLiveMap({ latitude, longitude, accuracyM, heading, vehicle
   if (locationMissing) return <div className="flex min-h-[320px] items-center justify-center rounded-xl border bg-slate-50 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900" style={{ height }}>Location not available yet</div>;
   const first = points[0];
   const reason = !key ? MISSING_KEY : error;
-  return <div className="space-y-2"><div className="relative min-h-[260px] overflow-hidden rounded-xl border dark:border-slate-800" style={{ height, minHeight: "260px" }}><div ref={containerRef} id={id} className="h-full min-h-[260px] w-full" />{reason && <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100/95 p-4 text-center text-sm dark:bg-slate-900/95"><p className="font-semibold">Map could not load.</p><p className="mt-1">{reason}</p><p className="mt-2 font-mono text-xs">{first.latitude.toFixed(6)}, {first.longitude.toFixed(6)}</p></div>}{!isLive && <span className="absolute right-2 top-2 rounded-full bg-slate-700 px-2 py-1 text-xs font-bold text-white">Stale</span>}</div><a href={mapplsOpenUrl(first.latitude, first.longitude)} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-brand-700">Open in Mappls</a></div>;
+  return (
+    <div className="space-y-2">
+      <div className="relative min-h-[260px] overflow-hidden rounded-xl border bg-slate-100 dark:border-slate-800 dark:bg-slate-900" style={{ height, minHeight: "260px" }}>
+        {reason ? (
+          <div className="flex h-full min-h-[260px] flex-col">
+            <div className="border-b bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-slate-700 dark:bg-amber-950/40 dark:text-amber-100">
+              <p className="font-semibold">Live map provider could not load. Showing fallback location view.</p>
+              <p className="mt-0.5 opacity-80">{reason}</p>
+            </div>
+            <iframe
+              title={`Fallback map for ${first.vehicleName ?? "school van"}`}
+              src={openStreetMapEmbedUrl(first.latitude, first.longitude)}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="min-h-[210px] w-full flex-1 border-0"
+            />
+          </div>
+        ) : (
+          <div ref={containerRef} id={id} className="h-full min-h-[260px] w-full" />
+        )}
+        {!isLive && <span className="absolute right-2 top-2 rounded-full bg-slate-700 px-2 py-1 text-xs font-bold text-white">Stale</span>}
+      </div>
+      {reason && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {points.map((point, index) => (
+            <div key={`${point.latitude}-${point.longitude}-${index}`} className="rounded-lg border px-3 py-2 text-xs dark:border-slate-800">
+              <p className="font-semibold">{point.vehicleName ?? (points.length > 1 ? `School Van ${index + 1}` : "School Van")}</p>
+              {point.routeName && <p className="text-slate-500">{point.routeName}</p>}
+              <p className="mt-1 font-mono">{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</p>
+              <a href={openStreetMapUrl(point.latitude, point.longitude)} target="_blank" rel="noreferrer" className="mt-1 inline-flex font-semibold text-brand-700">Open fallback map</a>
+            </div>
+          ))}
+        </div>
+      )}
+      <a href={mapplsOpenUrl(first.latitude, first.longitude)} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-brand-700">Open in Mappls</a>
+    </div>
+  );
 }

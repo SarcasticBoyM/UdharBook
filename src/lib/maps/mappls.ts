@@ -48,8 +48,10 @@ export function loadMapplsSdk(key: string | undefined) {
     const script = existing ?? document.createElement("script");
 
     const fail = () => {
-      console.error("[Mappls] Browser SDK script failed to load. Verify the static key, enabled Web Maps API, network access, and the Mappls domain whitelist.");
-      reject(new Error("MAPPLS_SCRIPT_LOAD_FAILED"));
+      // Browsers intentionally do not expose whether a script error was caused by
+      // ERR_BLOCKED_BY_CLIENT, DNS filtering, an extension, or a network failure.
+      console.error("[Mappls] Browser SDK script was blocked or failed to load. The fallback map will be used. Check privacy extensions, antivirus/DNS filters, the static key, and the domain whitelist.");
+      reject(new Error("MAPPLS_SCRIPT_BLOCKED_OR_FAILED"));
     };
     const ready = () => void waitForMapplsSdk().then(resolve, reject);
 
