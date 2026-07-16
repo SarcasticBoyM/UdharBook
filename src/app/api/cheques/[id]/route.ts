@@ -38,7 +38,20 @@ const updateSchema = z.object({
   correctionReason: z.string().optional(),
   expectedUpdatedAt: z.string().datetime().optional(),
   sourceScreen: z.string().max(80).optional(),
+  clearedAt: z.string().datetime().optional(),
+  clearedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
+
+function parseBusinessDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) throw new Error("INVALID_CLEARED_DATE");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day) throw new Error("INVALID_CLEARED_DATE");
+  return new Date(Date.UTC(year, month - 1, day) - 330 * 60_000);
+}
 
 const BOUNCE_REASONS = [
   "Insufficient Funds",
@@ -204,7 +217,13 @@ export async function PATCH(
 
   const { id } = await params;
   const shopId = requireShopId(request, session);
-  const body = updateSchema.parse(await request.json());
+  const payload = await request.json();
+  const parsedBody = updateSchema.safeParse(payload);
+  if (!parsedBody.success) {
+    const clearingRequest = payload?.status === "CLEARED" || payload?.clearedDate !== undefined || payload?.clearedAt !== undefined;
+    return NextResponse.json({ error: clearingRequest ? "Select a valid cleared date." : "Invalid cheque update." }, { status: 400 });
+  }
+  const body = parsedBody.data;
   if (body.status === "BOUNCED" && !canManageChequeAccounting(session.role)) {
     return NextResponse.json({ error: "Only authorized accounting staff can mark a cheque bounced." }, { status: 403 });
   }
@@ -546,6 +565,13 @@ export async function PATCH(
   }
 
   const now = new Date();
+  const clearedAt = targetStatus === "CLEARED"
+    ? body.clearedDate
+      ? parseBusinessDate(body.clearedDate)
+      : body.clearedAt
+        ? new Date(body.clearedAt)
+        : now
+    : null;
   const transactionResult = await prisma.$transaction(async (tx) => {
     const current = await tx.cheque.findFirst({
       where: { id, shopId },
@@ -611,7 +637,7 @@ export async function PATCH(
             amount: current.amount,
             method: "CHEQUE",
             notes: `Cheque cleared: ${current.chequeNumber}`,
-            paidAt: now,
+            paidAt: clearedAt ?? now,
             createdById: session.id,
           },
         });
@@ -802,7 +828,7 @@ export async function PATCH(
         depositedById: ["DEPOSITED", "CLEARED"].includes(targetStatus) ? session.id : current.depositedById,
         bounceReason: targetStatus === "BOUNCED" ? body.bounceReason ?? body.notes : current.bounceReason,
         bouncedAt: targetStatus === "BOUNCED" ? now : current.bouncedAt,
-        clearedAt: targetStatus === "CLEARED" ? now : current.clearedAt,
+        clearedAt: targetStatus === "CLEARED" ? clearedAt : current.clearedAt,
         cancelledAt: ["CANCELLED", "RETURNED_TO_PARTY"].includes(targetStatus) ? now : current.cancelledAt,
       },
       include: responseInclude,
@@ -819,9 +845,11 @@ export async function PATCH(
         notes:
           targetStatus === "BOUNCED" && balanceReversal.applied
             ? `Cheque bounced. Amount: ${current.amount}. Reason: ${body.bounceReason}. Balance restored: ${balanceReversal.amount}. Balance ${balanceReversal.previousBalance} -> ${balanceReversal.newBalance}.`
-            : body.notes ??
-          body.bounceReason ??
-          (depositAccount ? `Deposited in ${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined),
+            : targetStatus === "CLEARED"
+              ? `Cheque marked cleared for ${body.clearedDate ?? clearedAt?.toISOString()}.`
+              : body.notes ??
+                body.bounceReason ??
+                (depositAccount ? `Deposited in ${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined),
       },
     });
 

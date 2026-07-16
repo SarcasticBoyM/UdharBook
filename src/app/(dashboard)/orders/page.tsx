@@ -8,7 +8,7 @@ import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker } from "@/components/AppDateTimePicker";
-import { istDateTimeToIso } from "@/lib/app-date-time";
+import { currentIstDate, istDateTimeToIso } from "@/lib/app-date-time";
 import { extractOrderQuantity } from "@/lib/order-quantity";
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
@@ -459,6 +459,8 @@ export default function OrderDeskPage() {
   const [toast, setToast] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [cancelOrder, setCancelOrder] = useState<OrderRow | null>(null);
+  const [deliverOrder, setDeliverOrder] = useState<OrderRow | null>(null);
+  const [deliveredDate, setDeliveredDate] = useState("");
   const [savingOrder, setSavingOrder] = useState(false);
   const [role, setRole] = useState("");
   const [editor, setEditor] = useState<{ mode: "create" | "edit"; order?: OrderRow } | null>(null);
@@ -919,7 +921,7 @@ export default function OrderDeskPage() {
     }
   }
 
-  async function runAction(orderId: string, action: "DISPATCH" | "DELIVER" | "CANCEL") {
+  async function runAction(orderId: string, action: "DISPATCH" | "DELIVER" | "CANCEL", extraBody: Record<string, string> = {}) {
     if (actionLoading) return false;
     setMessage("");
     setActionLoading(`${orderId}:${action}`);
@@ -928,7 +930,7 @@ export default function OrderDeskPage() {
       const res = await fetch("/api/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId, action }),
+        body: JSON.stringify({ orderId, action, ...extraBody }),
       });
       const data = await res.json().catch(() => ({}));
       console.info("[Order Desk] action response", { orderId, action, ok: res.ok, status: res.status, data });
@@ -968,6 +970,14 @@ export default function OrderDeskPage() {
     setCancelOrder(null);
     showToast("Order cancelled.");
     window.setTimeout(() => cancelTriggerRef.current?.focus(), 0);
+  }
+
+  async function confirmDelivered() {
+    if (!deliverOrder || !deliveredDate || actionLoading) return;
+    const delivered = await runAction(deliverOrder.id, "DELIVER", { deliveredDate });
+    if (!delivered) return;
+    setDeliverOrder(null);
+    showToast("Order marked delivered.");
   }
 
   function selectDateFilter(value: DateFilter) {
@@ -1460,8 +1470,8 @@ export default function OrderDeskPage() {
                   </button>
                 )}
                 {canDeliver(order) && (
-                  <button type="button" disabled={actionLoading === `${order.id}:DELIVER`} onClick={() => runAction(order.id, "DELIVER")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
-                    {actionLoading === `${order.id}:DELIVER` ? "Saving..." : "Mark Delivered"}
+                  <button type="button" disabled={Boolean(actionLoading)} onClick={() => { setMessage(""); setDeliveredDate(currentIstDate()); setDeliverOrder(order); }} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                    Mark Delivered
                   </button>
                 )}
                 {canCancel(order) && (
@@ -1586,6 +1596,24 @@ export default function OrderDeskPage() {
               <button type="button" onClick={() => void confirmCancel()} disabled={actionLoading === `${cancelOrder.id}:CANCEL`} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white disabled:opacity-60">
                 {actionLoading === `${cancelOrder.id}:CANCEL` && <Loader2 className="h-4 w-4 animate-spin" />}
                 {actionLoading === `${cancelOrder.id}:CANCEL` ? "Cancelling..." : "Yes, Cancel Order"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deliverOrder && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/55 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !actionLoading) setDeliverOrder(null); }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="deliver-order-title" aria-describedby="deliver-order-description" className="ui-surface-elevated w-full rounded-t-2xl border p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <h2 id="deliver-order-title" className="text-lg font-bold">Mark Order Delivered</h2>
+            <p id="deliver-order-description" className="mt-2 text-sm text-[var(--foreground-muted)]">Select the delivery date for this order.</p>
+            <AppDatePicker className="mt-5" label="Delivery Date" value={deliveredDate} onChange={setDeliveredDate} required disabled={Boolean(actionLoading)} max={currentIstDate()} />
+            {message && <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{message}</p>}
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" disabled={Boolean(actionLoading)} onClick={() => setDeliverOrder(null)} className="ui-control min-h-12 rounded-lg border font-semibold disabled:opacity-50">Cancel</button>
+              <button type="button" disabled={Boolean(actionLoading) || !deliveredDate} onClick={() => void confirmDelivered()} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 font-bold text-white disabled:opacity-50">
+                {actionLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {actionLoading ? "Marking Delivered..." : "Mark Delivered"}
               </button>
             </div>
           </div>

@@ -467,6 +467,8 @@ export default function ChequeCollectionsPage() {
   const [deleteAccount, setDeleteAccount] = useState<DepositAccount | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
   const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
+  const [clearedDate, setClearedDate] = useState("");
+  const [depositActionError, setDepositActionError] = useState("");
   const [bounceAction, setBounceAction] = useState<ChequeItem | null>(null);
   const [bounceReason, setBounceReason] = useState<(typeof bounceReasons)[number]>("Insufficient Funds");
   const [bounceNotes, setBounceNotes] = useState("");
@@ -686,6 +688,8 @@ export default function ChequeCollectionsPage() {
   ) => {
     if (["DEPOSITED", "CLEARED"].includes(status)) {
       setDepositAction({ cheque, status });
+      setClearedDate(status === "CLEARED" ? currentIstDate() : "");
+      setDepositActionError("");
       setSelectedDepositAccountId(cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
       setAccountSearch("");
       setReceiptFile(null);
@@ -741,7 +745,11 @@ export default function ChequeCollectionsPage() {
   };
 
   const confirmDepositAction = async () => {
-    if (!depositAction || !selectedDepositAccountId) return;
+    if (!depositAction || !selectedDepositAccountId || receiptUploading) return;
+    if (depositAction.status === "CLEARED" && !clearedDate) {
+      setDepositActionError("Select a valid cleared date.");
+      return;
+    }
     const account = depositAccounts.find((item) => item.id === selectedDepositAccountId);
     setReceiptUploading(true);
     let receiptPayload: {
@@ -780,22 +788,10 @@ export default function ChequeCollectionsPage() {
       status: depositAction.status,
       depositedAccountId: selectedDepositAccountId,
       depositBankAccount: account ? `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}` : undefined,
-      depositDateTime: new Date().toISOString(),
+      ...(depositAction.status === "DEPOSITED" ? { depositDateTime: new Date().toISOString() } : {}),
+      ...(depositAction.status === "CLEARED" ? { clearedDate } : {}),
       ...receiptPayload,
     };
-
-    setData((current) =>
-      current
-        ? {
-            ...current,
-            items: current.items.map((item) =>
-              item.id === depositAction.cheque.id
-                ? { ...item, status: depositAction.status, depositedAccount: account ?? item.depositedAccount }
-                : item
-            ),
-          }
-        : current
-    );
 
     const res = await fetch(`/api/cheques/${depositAction.cheque.id}`, {
       method: "PATCH",
@@ -803,15 +799,20 @@ export default function ChequeCollectionsPage() {
       body: JSON.stringify(body),
     });
     if (res.ok) {
+      const completedStatus = depositAction.status;
       setDepositAction(null);
       setSelectedDepositAccountId("");
       setReceiptFile(null);
       setReceiptPreview("");
       loadCheques();
       loadDepositAccounts();
+      if (completedStatus === "CLEARED") {
+        setToast("Cheque marked cleared.");
+        window.setTimeout(() => setToast((current) => current === "Cheque marked cleared." ? "" : current), 1800);
+      }
     } else {
       const error = await res.json().catch(() => ({}));
-      window.alert(error.error ?? "Could not update deposit account");
+      setDepositActionError(error.error ?? (depositAction.status === "CLEARED" ? "Could not mark cheque cleared. Please try again." : "Could not update deposit account."));
     }
     setReceiptUploading(false);
   };
@@ -1954,18 +1955,22 @@ export default function ChequeCollectionsPage() {
 
       {depositAction && (
         <div className="fixed inset-0 z-50 flex items-end bg-slate-950/40 p-0 sm:items-center sm:p-6">
-          <div className="w-full rounded-t-2xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:mx-auto sm:max-w-lg sm:rounded-2xl">
+          <div className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-xl dark:bg-slate-900 sm:mx-auto sm:max-w-lg sm:rounded-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold">Deposit Into Account</h2>
+                <h2 className="text-xl font-bold">{depositAction.status === "CLEARED" ? "Mark Cheque Cleared" : "Deposit Into Account"}</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {depositAction.cheque.customer.partyName} | {formatCurrency(depositAction.cheque.amount)}
+                  {depositAction.status === "CLEARED" ? "Select the cleared date for this cheque." : `${depositAction.cheque.customer.partyName} | ${formatCurrency(depositAction.cheque.amount)}`}
                 </p>
               </div>
-              <button type="button" onClick={() => setDepositAction(null)} className="rounded-lg border p-2">
+              <button type="button" disabled={receiptUploading} onClick={() => setDepositAction(null)} className="rounded-lg border p-2 disabled:opacity-50">
                 <XCircle className="h-5 w-5" />
               </button>
             </div>
+            {depositAction.status === "CLEARED" && (
+              <AppDatePicker className="mt-4" label="Cleared Date" value={clearedDate} onChange={(value) => { setClearedDate(value); setDepositActionError(""); }} required disabled={receiptUploading} max={currentIstDate()} />
+            )}
+            {depositActionError && <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{depositActionError}</p>}
             <input
               value={accountSearch}
               onChange={(e) => setAccountSearch(e.target.value)}
@@ -2076,16 +2081,18 @@ export default function ChequeCollectionsPage() {
               )}
             </div>
             <div className="mt-5 flex gap-3">
-              <button type="button" onClick={() => setDepositAction(null)} className="min-h-12 flex-1 rounded-lg border text-sm font-semibold">
+              <button type="button" disabled={receiptUploading} onClick={() => setDepositAction(null)} className="min-h-12 flex-1 rounded-lg border text-sm font-semibold disabled:opacity-50">
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={confirmDepositAction}
-                disabled={!selectedDepositAccountId || receiptUploading}
+                disabled={!selectedDepositAccountId || receiptUploading || (depositAction.status === "CLEARED" && !clearedDate)}
                 className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950"
               >
-                {receiptUploading ? "Saving..." : `Confirm ${formatStatus(depositAction.status)}`}
+                {receiptUploading
+                  ? depositAction.status === "CLEARED" ? "Marking Cleared..." : "Saving..."
+                  : depositAction.status === "CLEARED" ? "Mark Cleared" : `Confirm ${formatStatus(depositAction.status)}`}
               </button>
             </div>
           </div>

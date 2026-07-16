@@ -49,6 +49,8 @@ const patchSchema = z.object({
   deliveryLocationText: z.string().max(1000).optional().nullable(),
   deliveryLocationUrl: z.string().max(1000).optional().nullable(),
   priority: prioritySchema.optional(),
+  deliveredAt: z.string().datetime().optional(),
+  deliveredDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 const statusRank: Record<string, number> = {
@@ -683,6 +685,11 @@ export async function PATCH(request: Request) {
       ? undefined
       : parseDeliveryLocation(body.deliveryLocation ?? body.deliveryLocationText ?? body.deliveryLocationUrl);
     const now = new Date();
+    const deliveredAt = body.deliveredDate
+      ? localDayBoundary(parseDateOnly(body.deliveredDate) ?? (() => { throw new Error("INVALID_DELIVERED_DATE"); })())
+      : body.deliveredAt
+        ? parseOptionalDate(body.deliveredAt)
+        : now;
     let previousStatusForActivity: OrderStatus | null = null;
 
     const order = await prisma.$transaction(async (tx) => {
@@ -707,9 +714,7 @@ export async function PATCH(request: Request) {
         nextStatus,
         normalizedNextStatus: normalizeStatus(nextStatus),
       });
-      const updated = await tx.order.update({
-        where: { id: existing.id },
-        data: {
+      const updateData = {
           ...(body.orderDetails ? { orderDetails: body.orderDetails } : {}),
           ...(preferredDeliveryDate !== undefined ? { preferredDeliveryDate } : {}),
           ...(deliveryLocation !== undefined ? {
@@ -721,10 +726,17 @@ export async function PATCH(request: Request) {
           // Status actions remain explicit and separate through action.
           ...(!isEdit ? {
             status: nextStatus,
-            deliveredAt: nextStatus === "DELIVERED" ? now : existing.deliveredAt,
+            deliveredAt: nextStatus === "DELIVERED" ? deliveredAt : existing.deliveredAt,
             cancelledAt: nextStatus === "CANCELLED" ? now : existing.cancelledAt,
           } : {}),
-        },
+        };
+      const claimed = await tx.order.updateMany({
+        where: { id: existing.id, shopId, status: existing.status },
+        data: updateData,
+      });
+      if (claimed.count === 0) throw new Error("ORDER_ALREADY_UPDATED");
+      const updated = await tx.order.findUniqueOrThrow({
+        where: { id: existing.id },
         include: {
           customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
           createdBy: { select: { name: true } },
@@ -763,7 +775,9 @@ export async function PATCH(request: Request) {
       action: action === "EDIT" ? "ORDER_UPDATED" : action,
       notes: action === "EDIT"
         ? isDispatchedStatus(order.status) ? "Order updated while dispatched." : "Order details updated."
-        : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
+        : action === "DELIVER"
+          ? `Order marked delivered for ${body.deliveredDate ?? deliveredAt?.toISOString() ?? now.toISOString()}.`
+          : `Order status changed from ${previousStatusForActivity ?? "UNKNOWN"} to ${order.status}`,
     });
     logger.info("order_update_success", {
       requestId,
@@ -796,7 +810,9 @@ export async function PATCH(request: Request) {
       stack: error instanceof Error ? error.stack : undefined,
     });
     const message =
-      error instanceof Error && error.message === "DELIVERED_ORDER_READ_ONLY"
+      error instanceof z.ZodError
+        ? "Select a valid delivery date."
+        : error instanceof Error && error.message === "DELIVERED_ORDER_READ_ONLY"
         ? "Delivered orders cannot be edited."
         : error instanceof Error && error.message === "CANCELLED_ORDER_READ_ONLY"
           ? "Cancelled orders cannot be edited."
@@ -808,7 +824,11 @@ export async function PATCH(request: Request) {
             ? "Only received orders can be dispatched."
             : error instanceof Error && error.message === "ONLY_DISPATCHED_ORDERS_CAN_BE_DELIVERED"
               ? "Only dispatched orders can be marked delivered."
-              : "Could not update order.";
+              : error instanceof Error && error.message === "INVALID_DELIVERED_DATE"
+                ? "Select a valid delivery date."
+                : error instanceof Error && error.message === "ORDER_ALREADY_UPDATED"
+                  ? "This order was already updated. Refresh and try again."
+                  : "Could not update order.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
