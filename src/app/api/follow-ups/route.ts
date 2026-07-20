@@ -290,6 +290,50 @@ export async function GET(request: Request) {
   const take = Math.min(Number(searchParams.get("take") ?? 30), 100);
   const shopId = requireShopId(request, session);
 
+  if (view === "history") {
+    const customerId = searchParams.get("customerId")?.trim();
+    if (!customerId) return NextResponse.json({ error: "Customer is required." }, { status: 400 });
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, shopId },
+      select: { id: true },
+    });
+    if (!customer) return NextResponse.json({ error: "Customer not found." }, { status: 404 });
+
+    const historyTake = Math.min(Math.max(Number(searchParams.get("take") ?? 50), 1), 100);
+    const rows = await prisma.followUp.findMany({
+      where: { shopId, customerId },
+      select: {
+        id: true,
+        status: true,
+        priority: true,
+        notes: true,
+        reminderNotes: true,
+        customerResponse: true,
+        followupDate: true,
+        nextFollowupDate: true,
+        nextFollowUpDateTime: true,
+        scheduledAt: true,
+        completedAt: true,
+        rescheduledAt: true,
+        actionLoggedAt: true,
+        createdAt: true,
+        followUpType: true,
+        summary: true,
+        createdBy: { select: { name: true } },
+      },
+      orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
+      skip,
+      take: historyTake + 1,
+    });
+    const hasMore = rows.length > historyTake;
+    const items = hasMore ? rows.slice(0, historyTake) : rows;
+    return NextResponse.json({
+      success: true,
+      items,
+      pagination: { skip, take: historyTake, hasMore, nextSkip: skip + items.length },
+    });
+  }
+
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();

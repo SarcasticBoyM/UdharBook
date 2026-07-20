@@ -70,7 +70,16 @@ type FollowUpItem = {
   completedAt: string | null;
   rescheduledAt?: string | null;
   actionLoggedAt?: string;
+  followUpType?: string | null;
+  summary?: string | null;
   createdBy: { name: string };
+};
+
+type FollowUpHistoryResponse = {
+  success: boolean;
+  items: FollowUpItem[];
+  pagination: { skip: number; take: number; hasMore: boolean; nextSkip: number };
+  error?: string;
 };
 
 type QueueCustomer = {
@@ -941,6 +950,7 @@ export default function TodayFollowUpsPage() {
 
   const selectedPanel = selected ? (
     <ActionPanel
+      key={selected.id}
       customer={selected}
       canAssignTask={isShopAdminRole(currentRole)}
       canAssignFollowUp={isShopAdminRole(currentRole)}
@@ -2006,7 +2016,50 @@ function ActionPanel({
   const [whatsAppMessage, setWhatsAppMessage] = useState("");
   const [taskMessage, setTaskMessage] = useState("");
   const [swipeOffset, setSwipeOffset] = useState(0);
+  const [timelineItems, setTimelineItems] = useState<FollowUpItem[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [timelineLoadingMore, setTimelineLoadingMore] = useState(false);
+  const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
   const swipeStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const timelineAbortRef = useRef<AbortController | null>(null);
+
+  const loadTimeline = useCallback(async (skip = 0) => {
+    if (!customer) return;
+    timelineAbortRef.current?.abort();
+    const controller = new AbortController();
+    timelineAbortRef.current = controller;
+    if (skip === 0) {
+      setTimelineLoading(true);
+      setTimelineItems([]);
+    } else {
+      setTimelineLoadingMore(true);
+    }
+    setTimelineError("");
+    try {
+      const params = new URLSearchParams({ view: "history", customerId: customer.id, skip: String(skip), take: "50" });
+      const response = await fetch(`/api/follow-ups?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+      const data = await response.json().catch(() => ({})) as Partial<FollowUpHistoryResponse>;
+      if (!response.ok || data.success === false || !data.items || !data.pagination) throw new Error(data.error ?? "Could not load follow-up history.");
+      if (controller.signal.aborted) return;
+      setTimelineItems((current) => skip === 0 ? data.items! : [...current, ...data.items!]);
+      setTimelineHasMore(data.pagination.hasMore);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setTimelineError(error instanceof Error ? error.message : "Could not load follow-up history.");
+    } finally {
+      if (timelineAbortRef.current === controller) {
+        timelineAbortRef.current = null;
+        setTimelineLoading(false);
+        setTimelineLoadingMore(false);
+      }
+    }
+  }, [customer]);
+
+  useEffect(() => {
+    void loadTimeline(0);
+    return () => timelineAbortRef.current?.abort();
+  }, [loadTimeline]);
 
   useEffect(() => {
     if (!customer) return;
@@ -2605,21 +2658,35 @@ function ActionPanel({
                 <p className="text-sm font-semibold">Follow-up timeline</p>
               </div>
               <ol className="space-y-3">
-                {customer.followUps.length === 0 ? (
+                {timelineLoading ? (
+                  <li className="flex items-center gap-2 py-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />Loading full follow-up history...</li>
+                ) : timelineError ? (
+                  <li className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"><p>{timelineError}</p><button type="button" onClick={() => void loadTimeline(0)} className="mt-2 font-semibold underline">Retry</button></li>
+                ) : timelineItems.length === 0 ? (
                   <li className="text-sm text-slate-500">No follow-up history yet.</li>
                 ) : (
-                  customer.followUps.map((item) => (
+                  timelineItems.map((item) => (
                     <li key={item.id} className="border-l-2 border-slate-200 pl-3 dark:border-slate-700">
-                      <p className="text-sm font-semibold">{statusLabel(item.status)}</p>
+                      <p className="text-sm font-semibold">{item.summary || statusLabel(item.status)}</p>
                       <p className="text-xs text-slate-500">
-                        {formatDateTime(item.followupDate)} by {item.createdBy.name}
+                        {formatDateTime(item.actionLoggedAt || item.followupDate)} by {item.createdBy.name}
                       </p>
                       {item.notes && <p className="mt-1 text-sm">{item.notes}</p>}
                       {item.customerResponse && <p className="mt-1 text-sm">Promise: {item.customerResponse}</p>}
+                      {item.reminderNotes && <p className="mt-1 text-sm">Reminder: {item.reminderNotes}</p>}
+                      {item.nextFollowUpDateTime && <p className="mt-1 text-xs text-slate-500">Scheduled for {formatDateTime(item.nextFollowUpDateTime)}</p>}
+                      {item.completedAt && <p className="mt-1 text-xs text-emerald-700">Completed {formatDateTime(item.completedAt)}</p>}
+                      {item.rescheduledAt && <p className="mt-1 text-xs text-slate-500">Rescheduled {formatDateTime(item.rescheduledAt)}</p>}
                     </li>
                   ))
                 )}
               </ol>
+              {!timelineLoading && !timelineError && timelineHasMore && (
+                <button type="button" disabled={timelineLoadingMore} onClick={() => void loadTimeline(timelineItems.length)} className="ui-control mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold disabled:opacity-50">
+                  {timelineLoadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {timelineLoadingMore ? "Loading..." : "Load more history"}
+                </button>
+              )}
             </div>
           </div>
 
