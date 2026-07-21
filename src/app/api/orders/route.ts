@@ -390,7 +390,7 @@ export async function GET(request: Request) {
       submittedCustomerName: true,
       submittedCustomerMobile: true,
       submittedAddress: true,
-      customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
+      customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, googleMapsUrl: true, geoAddress: true, locationName: true, latitude: true, longitude: true } },
       createdBy: { select: { name: true, role: true } },
     } satisfies Prisma.OrderSelect;
     const fullSelect = {
@@ -592,7 +592,7 @@ export async function POST(request: Request) {
           visitSource: body.customerMode === "NEW_CUSTOMER" || orderSource === "NEW_CUSTOMER" ? "New Customer Order" : "Order Desk",
         },
         include: {
-          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, googleMapsUrl: true, geoAddress: true, locationName: true, latitude: true, longitude: true } },
           createdBy: { select: { name: true } },
         },
       });
@@ -738,7 +738,7 @@ export async function PATCH(request: Request) {
       const updated = await tx.order.findUniqueOrThrow({
         where: { id: existing.id },
         include: {
-          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true } },
+          customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, googleMapsUrl: true, geoAddress: true, locationName: true, latitude: true, longitude: true } },
           createdBy: { select: { name: true } },
         },
       });

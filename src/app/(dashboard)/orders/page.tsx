@@ -27,7 +27,17 @@ type OrderRow = {
   updatedAt?: string | null;
   deliveredAt: string | null;
   cancelledAt?: string | null;
-  customer: { id: string; partyName: string; contactNumber: string; batchTag?: string | null } | null;
+  customer: {
+    id: string;
+    partyName: string;
+    contactNumber: string;
+    batchTag?: string | null;
+    googleMapsUrl?: string | null;
+    geoAddress?: string | null;
+    locationName?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+  } | null;
   customerMatchStatus?: string | null;
   submittedCustomerName?: string | null;
   submittedCustomerMobile?: string | null;
@@ -136,7 +146,11 @@ function buildOrderShareText(order: OrderShareSource) {
   const customerName = String(order.customerName || order.customer?.partyName || order.submittedCustomerName || order.partyName || "").trim();
   const contact = cleanContact(order.contactNumber || order.mobile || order.customer?.contactNumber || order.submittedCustomerMobile);
   const orderText = String(order.orderText || order.itemsText || order.description || order.orderDetails || "").trim();
-  const deliveryLocation = String(order.deliveryLocationText || order.deliveryLocationUrl || "").trim();
+  const savedCustomerLocation = safeText(order.customer?.googleMapsUrl)
+    || (Number.isFinite(order.customer?.latitude) && Number.isFinite(order.customer?.longitude)
+      ? `https://www.google.com/maps?q=${order.customer?.latitude},${order.customer?.longitude}`
+      : safeText(order.customer?.geoAddress) || safeText(order.customer?.locationName));
+  const deliveryLocation = safeText(order.deliveryLocationText) || safeText(order.deliveryLocationUrl) || savedCustomerLocation;
   const deliveryLine = deliveryLocation ? `Delivery Location: ${deliveryLocation}` : "";
   return [customerName, contact, orderText, deliveryLine].filter(Boolean).join("\n");
 }
