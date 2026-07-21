@@ -255,7 +255,12 @@ function databaseFilter(filter: string, todayStart: Date, todayEnd: Date): Prism
   if (filter === "overdue") return { nextFollowupDate: { lt: new Date() } };
   if (filter === "today") return { nextFollowupDate: { gte: todayStart, lte: todayEnd } };
   if (filter === "high_amount") return { outstandingBalance: { gte: HIGH_AMOUNT } };
-  if (filter === "no_followup") return { followUps: { none: {} }, lastFollowupDate: null };
+  if (filter === "no_followup") {
+    return {
+      followUps: { none: { NOT: { status: "PENDING", notes: AUTO_QUEUE_NOTE } } },
+      lastFollowupDate: null,
+    };
+  }
   if (filter === "promise") return { followUps: { some: { status: "PAYMENT_PROMISED" } } };
   if (filter === "not_answering") return { followUps: { some: { status: "NOT_REACHABLE" } } };
   if (filter === "urgent") {
@@ -278,6 +283,7 @@ function databaseSearch(search: string): Prisma.CustomerWhereInput {
     OR: [
       { partyName: { contains: search, mode: "insensitive" } },
       { contactNumber: { contains: search.replace(/\D/g, "") || search } },
+      { batchTag: { contains: search, mode: "insensitive" } },
       { notes: { contains: search, mode: "insensitive" } },
       ...(Number.isFinite(amount) ? [{ outstandingBalance: amount }] : []),
       { followUps: { some: { notes: { contains: search, mode: "insensitive" } } } },
@@ -371,6 +377,7 @@ export async function GET(request: Request) {
   const sort = (searchParams.get("sort") ?? "priority_desc") as SortKey;
   const filter = searchParams.get("filter") ?? "all";
   const search = (searchParams.get("search") ?? "").trim().toLowerCase();
+  const searchMode = search.length > 0;
   const batchTag = (searchParams.get("batchTag") ?? "").trim();
   const requestedMode = searchParams.get("mode");
   const shopId = requireShopId(request, session);
@@ -383,12 +390,12 @@ export async function GET(request: Request) {
     isArchived: false,
     ...(batchTag ? { batchTag: { equals: batchTag, mode: "insensitive" } } : {}),
     outstandingBalance: { gt: 0 },
-    NOT: { status: "CLEARED" },
+    ...(!searchMode ? { NOT: { status: "CLEARED" as const } } : {}),
   };
   const totalActiveCustomers = await prisma.customer.count({ where: activeBaseWhere });
   const lightweightMode = requestedMode === "compact" || (requestedMode !== "full" && totalActiveCustomers > LIGHTWEIGHT_THRESHOLD);
   const take = Math.min(requestedTake, lightweightMode ? LIGHTWEIGHT_PAGE_LIMIT : 100);
-  const includeSideQueues = skip === 0;
+  const includeSideQueues = skip === 0 && !searchMode;
   const autoCreated = includeSideQueues ? await seedMissingFollowUps(shopId, session.id, lightweightMode ? 25 : 100) : 0;
 
   const include = {
@@ -597,7 +604,9 @@ export async function GET(request: Request) {
     return item;
   });
 
-  const pendingPool = enriched.filter((customer) => !doneIds.has(customer.id) && !scheduledIds.has(customer.id) && !isClosedForActiveQueue(customer));
+  const pendingPool = searchMode
+    ? enriched
+    : enriched.filter((customer) => !doneIds.has(customer.id) && !scheduledIds.has(customer.id) && !isClosedForActiveQueue(customer));
   const filteredPool =
     filter === "done" ? [] : pendingPool.filter((customer) => matchesFilter(filter, customer, todayStart, todayEnd));
   const sorted = filteredPool.sort((a, b) => compareBy(sort, a, b) || b.queueScore - a.queueScore);

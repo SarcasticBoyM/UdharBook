@@ -1094,7 +1094,7 @@ export default function TodayFollowUpsPage() {
             </div>
           ) : pending.length === 0 && filter !== "done" ? (
             <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500 dark:border-slate-700 dark:bg-slate-900">
-              No pending customers match this view.
+              {debouncedQuery ? "No matching outstanding customers found for this search." : "No pending customers match this view."}
             </div>
           ) : lightweightMode ? (
             <>
