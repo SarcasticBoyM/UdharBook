@@ -56,6 +56,7 @@ const visitSchema = z.object({
   accuracy: z.number().min(0).optional(),
   notes: z.string().optional(),
   recoveryAmount: z.number().min(0).optional(),
+  paymentDate: z.string().datetime().optional(),
   nextFollowupDate: z.string().datetime().optional(),
 });
 
@@ -410,6 +411,7 @@ export async function POST(request: Request) {
           },
           recordPayment: recoveryAmount > 0 && body.paymentMode !== "Cheque Collected",
           paymentMethod: "FIELD_VISIT",
+          paymentDate: body.paymentDate,
         });
         if (status === "COMPLETED") {
           completedFollowUpsForNotification.push({

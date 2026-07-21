@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { isSalesRole, isShopAdminRole } from "@/lib/operational-roles";
 import { AppDatePicker, AppDateTimePicker } from "@/components/AppDateTimePicker";
+import { PaymentCollectionModal, type PaymentCollectionValue } from "@/components/payments/PaymentCollectionModal";
 import { combineDateTimeValue, istDateTimeToIso } from "@/lib/app-date-time";
 
 type CustomerSuggestion = {
@@ -266,6 +267,9 @@ export default function FieldStaffPage() {
   const [paymentBankName, setPaymentBankName] = useState("");
   const [paymentScreenshotUrl, setPaymentScreenshotUrl] = useState("");
   const [recoveryAmount, setRecoveryAmount] = useState("");
+  const [paymentCollectorOpen, setPaymentCollectorOpen] = useState(false);
+  const [paymentDate, setPaymentDate] = useState("");
+  const [chequePaymentDraft, setChequePaymentDraft] = useState<PaymentCollectionValue | null>(null);
   const [nextFollowupDate, setNextFollowupDate] = useState("");
   const [showChequeFlow, setShowChequeFlow] = useState(false);
   const [chequeVisit, setChequeVisit] = useState<Visit | null>(null);
@@ -617,6 +621,7 @@ export default function FieldStaffPage() {
           accuracy: position.coords.accuracy,
           notes,
           recoveryAmount: (hasPayment && paymentMode !== "Cheque Collected") || visitType === "Recovery Follow-up" ? Number(recoveryAmount || 0) : 0,
+          paymentDate: hasPayment && paymentDate ? istDateTimeToIso(combineDateTimeValue(paymentDate, "12:00")) ?? undefined : undefined,
           nextFollowupDate: hasFollowup && nextFollowupDate ? istDateTimeToIso(nextFollowupDate) ?? undefined : undefined,
         }),
       });
@@ -650,6 +655,8 @@ export default function FieldStaffPage() {
         setPaymentReference("");
         setPaymentBankName("");
         setPaymentScreenshotUrl("");
+        setPaymentDate("");
+        setChequePaymentDraft(null);
       }
       const distanceText = data.visit?.distanceMeters != null ? ` You were ${Math.round(data.visit.distanceMeters)}m from the customer.` : "";
       setMessage(options.successMessage ?? (needsCheque ? `Visit punched.${distanceText} Add cheque details below.` : `Location verified visit punched.${distanceText}`));
@@ -1007,6 +1014,7 @@ export default function FieldStaffPage() {
               onPaymentReference={setPaymentReference}
               onPaymentBankName={setPaymentBankName}
               onPaymentScreenshot={handlePaymentScreenshot}
+              onOpenPayment={() => setPaymentCollectorOpen(true)}
             />
           )}
 
@@ -1073,6 +1081,7 @@ export default function FieldStaffPage() {
           {showChequeFlow && chequeCollectionContext && (
             <VisitChequeCollection
               visit={chequeCollectionContext}
+              initialPayment={chequePaymentDraft}
               location={location}
               onSaved={async () => {
                 setMessage("Cheque saved to Recovery Desk.");
@@ -1089,6 +1098,28 @@ export default function FieldStaffPage() {
           </div>
         </section>
       ) : null}
+      {selectedCustomer && (
+        <PaymentCollectionModal
+          open={paymentCollectorOpen}
+          customerId={selectedCustomer.id}
+          customerName={selectedCustomer.partyName}
+          outstandingBalance={selectedCustomer.outstandingBalance}
+          defaultMode={paymentMode === "Cheque Collected" ? "CHEQUE" : "PARTIAL"}
+          defaultAmount={Number(recoveryAmount) || undefined}
+          source="DAILY_VISIT"
+          onClose={() => setPaymentCollectorOpen(false)}
+          onSuccess={async (payment) => {
+            setPaymentMode(payment.method === "CASH" ? "Cash" : payment.method === "CHEQUE" ? "Cheque Collected" : "NEFT / RTGS");
+            setRecoveryAmount(String(payment.amount));
+            setPaymentReference(payment.referenceNumber);
+            setPaymentBankName(payment.bankName);
+            setPaymentDate(payment.paymentDate);
+            setChequePaymentDraft(payment.method === "CHEQUE" ? payment : null);
+            if (payment.notes) setNotes((current) => current || payment.notes);
+            setPaymentCollectorOpen(false);
+          }}
+        />
+      )}
 
       <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <h2 className="flex items-center gap-2 text-lg font-bold"><Activity className="h-5 w-5" /> Today Timeline</h2>
@@ -1146,6 +1177,7 @@ function VisitDetailFields({
   onPaymentReference,
   onPaymentBankName,
   onPaymentScreenshot,
+  onOpenPayment,
 }: {
   visitType: string;
   result: string;
@@ -1172,6 +1204,7 @@ function VisitDetailFields({
   onPaymentReference: (value: string) => void;
   onPaymentBankName: (value: string) => void;
   onPaymentScreenshot: (file?: File) => void;
+  onOpenPayment: () => void;
 }) {
   const hasOrder = isOrderOutcome(visitType, result, visitOutcomes);
   const hasPayment = isPaymentOutcome(visitType, visitOutcomes);
@@ -1202,6 +1235,7 @@ function VisitDetailFields({
           onPaymentBankName={onPaymentBankName}
           onPaymentScreenshot={onPaymentScreenshot}
           onRecovery={onRecovery}
+          onOpen={onOpenPayment}
         />
       )}
       {hasOrder && (
@@ -1259,6 +1293,7 @@ function PaymentFields({
   onPaymentBankName,
   onPaymentScreenshot,
   onRecovery,
+  onOpen,
 }: {
   visitType: string;
   paymentMode: string;
@@ -1271,20 +1306,32 @@ function PaymentFields({
   onPaymentBankName: (value: string) => void;
   onPaymentScreenshot: (file?: File) => void;
   onRecovery: (value: string) => void;
+  onOpen?: () => void;
 }) {
   void visitType;
+  void paymentReference;
+  void paymentBankName;
+  void onPaymentMode;
+  void onPaymentReference;
+  void onPaymentBankName;
+  void onRecovery;
   return (
     <>
-      <select value={paymentMode} onChange={(e) => onPaymentMode(e.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
-        {paymentModes.map((mode) => <option key={mode}>{mode}</option>)}
-      </select>
-      {paymentMode !== "Cheque Collected" && (
-        <input value={recoveryAmount} onChange={(e) => onRecovery(e.target.value)} inputMode="decimal" placeholder="Amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className="ui-control min-h-12 rounded-lg border px-3 text-left font-semibold md:col-span-2">
+          {Number(recoveryAmount) > 0 ? `${paymentMode} · ${money(Number(recoveryAmount))} — Edit payment` : "Collect Payment"}
+        </button>
+      ) : (
+        <>
+          <select value={paymentMode} onChange={(event) => onPaymentMode(event.target.value)} className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900">
+            {paymentModes.map((item) => <option key={item}>{item}</option>)}
+          </select>
+          {paymentMode !== "Cheque Collected" && <input value={recoveryAmount} onChange={(event) => onRecovery(event.target.value)} inputMode="decimal" placeholder="Amount" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />}
+          {paymentMode === "NEFT / RTGS" && <><input value={paymentReference} onChange={(event) => onPaymentReference(event.target.value)} placeholder="Reference number" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" /><input value={paymentBankName} onChange={(event) => onPaymentBankName(event.target.value)} placeholder="Bank name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" /></>}
+        </>
       )}
       {paymentMode === "NEFT / RTGS" && (
         <>
-          <input value={paymentReference} onChange={(e) => onPaymentReference(e.target.value)} placeholder="Reference number" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
-          <input value={paymentBankName} onChange={(e) => onPaymentBankName(e.target.value)} placeholder="Bank name" className="min-h-12 rounded-lg border px-3 dark:border-slate-700 dark:bg-slate-900" />
           <label className="flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-200">
             {paymentScreenshotUrl ? "Screenshot added" : "Upload screenshot"}
             <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => onPaymentScreenshot(event.target.files?.[0])} />
@@ -1349,10 +1396,12 @@ function StaffStatusPanel({ staff }: { staff: StaffStatus[] }) {
 
 function VisitChequeCollection({
   visit,
+  initialPayment,
   location,
   onSaved,
 }: {
   visit: ChequeCollectionContext;
+  initialPayment: PaymentCollectionValue | null;
   location: GeolocationPosition | null;
   onSaved: () => void;
 }) {
@@ -1362,13 +1411,13 @@ function VisitChequeCollection({
   const [error, setError] = useState("");
   const [confidence, setConfidence] = useState<number | null>(null);
   const [form, setForm] = useState({
-    chequeNumber: "",
-    amount: "",
-    bankName: "",
+    chequeNumber: initialPayment?.chequeNumber ?? "",
+    amount: initialPayment ? String(initialPayment.amount) : "",
+    bankName: initialPayment?.bankName ?? "",
     branch: "",
-    chequeDate: "",
-    accountHolderName: visit.customer.partyName,
-    notes: "",
+    chequeDate: initialPayment?.chequeDate ?? "",
+    accountHolderName: initialPayment?.accountHolderName || visit.customer.partyName,
+    notes: initialPayment?.notes ?? "",
     micrCode: "",
     ifscCode: "",
     ocrRawText: "",

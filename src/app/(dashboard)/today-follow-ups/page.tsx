@@ -31,6 +31,7 @@ import { displayPhone, telHref } from "@/lib/phone";
 import { openWhatsAppUrl, paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
 import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
+import { PaymentCollectionModal, type PaymentCollectionMode, type PaymentCollectionValue } from "@/components/payments/PaymentCollectionModal";
 import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
 import { followUpTypeLabel, isOrderFollowUp, ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
 import {
@@ -2008,7 +2009,7 @@ function ActionPanel({
   const [customerResponse, setCustomerResponse] = useState("");
   const [nextDate, setNextDate] = useState("");
   const [priority, setPriority] = useState<FollowUpPriority>("MEDIUM");
-  const [paidAmount, setPaidAmount] = useState("");
+  const [paymentModalMode, setPaymentModalMode] = useState<PaymentCollectionMode | null>(null);
   const [assignedToId, setAssignedToId] = useState("");
   const [setReminder, setSetReminder] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2071,7 +2072,7 @@ function ActionPanel({
     setStatus(editingOrderFollowUp ? "PENDING" : "PAYMENT_PROMISED");
     setNotes("");
     setCustomerResponse("");
-    setPaidAmount("");
+    setPaymentModalMode(null);
     setAssignedToId(editingOrderFollowUp ? scheduledSource?.assignedToId ?? "" : "");
     setSetReminder(false);
     setSaveError("");
@@ -2212,6 +2213,10 @@ function ActionPanel({
   };
 
   const applyOutcome = (outcome: { value: QueueStatus; notes: string; response?: string }) => {
+    if (outcome.value === "PAID" || outcome.value === "PARTIAL_PAID" || outcome.response === "Cheque collected") {
+      setPaymentModalMode(outcome.value === "PAID" ? "FULL" : outcome.value === "PARTIAL_PAID" ? "PARTIAL" : "CHEQUE");
+      return;
+    }
     setStatus(outcome.value);
     if (!notes) setNotes(outcome.notes);
     if (outcome.response && !customerResponse) setCustomerResponse(outcome.response);
@@ -2221,6 +2226,50 @@ function ActionPanel({
     }
   };
 
+  const collectPayment = async (payment: PaymentCollectionValue) => {
+    const paymentNotes = payment.notes || (payment.method === "CHEQUE" ? `Cheque collected: ${payment.chequeNumber}` : `${payment.mode === "FULL" ? "Full" : "Partial"} payment received via ${payment.method.replace(/_/g, " ").toLowerCase()}.`);
+    if (payment.method === "CHEQUE") {
+      const response = await fetch("/api/cheques", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: customer.id,
+          chequeNumber: payment.chequeNumber,
+          bankName: payment.bankName,
+          chequeDate: istDateTimeToIso(combineDateTimeValue(payment.chequeDate, "00:00")),
+          amount: payment.amount,
+          accountHolderName: payment.accountHolderName,
+          collectionDateTime: istDateTimeToIso(combineDateTimeValue(payment.paymentDate, "12:00")),
+          collectionNotes: paymentNotes,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not save cheque collection.");
+      onOptimistic(customer, "FOLLOW_UP_REQUIRED", paymentNotes, customer.nextFollowupDate, payment.amount);
+    } else {
+      const paymentStatus: QueueStatus = payment.mode === "FULL" ? "PAID" : "PARTIAL_PAID";
+      const response = await fetch("/api/follow-ups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: customer.id,
+          status: paymentStatus,
+          priority,
+          notes: paymentNotes,
+          paidAmount: payment.amount,
+          paymentDate: istDateTimeToIso(combineDateTimeValue(payment.paymentDate, "12:00")),
+          sourceModule: "TODAY_FOLLOWUPS",
+          metadata: { paymentDate: payment.paymentDate, paymentMethod: payment.method, paymentReference: payment.referenceNumber || null, bankName: payment.bankName || null },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not save payment.");
+      onOptimistic(customer, paymentStatus, paymentNotes, null, payment.amount);
+    }
+    setPaymentModalMode(null);
+    await onSaved(customer.id);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving) return;
@@ -2228,7 +2277,7 @@ function ActionPanel({
     setSaving(true);
     const closesQueue = COMPLETE_STATUSES.includes(status);
     const scheduledAt = !closesQueue && setReminder && nextDate ? reminderInputToIso(nextDate) : null;
-    const amount = status === "PARTIAL_PAID" ? Number(paidAmount) || 0 : status === "PAID" ? customer.outstandingBalance : 0;
+    const amount = status === "PAID" ? customer.outstandingBalance : 0;
     const finalNotes =
       notes ||
       (orderFollowUp && scheduledAt ? `Call customer for a new order on ${formatDateTime(scheduledAt)}.` : "") ||
@@ -2509,21 +2558,6 @@ function ActionPanel({
               </div>
             )}
 
-            {(status === "PARTIAL_PAID" || status === "PAID") && (
-              <div>
-                <label className="text-sm font-semibold">Amount received</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={status === "PAID" ? String(customer.outstandingBalance) : paidAmount}
-                  onChange={(event) => setPaidAmount(event.target.value)}
-                  disabled={status === "PAID"}
-                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-                />
-              </div>
-            )}
-
             <div>
               <label className="text-sm font-semibold">Quick notes</label>
               <textarea
@@ -2717,6 +2751,18 @@ function ActionPanel({
             </Link>
           </div>
         </form>
+        <PaymentCollectionModal
+          open={paymentModalMode !== null}
+          customerId={customer.id}
+          customerName={customer.partyName}
+          outstandingBalance={customer.outstandingBalance}
+          defaultMode={paymentModalMode ?? "PARTIAL"}
+          defaultAmount={paymentModalMode === "FULL" ? customer.outstandingBalance : undefined}
+          source="TODAY_FOLLOW_UP"
+          relatedFollowUpId={scheduledSource?.id}
+          onSuccess={collectPayment}
+          onClose={() => setPaymentModalMode(null)}
+        />
       </div>
     </aside>
   );

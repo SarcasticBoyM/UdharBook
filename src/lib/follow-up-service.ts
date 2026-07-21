@@ -46,6 +46,7 @@ export type RecordFollowUpInput = {
   metadata?: Prisma.InputJsonValue;
   recordPayment?: boolean;
   paymentMethod?: string | null;
+  paymentDate?: Date | string | null;
   updateCustomerFollowup?: boolean;
   updateCustomerStatus?: boolean;
   updateCustomerNotes?: boolean;
@@ -192,7 +193,7 @@ export async function recordFollowUpActivity(tx: DbClient, input: RecordFollowUp
         amount: paidAmount,
         method: input.paymentMethod ?? input.sourceModule,
         notes: input.summary ?? input.notes ?? undefined,
-        paidAt: now,
+        paidAt: toDate(input.paymentDate) ?? now,
         createdById: input.createdById,
       },
     });

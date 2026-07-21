@@ -40,6 +40,7 @@ const schema = z.object({
   scheduledAt: z.string().datetime().optional().nullable(),
   nextFollowupDate: z.string().datetime().optional().nullable(),
   paidAmount: z.number().min(0).optional(),
+  paymentDate: z.string().datetime().optional(),
   sourceModule: z
     .enum(["TODAY_FOLLOWUPS", "CUSTOMER_MODULE", "FIELD_VISIT", "CHEQUE_COLLECTION", "CHEQUE_DEPOSIT", "ADMIN_MANUAL", "AUTO_REMINDER"])
     .optional(),
@@ -153,6 +154,7 @@ export async function POST(request: Request) {
         metadata: body.metadata as Prisma.InputJsonValue | undefined,
         recordPayment: body.status === "PAID" || body.status === "PARTIAL_PAID",
         paymentMethod: body.status === "PAID" ? "Full recovery" : "Partial recovery",
+        paymentDate: body.paymentDate,
         updateCustomerFollowup: !orderFollowUp,
         updateCustomerStatus: !orderFollowUp,
         updateCustomerNotes: !orderFollowUp,
