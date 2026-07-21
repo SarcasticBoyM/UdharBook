@@ -13,7 +13,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen min-w-0 overflow-x-hidden">
       <Sidebar userName={session.name} role={session.role} />
-      <NotificationCenter />
+      <NotificationCenter sessionReady={Boolean(session)} />
       <main className="min-w-0 w-full flex-1 overflow-x-hidden overflow-y-auto p-4 pt-16 md:p-8">{children}</main>
     </div>
   );

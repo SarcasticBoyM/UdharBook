@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, MapPin, RefreshCw, RotateCcw, Share2, ShieldOff } from "lucide-react";
 
 type DriverRow = {
@@ -93,19 +93,33 @@ export default function DriverTrackingPage() {
   const [dateFilter, setDateFilter] = useState("today");
   const [tripLogs, setTripLogs] = useState<TripLog[]>([]);
   const [tripDetail, setTripDetail] = useState<TripDetail | null>(null);
+  const driverAbortRef = useRef<AbortController | null>(null);
 
   const selected = useMemo(() => drivers.find((driver) => driver.id === selectedId) ?? drivers[0] ?? null, [drivers, selectedId]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch("/api/driver/admin/drivers", { cache: "no-store" });
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    if (res.ok) {
-      setDrivers(data.drivers ?? []);
-      setSelectedId((current) => current || data.drivers?.[0]?.id || "");
-    } else {
-      setMessage(data.error ?? "Could not load drivers.");
+  const load = useCallback(async (showLoading = false) => {
+    if (document.visibilityState === "hidden") return;
+    driverAbortRef.current?.abort();
+    const controller = new AbortController();
+    driverAbortRef.current = controller;
+    if (showLoading) setLoading(true);
+    try {
+      const res = await fetch("/api/driver/admin/drivers", { cache: "no-store", signal: controller.signal });
+      const data = await res.json().catch(() => ({}));
+      if (controller.signal.aborted) return;
+      if (res.ok) {
+        setDrivers(data.drivers ?? []);
+        setSelectedId((current) => current || data.drivers?.[0]?.id || "");
+      } else {
+        setMessage(data.error ?? "Could not load drivers.");
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) setMessage("Could not refresh driver locations.");
+    } finally {
+      if (driverAbortRef.current === controller) {
+        driverAbortRef.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -152,9 +166,18 @@ export default function DriverTrackingPage() {
   }
 
   useEffect(() => {
-    void load();
-    const timer = window.setInterval(load, 15000);
-    return () => window.clearInterval(timer);
+    void load(true);
+    const timer = window.setInterval(() => void load(false), 45000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") driverAbortRef.current?.abort();
+      else void load(false);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      driverAbortRef.current?.abort();
+    };
   }, [load]);
 
   useEffect(() => {
@@ -172,7 +195,7 @@ export default function DriverTrackingPage() {
           <h1 className="text-2xl font-bold">Live Driver Locations</h1>
           <p className="text-sm text-slate-500">Polls while this page is open. Public links are permanent per driver.</p>
         </div>
-        <button type="button" onClick={() => void load()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold">
+        <button type="button" onClick={() => void load(true)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold">
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>
       </div>
@@ -180,6 +203,7 @@ export default function DriverTrackingPage() {
 
       <div className="grid gap-4 lg:grid-cols-[22rem_1fr]">
         <section className="space-y-2">
+          {loading && drivers.length === 0 && [1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800" />)}
           {drivers.map((driver) => (
             <button key={driver.id} type="button" onClick={() => setSelectedId(driver.id)} className={`w-full rounded-lg border bg-white p-3 text-left shadow-sm dark:border-slate-800 dark:bg-slate-900 ${selected?.id === driver.id ? "ring-2 ring-brand-500" : ""}`}>
               <div className="flex items-start justify-between gap-2">
@@ -195,7 +219,7 @@ export default function DriverTrackingPage() {
               <p className="mt-1 text-xs font-semibold text-slate-600">Today {driver.todayKm.toFixed(2)} KM | Current {driver.currentKm.toFixed(2)} KM | {driver.tripCountToday} trips</p>
             </button>
           ))}
-          {drivers.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No drivers found. Create a DRIVER in Staff Management.</div>}
+          {!loading && drivers.length === 0 && <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No drivers found. Create a DRIVER in Staff Management.</div>}
         </section>
 
         <section className="rounded-lg border bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

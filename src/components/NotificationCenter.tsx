@@ -120,7 +120,7 @@ function actionLabel(notification: AppNotification) {
   return "Open Record";
 }
 
-export function NotificationCenter() {
+export function NotificationCenter({ sessionReady }: { sessionReady: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<NotificationFilter>("ALL");
@@ -137,6 +137,7 @@ export function NotificationCenter() {
   const refreshTimer = useRef<number | null>(null);
   const fullRefreshInFlight = useRef(false);
   const countRefreshInFlight = useRef(false);
+  const countUnauthorized = useRef(false);
   const fullPanelLoaded = useRef(false);
 
   const unreadLabel = useMemo(() => (unreadCount > 99 ? "99+" : String(unreadCount)), [unreadCount]);
@@ -218,11 +219,18 @@ export function NotificationCenter() {
   }, [showPwaNotification]);
 
   const loadNotificationCounts = useCallback(async (showNew = true) => {
-    if (countRefreshInFlight.current || document.visibilityState === "hidden") return;
+    if (!sessionReady || countUnauthorized.current || countRefreshInFlight.current || document.visibilityState === "hidden") return;
     countRefreshInFlight.current = true;
     try {
       const response = await fetch("/api/notifications?mode=count", { credentials: "same-origin", cache: "no-store" });
       const data = await response.json().catch(() => ({})) as Partial<NotificationResponse>;
+      if (response.status === 401) {
+        countUnauthorized.current = true;
+        setUnreadCount(0);
+        setCriticalUnreadCount(0);
+        setLoadError("");
+        return;
+      }
       if (!response.ok || data.success === false) {
         setLoadError(data.error ?? "Notifications could not be loaded. Please retry.");
         return;
@@ -236,7 +244,7 @@ export function NotificationCenter() {
     } finally {
       countRefreshInFlight.current = false;
     }
-  }, [mergeIncomingNotifications]);
+  }, [mergeIncomingNotifications, sessionReady]);
 
   const loadNotifications = useCallback(async (showNew = true, forceStorageCheck = false) => {
     if (fullRefreshInFlight.current) return;
@@ -332,6 +340,7 @@ export function NotificationCenter() {
   }, []);
 
   useEffect(() => {
+    if (!sessionReady) return;
     void loadNotificationCounts(true);
     const interval = window.setInterval(() => void loadNotificationCounts(true), 180000);
     const onFocus = () => void loadNotificationCounts(true);
@@ -345,7 +354,7 @@ export function NotificationCenter() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [loadNotificationCounts]);
+  }, [loadNotificationCounts, sessionReady]);
 
   useEffect(() => {
     if (open && !fullPanelLoaded.current) void loadNotifications(false);
