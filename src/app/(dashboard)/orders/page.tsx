@@ -114,6 +114,44 @@ const dateFilterOptions: { label: string; value: DateFilter }[] = [
 
 const safeText = (value: unknown) => value ? String(value).trim() : "";
 
+const LOCATION_TRACKING_PARAMS = new Set([
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "entry", "coh", "g_ep", "skid", "g_st", "hl", "ved", "source", "shorturl",
+]);
+
+function cleanCoordinate(value: string) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : value;
+}
+
+function cleanLocationForSharing(value: unknown) {
+  const location = safeText(value);
+  if (!location) return "";
+
+  const coordinateMatch = location.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i)
+    ?? location.match(/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/)
+    ?? location.match(/[?&](?:q|query)=(-?\d+(?:\.\d+)?)(?:%2C|,|%20)(-?\d+(?:\.\d+)?)/i)
+    ?? location.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (coordinateMatch) {
+    return `https://www.google.com/maps?q=${cleanCoordinate(coordinateMatch[1])},${cleanCoordinate(coordinateMatch[2])}`;
+  }
+
+  try {
+    const url = new URL(location);
+    const hostname = url.hostname.toLowerCase();
+    const isGoogleMaps = hostname === "maps.google.com" || hostname.endsWith(".google.com") || hostname === "goo.gl";
+    const isMappls = hostname === "mappls.com" || hostname.endsWith(".mappls.com") || hostname === "mapmyindia.com" || hostname.endsWith(".mapmyindia.com");
+    if (!isGoogleMaps && !isMappls) return location;
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (LOCATION_TRACKING_PARAMS.has(key.toLowerCase()) || key.toLowerCase().startsWith("utm_")) url.searchParams.delete(key);
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return location;
+  }
+}
+
 function cleanContact(contact: unknown) {
   const value = String(contact || "").trim();
   if (!value) return "";
@@ -150,7 +188,7 @@ function buildOrderShareText(order: OrderShareSource) {
     || (Number.isFinite(order.customer?.latitude) && Number.isFinite(order.customer?.longitude)
       ? `https://www.google.com/maps?q=${order.customer?.latitude},${order.customer?.longitude}`
       : safeText(order.customer?.geoAddress) || safeText(order.customer?.locationName));
-  const deliveryLocation = safeText(order.deliveryLocationText) || safeText(order.deliveryLocationUrl) || savedCustomerLocation;
+  const deliveryLocation = cleanLocationForSharing(safeText(order.deliveryLocationText) || safeText(order.deliveryLocationUrl) || savedCustomerLocation);
   const deliveryLine = deliveryLocation ? `Delivery Location: ${deliveryLocation}` : "";
   return [customerName, contact, orderText, deliveryLine].filter(Boolean).join("\n");
 }
