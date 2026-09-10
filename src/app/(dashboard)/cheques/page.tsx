@@ -97,32 +97,32 @@ type ChequeItem = {
   chequeDate: string;
   amount: number;
   accountHolderName: string;
-  micrCode: string | null;
-  ifscCode: string | null;
-  ocrConfidence: number | null;
-  ocrExtractedData: Record<string, unknown> | null;
-  ocrEditedFields: Record<string, boolean> | null;
+  micrCode?: string | null;
+  ifscCode?: string | null;
+  ocrConfidence?: number | null;
+  ocrExtractedData?: Record<string, unknown> | null;
+  ocrEditedFields?: Record<string, boolean> | null;
   status: ChequeStatus;
   collectionDateTime: string;
   collectionNotes: string | null;
-  frontImageUrl: string | null;
-  backImageUrl: string | null;
+  frontImageUrl?: string | null;
+  backImageUrl?: string | null;
   depositDateTime: string | null;
   depositBankAccount: string | null;
-  depositSlipUrl: string | null;
-  depositReceiptUrl: string | null;
-  depositReceiptType: string | null;
-  depositReceiptUploadedAt: string | null;
-  depositReceiptUploadedBy: UserOption | null;
-  bounceReason: string | null;
-  clearedAt: string | null;
-  bouncedAt: string | null;
+  depositSlipUrl?: string | null;
+  depositReceiptUrl?: string | null;
+  depositReceiptType?: string | null;
+  depositReceiptUploadedAt?: string | null;
+  depositReceiptUploadedBy?: UserOption | null;
+  bounceReason?: string | null;
+  clearedAt?: string | null;
+  bouncedAt?: string | null;
   updatedAt: string;
   customer: CustomerOption;
   collectedBy: UserOption;
-  depositedBy: UserOption | null;
+  depositedBy?: UserOption | null;
   depositedAccount: DepositAccount | null;
-  activities: ChequeActivity[];
+  activities?: ChequeActivity[];
 };
 
 type ChequeResponse = {
@@ -452,6 +452,8 @@ export default function ChequeCollectionsPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCheque, setSelectedCheque] = useState<ChequeItem | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -481,6 +483,9 @@ export default function ChequeCollectionsPage() {
   const [toast, setToast] = useState("");
   const touchStart = useRef<Record<string, number>>({});
   const loadSequence = useRef(0);
+  const listController = useRef<AbortController | null>(null);
+  const detailController = useRef<AbortController | null>(null);
+  const detailCache = useRef(new Map<string, ChequeItem>());
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -505,46 +510,85 @@ export default function ChequeCollectionsPage() {
     if (minAmount) search.set("minAmount", minAmount);
     if (maxAmount) search.set("maxAmount", maxAmount);
     if (highlightedId) search.set("highlight", highlightedId);
+    search.set("page", String(page));
     search.set("limit", "40");
     return search;
-  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, highlightedId, maxAmount, minAmount, quick, staffId, to]);
+  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, highlightedId, maxAmount, minAmount, page, quick, staffId, to]);
+
+  const filterSignature = `${quick}|${debouncedCustomerQuery}|${debouncedBankFilter}|${debouncedChequeNumberFilter}|${batchTag}|${staffId}|${accountFilter}|${from}|${to}|${minAmount}|${maxAmount}|${highlightedId}`;
+  const previousFilterSignature = useRef(filterSignature);
+  useEffect(() => {
+    if (previousFilterSignature.current !== filterSignature) {
+      previousFilterSignature.current = filterSignature;
+      setPage(1);
+    }
+  }, [filterSignature]);
 
   const loadCheques = useCallback(async () => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    listController.current?.abort();
+    const controller = new AbortController();
+    listController.current = controller;
     setLoading(true);
     try {
-      const res = await fetch(`/api/cheques?${params.toString()}`);
+      const res = await fetch(`/api/cheques?${params.toString()}`, { signal: controller.signal });
       if (sequence !== loadSequence.current) return;
       if (res.ok) {
         const payload = (await res.json()) as ChequeResponse;
         if (sequence !== loadSequence.current) return;
         setData(payload);
-        setSelectedCheque((current) => {
-          if (!payload.items.length) return null;
-          if (highlightedId) return payload.items.find((item) => item.id === highlightedId) ?? null;
-          return current ? payload.items.find((item) => item.id === current.id) ?? payload.items[0] : payload.items[0];
-        });
+        setSelectedCheque((current) => current && payload.items.some((item) => item.id === current.id) ? current : null);
         setExpandedId((current) => {
           if (highlightedId && payload.items.some((item) => item.id === highlightedId)) return highlightedId;
           return current && payload.items.some((item) => item.id === current) ? current : null;
         });
       }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) console.error("cheque_list_load_failed", error);
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
   }, [highlightedId, params]);
 
   useEffect(() => {
+    loadCheques();
+    return () => listController.current?.abort();
+  }, [loadCheques]);
+
+  const loadChequeDetail = useCallback(async (cheque: ChequeItem) => {
+    const cached = detailCache.current.get(cheque.id);
+    if (cached?.updatedAt === cheque.updatedAt) {
+      setSelectedCheque(cached);
+      return cached;
+    }
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    setDetailLoadingId(cheque.id);
+    try {
+      const response = await fetch(`/api/cheques/${cheque.id}`, { signal: controller.signal });
+      if (!response.ok) throw new Error("Could not load cheque details.");
+      const payload = (await response.json()) as { cheque: ChequeItem };
+      detailCache.current.set(cheque.id, payload.cheque);
+      setSelectedCheque(payload.cheque);
+      return payload.cheque;
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) setToast("Could not load cheque details.");
+      return null;
+    } finally {
+      if (!controller.signal.aborted) setDetailLoadingId(null);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!highlightedId || !data?.items.some((item) => item.id === highlightedId)) return;
+    const highlighted = data.items.find((item) => item.id === highlightedId);
+    if (highlighted) void loadChequeDetail(highlighted);
     window.setTimeout(() => {
       document.getElementById(`cheque-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 50);
-  }, [data?.items, highlightedId]);
-
-  useEffect(() => {
-    loadCheques();
-  }, [loadCheques]);
+  }, [data?.items, highlightedId, loadChequeDetail]);
 
   const loadDepositAccounts = useCallback(async () => {
     const search = new URLSearchParams();
@@ -583,8 +627,9 @@ export default function ChequeCollectionsPage() {
   }, []);
 
   useEffect(() => {
-    loadDepositAccounts();
-  }, [loadDepositAccounts]);
+    if (!advancedFiltersOpen && !accountPanelOpen && !depositAction && !accountFilter) return;
+    void loadDepositAccounts();
+  }, [accountFilter, accountPanelOpen, advancedFiltersOpen, depositAction, loadDepositAccounts]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -638,10 +683,7 @@ export default function ChequeCollectionsPage() {
 
   const summary = data?.summary;
   const alerts = data?.alerts;
-  const totalValue = useMemo(
-    () => data?.items.reduce((sum, cheque) => sum + cheque.amount, 0) ?? 0,
-    [data?.items]
-  );
+  const totalValue = data?.summary.filteredTotalAmount ?? 0;
 
   const openNewChequeForm = () => {
     setEditingCheque(null);
@@ -679,6 +721,11 @@ export default function ChequeCollectionsPage() {
     setSuggestedCustomerQuery("");
     setShowCustomerDropdown(false);
     setFormOpen(true);
+  };
+
+  const loadAndOpenEditChequeForm = async (cheque: ChequeItem) => {
+    const detail = await loadChequeDetail(cheque);
+    if (detail) openEditChequeForm(detail);
   };
 
   const performStatusUpdate = async (
@@ -934,6 +981,7 @@ export default function ChequeCollectionsPage() {
     setAccountFilter("");
     setFrom("");
     setTo("");
+    setPage(1);
   };
 
   const saveDepositAccount = async (event: React.FormEvent) => {
@@ -1441,7 +1489,7 @@ export default function ChequeCollectionsPage() {
                 <article
                   id={`cheque-${cheque.id}`}
                   key={cheque.id}
-                  onClick={() => setSelectedCheque(cheque)}
+                  onClick={() => void loadChequeDetail(cheque)}
                   onTouchStart={(event) => {
                     touchStart.current[cheque.id] = event.touches[0].clientX;
                   }}
@@ -1454,7 +1502,7 @@ export default function ChequeCollectionsPage() {
                     if (delta < -80 && status === "DEPOSITED") updateStatus(cheque, "BOUNCED");
                   }}
                   className={cn(
-                    "cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition hover:border-brand-300 dark:bg-slate-900",
+                    "[content-visibility:auto] [contain-intrinsic-size:auto_260px] cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition hover:border-brand-300 dark:bg-slate-900",
                     cheque.status === "BOUNCED"
                       ? "border-red-200"
                       : cheque.status === "CLEARED"
@@ -1530,7 +1578,7 @@ export default function ChequeCollectionsPage() {
                       Copy Details
                     </button>
                     {canEditCheque(currentRole, currentUserId, cheque) && (
-                      <button type="button" onClick={(e) => { e.stopPropagation(); openEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
+                      <button type="button" onClick={(e) => { e.stopPropagation(); void loadAndOpenEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
                         <Pencil className="h-4 w-4" />
                         Edit Cheque
                       </button>
@@ -1562,25 +1610,42 @@ export default function ChequeCollectionsPage() {
                         </button>
                       </>
                     )}
-                    <button type="button" onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === cheque.id ? null : cheque.id); }} className="min-h-10 rounded-lg border px-3 text-sm">
+                    <button type="button" onClick={(e) => { e.stopPropagation(); if (expandedId === cheque.id) { setExpandedId(null); } else { setExpandedId(cheque.id); void loadChequeDetail(cheque); } }} className="min-h-10 rounded-lg border px-3 text-sm">
                       Timeline
                     </button>
                   </div>
 
                   {expandedId === cheque.id && (
                     <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
-                      <Timeline activities={cheque.activities} />
+                      {detailLoadingId === cheque.id ? (
+                        <p className="text-sm text-slate-500">Loading timeline...</p>
+                      ) : (
+                        <Timeline activities={detailCache.current.get(cheque.id)?.activities} />
+                      )}
                     </div>
                   )}
                 </article>
               ))}
             </div>
           )}
+          {(data?.pagination.pages ?? 1) > 1 && (
+            <nav aria-label="Cheque pages" className="mt-5 flex items-center justify-center gap-3">
+              <button type="button" disabled={loading || page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="min-h-10 rounded-lg border px-4 text-sm font-medium disabled:opacity-50">
+                Previous
+              </button>
+              <span className="text-sm text-slate-500">Page {data?.pagination.page ?? page} of {data?.pagination.pages ?? 1}</span>
+              <button type="button" disabled={loading || page >= (data?.pagination.pages ?? 1)} onClick={() => setPage((current) => current + 1)} className="min-h-10 rounded-lg border px-4 text-sm font-medium disabled:opacity-50">
+                Next
+              </button>
+            </nav>
+          )}
         </main>
 
         <aside className="hidden lg:block">
           <div className="sticky top-6 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-            {selectedCheque ? (
+            {detailLoadingId && !selectedCheque ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading cheque details</div>
+            ) : selectedCheque ? (
               <>
                 <p className="text-xs font-semibold uppercase text-slate-500">Selected cheque</p>
                 <h2 className="mt-2 text-lg font-bold">{selectedCheque.customer.partyName}</h2>
@@ -2198,7 +2263,7 @@ function Input({
   );
 }
 
-function Timeline({ activities }: { activities: ChequeActivity[] }) {
+function Timeline({ activities = [] }: { activities?: ChequeActivity[] }) {
   if (activities.length === 0) {
     return <p className="text-sm text-slate-500">No activity logged yet.</p>;
   }

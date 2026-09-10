@@ -207,6 +207,25 @@ function isValidTransition(from: ChequeStatus, to: ChequeStatus) {
   return false;
 }
 
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canUseCheques(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const { id } = await params;
+  const shopId = requireShopId(request, session);
+  const cheque = await prisma.cheque.findFirst({
+    where: { id, shopId },
+    include: responseInclude,
+  });
+  if (!cheque) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
+
+  return NextResponse.json({ cheque });
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }

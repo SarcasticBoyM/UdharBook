@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { z } from "zod";
-import type { ChequeStatus, Prisma } from "@prisma/client";
+import { Prisma, type ChequeStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { resolveOperationalShopId, requireShopId } from "@/lib/tenant";
@@ -129,33 +129,6 @@ function canUseRuntimeDebug(role: string) {
   return role === "SUPER_ADMIN" || role === "SHOP_ADMIN";
 }
 
-async function safeChequeCount(label: string, where: Prisma.ChequeWhereInput) {
-  try {
-    return await prisma.cheque.count({ where });
-  } catch (error) {
-    console.error("cheque_report_count_failed", {
-      label,
-      message: error instanceof Error ? error.message : "Unknown count failure",
-      where,
-    });
-    return 0;
-  }
-}
-
-async function safeChequeAmount(label: string, where: Prisma.ChequeWhereInput) {
-  try {
-    const result = await prisma.cheque.aggregate({ where, _sum: { amount: true } });
-    return result._sum.amount ?? 0;
-  } catch (error) {
-    console.error("cheque_report_amount_failed", {
-      label,
-      message: error instanceof Error ? error.message : "Unknown amount aggregation failure",
-      where,
-    });
-    return 0;
-  }
-}
-
 function chequeInclude() {
   return {
     customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true } },
@@ -184,6 +157,43 @@ function chequeInclude() {
     },
   };
 }
+
+const chequeListSelect = {
+  id: true,
+  chequeNumber: true,
+  bankName: true,
+  branch: true,
+  chequeDate: true,
+  amount: true,
+  accountHolderName: true,
+  status: true,
+  collectionDateTime: true,
+  collectionNotes: true,
+  depositDateTime: true,
+  depositBankAccount: true,
+  updatedAt: true,
+  customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true } },
+  collectedBy: { select: { id: true, name: true, role: true } },
+  depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
+} satisfies Prisma.ChequeSelect;
+
+type GlobalChequeSummary = {
+  collectedToday: number;
+  depositedToday: number;
+  clearedToday: number;
+  pendingDeposit: number;
+  bounced: number;
+  highValue: number;
+  totalCollected: number;
+  stale: number;
+  chequeDateTomorrow: number;
+  underClearingAmount: number;
+  clearedAmount: number;
+  bouncedAmount: number;
+  pendingDepositAmount: number;
+  depositedTodayAmount: number;
+  clearedTodayAmount: number;
+};
 
 function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof chequeInclude> }>) {
   const depositAccount = cheque.depositedAccount
@@ -489,24 +499,51 @@ export async function GET(request: Request) {
   const filteredWhere: Prisma.ChequeWhereInput = { AND: conditions };
   const rawWhere: Prisma.ChequeWhereInput = { shopId };
   const where = isolateMode ? rawWhere : filteredWhere;
-  const rawChequeCount = debugMode ? await safeChequeCount("runtimeRawChequeCount", rawWhere) : undefined;
+  const rawChequeCount = debugMode ? await prisma.cheque.count({ where: rawWhere }) : undefined;
 
-  const include = chequeInclude();
-  const [items, total, users, shop] =
-    await prisma.$transaction([
-      prisma.cheque.findMany({
-        where,
-        include,
-        orderBy: [
-          { chequeDate: "desc" },
-          { createdAt: "desc" },
-        ],
-        skip: format ? 0 : skip,
-        take: format ? 1000 : limit,
-      }),
+  const [listItems, exportItems, total, users, shop, globalRows, filteredGroups] =
+    await Promise.all([
+      format
+        ? Promise.resolve([])
+        : prisma.cheque.findMany({
+            where,
+            select: chequeListSelect,
+            orderBy: [{ chequeDate: "desc" }, { createdAt: "desc" }],
+            skip,
+            take: limit,
+          }),
+      format
+        ? prisma.cheque.findMany({
+            where,
+            include: chequeInclude(),
+            orderBy: [{ chequeDate: "desc" }, { createdAt: "desc" }],
+            take: 1000,
+          })
+        : Promise.resolve([]),
       prisma.cheque.count({ where }),
       prisma.user.findMany({ where: { shopId }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
-      prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }),
+      format ? prisma.shop.findUnique({ where: { id: shopId }, select: { shopName: true } }) : Promise.resolve(null),
+      prisma.$queryRaw<GlobalChequeSummary[]>(Prisma.sql`
+        SELECT
+          COUNT(*)::int AS "totalCollected",
+          COUNT(*) FILTER (WHERE "collectionDateTime" >= ${todayStart} AND "collectionDateTime" <= ${todayEnd})::int AS "collectedToday",
+          COUNT(*) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd})::int AS "depositedToday",
+          COUNT(*) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd})::int AS "clearedToday",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT'))::int AS "pendingDeposit",
+          COUNT(*) FILTER (WHERE status = 'BOUNCED')::int AS bounced,
+          COUNT(*) FILTER (WHERE amount >= ${HIGH_VALUE})::int AS "highValue",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "collectionDateTime" < ${staleDate})::int AS stale,
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${tomorrowStart} AND "chequeDate" <= ${tomorrowEnd})::int AS "chequeDateTomorrow",
+          COALESCE(SUM(amount) FILTER (WHERE status = 'DEPOSITED'), 0)::float8 AS "underClearingAmount",
+          COALESCE(SUM(amount) FILTER (WHERE status = 'CLEARED'), 0)::float8 AS "clearedAmount",
+          COALESCE(SUM(amount) FILTER (WHERE status = 'BOUNCED'), 0)::float8 AS "bouncedAmount",
+          COALESCE(SUM(amount) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT')), 0)::float8 AS "pendingDepositAmount",
+          COALESCE(SUM(amount) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd}), 0)::float8 AS "depositedTodayAmount",
+          COALESCE(SUM(amount) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd}), 0)::float8 AS "clearedTodayAmount"
+        FROM "Cheque"
+        WHERE "shopId" = ${shopId}
+      `),
+      prisma.cheque.groupBy({ where, by: ["status"], _count: { _all: true }, _sum: { amount: true } }),
     ]).catch((error: unknown) => {
       console.error("cheque_report_prisma_query_failed", {
         message: error instanceof Error ? error.message : "Unknown Prisma query failure",
@@ -522,51 +559,20 @@ export async function GET(request: Request) {
       throw error;
     });
 
-  const [
-    collectedToday,
-    depositedToday,
-    clearedToday,
-    pendingDeposit,
-    bounced,
-    highValue,
-    totalCollected,
-    stale,
-    chequeDateTomorrow,
-    underClearingAmount,
-    clearedAmount,
-    bouncedAmount,
-    pendingDepositAmount,
-    depositedTodayAmount,
-    clearedTodayAmount,
-    filteredTotalAmount,
-    filteredDepositedAmount,
-    filteredPendingAmount,
-    filteredClearedAmount,
-    filteredBouncedAmount,
-  ] = await Promise.all([
-    safeChequeCount("collectedToday", { shopId, collectionDateTime: { gte: todayStart, lte: todayEnd } }),
-    safeChequeCount("depositedToday", { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }),
-    safeChequeCount("clearedToday", { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }),
-    safeChequeCount("pendingDeposit", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
-    safeChequeCount("bounced", { shopId, status: "BOUNCED" }),
-    safeChequeCount("highValue", { shopId, amount: { gte: HIGH_VALUE } }),
-    safeChequeCount("totalCollected", { shopId }),
-    safeChequeCount("stale", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] }, collectionDateTime: { lt: staleDate } }),
-    safeChequeCount("chequeDateTomorrow", { shopId, chequeDate: { gte: tomorrowStart, lte: tomorrowEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
-    safeChequeAmount("underClearingAmount", { shopId, status: "DEPOSITED" }),
-    safeChequeAmount("clearedAmount", { shopId, status: "CLEARED" }),
-    safeChequeAmount("bouncedAmount", { shopId, status: "BOUNCED" }),
-    safeChequeAmount("pendingDepositAmount", { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } }),
-    safeChequeAmount("depositedTodayAmount", { shopId, depositDateTime: { gte: todayStart, lte: todayEnd } }),
-    safeChequeAmount("clearedTodayAmount", { shopId, clearedAt: { gte: todayStart, lte: todayEnd } }),
-    safeChequeAmount("filteredTotalAmount", where),
-    safeChequeAmount("filteredDepositedAmount", { AND: [where, { status: "DEPOSITED" }] }),
-    safeChequeAmount("filteredPendingAmount", { AND: [where, { status: { in: PENDING_DEPOSIT_STATUSES } }] }),
-    safeChequeAmount("filteredClearedAmount", { AND: [where, { status: "CLEARED" }] }),
-    safeChequeAmount("filteredBouncedAmount", { AND: [where, { status: "BOUNCED" }] }),
-  ]);
-
-  const rows = items.map(chequeRow);
+  const global = globalRows[0] ?? {
+    collectedToday: 0, depositedToday: 0, clearedToday: 0, pendingDeposit: 0, bounced: 0,
+    highValue: 0, totalCollected: 0, stale: 0, chequeDateTomorrow: 0, underClearingAmount: 0,
+    clearedAmount: 0, bouncedAmount: 0, pendingDepositAmount: 0, depositedTodayAmount: 0, clearedTodayAmount: 0,
+  };
+  const filteredByStatus = new Map(filteredGroups.map((group) => [group.status, { count: group._count._all, amount: group._sum.amount ?? 0 }]));
+  const filteredAmount = (statuses: ChequeStatus[]) => statuses.reduce((sum, statusValue) => sum + (filteredByStatus.get(statusValue)?.amount ?? 0), 0);
+  const filteredTotalAmount = filteredGroups.reduce((sum, group) => sum + (group._sum.amount ?? 0), 0);
+  const filteredDepositedAmount = filteredAmount(["DEPOSITED"]);
+  const filteredPendingAmount = filteredAmount(PENDING_DEPOSIT_STATUSES);
+  const filteredClearedAmount = filteredAmount(["CLEARED"]);
+  const filteredBouncedAmount = filteredAmount(["BOUNCED"]);
+  const items = listItems;
+  const rows = exportItems.map(chequeRow);
   const runtimeDebug = debugMode
     ? {
         enabled: true,
@@ -605,7 +611,7 @@ export async function GET(request: Request) {
   if (runtimeDebug) {
     console.info("cheque_runtime_isolation_debug", runtimeDebug);
   }
-  if (!format) {
+  if (debugMode && !format) {
     console.info("cheque_filter_query", {
       report: report || null,
       shopId,
@@ -674,22 +680,12 @@ export async function GET(request: Request) {
       });
     }
   }
-  if (quick === "due_today") {
-    const chequeDateMatches = await prisma.cheque.findMany({
-      where: { shopId, chequeDate: { lte: todayEnd }, status: { in: PENDING_DEPOSIT_STATUSES } },
-      select: { id: true, chequeDate: true, status: true },
-      take: 5,
-    });
+  if (debugMode && quick === "due_today") {
     console.info("cheque_due_today_filter", {
       quick,
       todayStart: todayStart.toISOString(),
       todayEnd: todayEnd.toISOString(),
       resultCount: total,
-      sampleChequeDateMatches: chequeDateMatches.map((item) => ({
-        id: item.id,
-        chequeDate: item.chequeDate.toISOString(),
-        status: item.status,
-      })),
       sampleChequeDates: items.slice(0, 5).map((item) => ({
         id: item.id,
         chequeDate: item.chequeDate.toISOString(),
@@ -736,8 +732,8 @@ export async function GET(request: Request) {
           "Total Cheques": total,
           "Total Amount": filteredTotalAmount,
           "Pending Clearance": filteredPendingAmount,
-          "Cleared Amount": clearedAmount,
-          "Bounced Amount": bouncedAmount,
+          "Cleared Amount": global.clearedAmount,
+          "Bounced Amount": global.bouncedAmount,
         },
       });
       console.info("cheque_pdf_report_generated", {
@@ -775,26 +771,26 @@ export async function GET(request: Request) {
     users: users.map((user) => ({ ...user, role: "ACCOUNT_STAFF" })),
     ...(runtimeDebug ? { debug: runtimeDebug } : {}),
     alerts: {
-      pendingDeposit,
-      bounced,
-      highValue,
-      stale,
-      chequeDateTomorrow,
+      pendingDeposit: global.pendingDeposit,
+      bounced: global.bounced,
+      highValue: global.highValue,
+      stale: global.stale,
+      chequeDateTomorrow: global.chequeDateTomorrow,
     },
     summary: {
-      collectedToday,
-      pendingDeposit,
-      depositedToday,
-      clearedToday,
-      bounced,
-      highValue,
-      totalCollected,
-      underClearingAmount,
-      clearedAmount,
-      bouncedAmount,
-      pendingDepositAmount,
-      depositedTodayAmount,
-      clearedTodayAmount,
+      collectedToday: global.collectedToday,
+      pendingDeposit: global.pendingDeposit,
+      depositedToday: global.depositedToday,
+      clearedToday: global.clearedToday,
+      bounced: global.bounced,
+      highValue: global.highValue,
+      totalCollected: global.totalCollected,
+      underClearingAmount: global.underClearingAmount,
+      clearedAmount: global.clearedAmount,
+      bouncedAmount: global.bouncedAmount,
+      pendingDepositAmount: global.pendingDepositAmount,
+      depositedTodayAmount: global.depositedTodayAmount,
+      clearedTodayAmount: global.clearedTodayAmount,
       filteredChequeCount: total,
       filteredTotalAmount,
       filteredDepositedAmount,
