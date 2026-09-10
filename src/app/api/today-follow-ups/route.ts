@@ -152,12 +152,54 @@ function queueScore(customer: QueueCustomer) {
   );
 }
 
-type QueueCustomer = Prisma.CustomerGetPayload<{
-  include: {
-    followUps: { include: { createdBy: { select: { name: true } } } };
-    payments: { include: { createdBy: { select: { name: true } } } };
-  };
-}> & {
+function queueCustomerSelect(followUpTake: number) {
+  return {
+    id: true,
+    partyName: true,
+    contactNumber: true,
+    batchTag: true,
+    outstandingBalance: true,
+    lastFollowupDate: true,
+    nextFollowupDate: true,
+    status: true,
+    notes: true,
+    balanceAsOfDate: true,
+    followUps: {
+      orderBy: [{ actionLoggedAt: "desc" as const }, { followupDate: "desc" as const }, { createdAt: "desc" as const }],
+      take: followUpTake,
+      select: {
+        id: true,
+        followupDate: true,
+        status: true,
+        priority: true,
+        notes: true,
+        reminderNotes: true,
+        customerResponse: true,
+        nextFollowupDate: true,
+        nextFollowUpDateTime: true,
+        scheduledAt: true,
+        completedAt: true,
+        rescheduledAt: true,
+        actionLoggedAt: true,
+        followUpType: true,
+        summary: true,
+        manualReminder: true,
+        reminderEnabled: true,
+        supersededAt: true,
+        cancelledAt: true,
+        createdAt: true,
+        createdBy: { select: { name: true } },
+      },
+    },
+    payments: {
+      orderBy: { paidAt: "desc" as const },
+      take: 1,
+      select: { paidAt: true },
+    },
+  } satisfies Prisma.CustomerSelect;
+}
+
+type QueueCustomer = Prisma.CustomerGetPayload<{ select: ReturnType<typeof queueCustomerSelect> }> & {
   smartPriority: FollowUpPriority;
   smartPriorityLabel: string;
   queueScore: number;
@@ -232,6 +274,12 @@ function compareBy(sort: SortKey, a: QueueCustomer, b: QueueCustomer) {
     default:
       return b.queueScore - a.queueScore;
   }
+}
+
+function compactCustomer<T extends QueueCustomer>(customer: T) {
+  const { payments, ...dto } = customer;
+  void payments;
+  return dto;
 }
 
 function matchesFilter(filter: string, customer: QueueCustomer, todayStart: Date, todayEnd: Date) {
@@ -315,57 +363,6 @@ function databaseOrder(sort: SortKey): Prisma.CustomerOrderByWithRelationInput[]
   }
 }
 
-async function seedMissingFollowUps(shopId: string, userId: string, limit = 100) {
-  const today = new Date();
-  const missing = await prisma.customer.findMany({
-    where: {
-      shopId,
-      outstandingBalance: { gt: 0 },
-      NOT: { status: "CLEARED" },
-      followUps: { none: {} },
-    },
-    take: limit,
-    include: {
-      followUps: { orderBy: { followupDate: "desc" }, take: 1 },
-      payments: { orderBy: { paidAt: "desc" }, take: 1 },
-    },
-  });
-
-  if (missing.length === 0) return 0;
-
-  await prisma.$transaction(
-    missing.flatMap((customer) => {
-      const priority = smartPriority(customer);
-      return [
-        prisma.followUp.create({
-          data: {
-            shopId,
-            customerId: customer.id,
-            status: "PENDING",
-            priority,
-            notes: "Auto-created for daily recovery queue.",
-            sourceModule: "AUTO_REMINDER",
-            followUpType: "DAILY_QUEUE",
-            summary: "Auto-created for daily recovery queue.",
-            activitySource: "daily-queue-seed",
-            scheduledAt: today,
-            nextFollowupDate: today,
-            actionLoggedAt: today,
-            queueRank: priorityRank(priority),
-            createdById: userId,
-          },
-        }),
-        prisma.customer.update({
-          where: { id: customer.id },
-          data: { nextFollowupDate: customer.nextFollowupDate ?? today },
-        }),
-      ];
-    })
-  );
-
-  return missing.length;
-}
-
 export async function GET(request: Request) {
   const routeStartedAt = performance.now();
   const session = await getSession();
@@ -396,20 +393,8 @@ export async function GET(request: Request) {
   const lightweightMode = requestedMode === "compact" || (requestedMode !== "full" && totalActiveCustomers > LIGHTWEIGHT_THRESHOLD);
   const take = Math.min(requestedTake, lightweightMode ? LIGHTWEIGHT_PAGE_LIMIT : 100);
   const includeSideQueues = skip === 0 && !searchMode;
-  const autoCreated = includeSideQueues ? await seedMissingFollowUps(shopId, session.id, lightweightMode ? 25 : 100) : 0;
-
-  const include = {
-    followUps: {
-      orderBy: { followupDate: "desc" as const },
-      take: lightweightMode ? 3 : 12,
-      include: { createdBy: { select: { name: true } } },
-    },
-    payments: {
-      orderBy: { paidAt: "desc" as const },
-      take: lightweightMode ? 1 : 3,
-      include: { createdBy: { select: { name: true } } },
-    },
-  };
+  const autoCreated = 0;
+  const customerSelect = queueCustomerSelect(lightweightMode ? 3 : 12);
 
   const realActionTodayWhere: Prisma.FollowUpWhereInput = {
     status: { not: "PENDING" },
@@ -429,17 +414,16 @@ export async function GET(request: Request) {
   };
   const pageWindow = lightweightMode ? take : skip + Math.min(take * 3, 300);
 
-  const [customers, pendingTotal, pendingAmount, doneCustomers, todayRecovery, staffActivity] = await prisma.$transaction([
+  const [customers, pendingStats, doneCustomers, todayRecovery, staffActivity] = await Promise.all([
     prisma.customer.findMany({
       where: pendingWhere,
-      include,
+      select: customerSelect,
       orderBy: databaseOrder(sort),
       skip: lightweightMode ? skip : 0,
       take: pageWindow,
     }),
-    prisma.customer.count({ where: pendingWhere }),
-    prisma.customer.aggregate({ where: pendingWhere, _sum: { outstandingBalance: true } }),
-    prisma.customer.findMany({
+    prisma.customer.aggregate({ where: pendingWhere, _count: { _all: true }, _sum: { outstandingBalance: true } }),
+    includeSideQueues ? prisma.customer.findMany({
       where: {
         shopId,
         isArchived: false,
@@ -449,21 +433,23 @@ export async function GET(request: Request) {
           some: realActionTodayWhere,
         },
       },
-      include,
+      select: customerSelect,
       orderBy: { lastFollowupDate: "desc" },
-      take: includeSideQueues ? (lightweightMode ? 50 : 200) : 0,
-    }),
-    prisma.paymentEntry.aggregate({
+      take: lightweightMode ? 50 : 200,
+    }) : Promise.resolve([]),
+    includeSideQueues ? prisma.paymentEntry.aggregate({
       where: { shopId, paidAt: { gte: todayStart, lte: todayEnd } },
       _sum: { amount: true },
-    }),
-    prisma.followUp.groupBy({
+    }) : Promise.resolve({ _sum: { amount: null } }),
+    includeSideQueues ? prisma.followUp.groupBy({
       by: ["createdById"],
       where: { shopId, ...realActionTodayWhere },
       orderBy: { createdById: "asc" },
       _count: { _all: true },
-    }),
+    }) : Promise.resolve([]),
   ]);
+  const pendingTotal = pendingStats._count._all;
+  const pendingAmount = pendingStats._sum.outstandingBalance ?? 0;
 
   const scheduledRows = includeSideQueues ? await prisma.followUp.findMany({
     where: {
@@ -503,7 +489,7 @@ export async function GET(request: Request) {
           assignedTo: { select: { name: true } },
         },
       },
-      customer: { include },
+      customer: { select: customerSelect },
     },
     orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
     take: lightweightMode ? 100 : 300,
@@ -641,10 +627,12 @@ export async function GET(request: Request) {
   });
 
   const userIds = staffActivity.map((item) => item.createdById);
-  const users = await prisma.user.findMany({
-    where: { shopId, id: { in: userIds } },
-    select: { id: true, name: true },
-  });
+  const users = userIds.length > 0
+    ? await prisma.user.findMany({
+        where: { shopId, id: { in: userIds } },
+        select: { id: true, name: true },
+      })
+    : [];
   const userMap = new Map(users.map((user) => [user.id, user.name]));
   const callsCompleted = done.reduce((count, customer) => {
     const action = customer.todayAction;
@@ -652,13 +640,13 @@ export async function GET(request: Request) {
   }, 0);
 
   const payload = {
-    scheduled,
-    pending,
-    done,
+    scheduled: scheduled.map(compactCustomer),
+    pending: pending.map(compactCustomer),
+    done: done.map(compactCustomer),
     summary: {
       totalCustomers: totalActiveCustomers,
       totalPendingCustomers: scheduled.length + pendingQueueCount,
-      totalPendingAmount: lightweightMode ? pendingAmount._sum.outstandingBalance || 0 : activeQueueAmount || pendingAmount._sum.outstandingBalance || 0,
+      totalPendingAmount: lightweightMode ? pendingAmount : activeQueueAmount || pendingAmount,
       totalToday: scheduled.length + pendingQueueCount + done.length,
       pending: scheduled.length + pendingQueueCount,
       completed: done.length,

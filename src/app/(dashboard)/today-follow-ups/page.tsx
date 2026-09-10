@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   Bell,
   CalendarClock,
@@ -30,8 +31,7 @@ import { formatCurrency, cn } from "@/lib/utils";
 import { displayPhone, telHref } from "@/lib/phone";
 import { openWhatsAppUrl, paymentReminderMessage, whatsappHref } from "@/lib/whatsapp";
 import { isShopAdminRole, roleLabel } from "@/lib/operational-roles";
-import { AssignTaskButton } from "@/components/AssignTaskDialog";
-import { PaymentCollectionModal, type PaymentCollectionMode, type PaymentCollectionValue } from "@/components/payments/PaymentCollectionModal";
+import type { PaymentCollectionMode, PaymentCollectionValue } from "@/components/payments/PaymentCollectionModal";
 import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
 import { followUpTypeLabel, isOrderFollowUp, ORDER_FOLLOW_UP } from "@/lib/follow-up-types";
 import {
@@ -43,6 +43,15 @@ import {
   reminderPresets,
   splitDateTimeValue,
 } from "@/lib/app-date-time";
+
+const AssignTaskButton = dynamic(
+  () => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton),
+  { ssr: false },
+);
+const PaymentCollectionModal = dynamic(
+  () => import("@/components/payments/PaymentCollectionModal").then((module) => module.PaymentCollectionModal),
+  { ssr: false },
+);
 
 type QueueStatus =
   | "PENDING"
@@ -96,7 +105,7 @@ type QueueCustomer = {
   balanceAsOfDate: string;
   queueRank?: number;
   followUps: FollowUpItem[];
-  payments: {
+  payments?: {
     id: string;
     amount: number;
     paidAt: string;
@@ -658,7 +667,7 @@ export default function TodayFollowUpsPage() {
 
   const loadPage = useCallback(
     async (skip: number, reset = false) => {
-      if (reset) loadAbortRef.current?.abort();
+      loadAbortRef.current?.abort();
       const controller = new AbortController();
       loadAbortRef.current = controller;
       if (reset) setLoading(true);
@@ -684,16 +693,19 @@ export default function TodayFollowUpsPage() {
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("today_followups_load_failed", error);
       } finally {
-        if (loadAbortRef.current === controller) loadAbortRef.current = null;
-        setLoading(false);
-        setLoadingMore(false);
+        if (loadAbortRef.current === controller) {
+          loadAbortRef.current = null;
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [batchTag, debouncedQuery, filter, mergeQueue, sort]
   );
 
   useEffect(() => {
-    loadPage(0, true);
+    void loadPage(0, true);
+    return () => loadAbortRef.current?.abort();
   }, [loadPage]);
 
   useEffect(() => {
