@@ -2,15 +2,13 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { Activity, AlertTriangle, CalendarClock, HardDrive, LifeBuoy, ScrollText, ShieldCheck, Store, Upload, UserPlus, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { startOfDay, endOfDay } from "date-fns";
-import { StatCards } from "@/components/dashboard/StatCards";
-import { DashboardCharts } from "@/components/dashboard/Charts";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { DashboardDeferred } from "@/components/dashboard/DashboardDeferred";
+import { formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
-import { agingBucket } from "@/lib/aging";
 import { isSuperAdmin } from "@/lib/tenant";
 import { logger } from "@/lib/logger";
 
@@ -21,6 +19,10 @@ const emptyStats: DashboardStats = {
   totalOutstanding: 0,
   pendingFollowup: 0,
   todayFollowups: 0,
+  todayFollowupAmount: 0,
+  todayCheques: 0,
+  todayChequeAmount: 0,
+  pendingCheques: 0,
   overdueFollowups: 0,
   highOutstanding: 0,
   recoveryAmount: 0,
@@ -38,25 +40,22 @@ const emptyStats: DashboardStats = {
     { label: "90+", amount: 0 },
   ],
 };
-const CLOSED_FOLLOW_UP_STATUSES = new Set(["PAID", "COMPLETED", "WRONG_NUMBER"]);
+type DashboardCoreRow = {
+  totalCustomers: number;
+  totalOutstanding: number;
+  pendingFollowup: number;
+  todayFollowups: number;
+  todayFollowupAmount: number;
+  overdueFollowups: number;
+  highOutstanding: number;
+  recoveryAmount: number;
+  todayCheques: number;
+  todayChequeAmount: number;
+  pendingCheques: number;
+};
 
-type RecentActivityItem = Prisma.ActivityLogGetPayload<{
-  select: {
-    id: true;
-    action: true;
-    createdAt: true;
-    user: { select: { name: true } };
-    customer: { select: { partyName: true; id: true } };
-  };
-}>;
-type HighBalanceCustomerItem = Prisma.CustomerGetPayload<{
-  select: { id: true; partyName: true; outstandingBalance: true };
-}>;
-
-async function selectedShopId() {
+async function selectedShopId(session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
   try {
-    const session = await getSession();
-    if (!session) return "";
     if (!isSuperAdmin(session)) return session.shopId;
 
     const cookieStore = await cookies();
@@ -87,91 +86,41 @@ async function getStats(shopId: string): Promise<DashboardStats> {
   if (!shopId) return emptyStats;
   const todayStart = startOfDay(new Date());
   const todayEnd = endOfDay(new Date());
-  const now = new Date();
-  const nextWeek = new Date();
-  nextWeek.setDate(nextWeek.getDate() + 7);
   const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
-
-  const customers = await prisma.customer.findMany({
-    where: { shopId },
-    select: {
-      status: true,
-      outstandingBalance: true,
-      nextFollowupDate: true,
-      balanceAsOfDate: true,
-      followUps: { orderBy: { followupDate: "desc" }, take: 1, select: { status: true } },
-    },
-  });
-  const active = customers.filter((c) => c.status !== "CLEARED" && c.outstandingBalance > 0 && !CLOSED_FOLLOW_UP_STATUSES.has(c.followUps[0]?.status ?? ""));
-
-  const statusGroups = await prisma.customer.groupBy({
-    by: ["status"],
-    where: { shopId },
-    _count: { status: true },
-  });
-
-  const agingMap: Record<string, number> = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-  for (const c of active) {
-    agingMap[agingBucket(c.balanceAsOfDate)] += c.outstandingBalance;
-  }
-
-  const payments = await prisma.paymentEntry.findMany({
-    where: { shopId },
-    orderBy: { paidAt: "asc" },
-    take: 200,
-    select: { paidAt: true, amount: true },
-  });
-  const monthMap = new Map<string, number>();
-  for (const payment of payments) {
-    const key = payment.paidAt.toISOString().slice(0, 7);
-    monthMap.set(key, (monthMap.get(key) ?? 0) + payment.amount);
-  }
-
-  const staffGroups = await prisma.activityLog.groupBy({
-    by: ["userId"],
-    where: { shopId, createdAt: { gte: todayStart } },
-    _count: { userId: true },
-  });
-  const users = await prisma.user.findMany({
-    where: { id: { in: staffGroups.map((group) => group.userId).filter(Boolean) as string[] } },
-    select: { id: true, name: true },
-  });
-  const userMap = new Map(users.map((user) => [user.id, user.name]));
-  const [pendingOrders, highPriorityOrders, deliveredToday, upcomingDeliveries] = await prisma.$transaction([
-    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] } } }),
-    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, priority: "High" } }),
-    prisma.order.count({ where: { shopId, status: "DELIVERED", deliveredAt: { gte: todayStart, lte: todayEnd } } }),
-    prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, preferredDeliveryDate: { gte: new Date(), lte: nextWeek } } }),
-  ]);
-
-  const stats = {
-    totalCustomers: customers.length,
-    totalOutstanding: active.reduce((s, c) => s + c.outstandingBalance, 0),
-    pendingFollowup: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate <= todayEnd).length,
-    todayFollowups: active.filter(
-      (c) => c.nextFollowupDate && c.nextFollowupDate >= todayStart && c.nextFollowupDate <= todayEnd
-    ).length,
-    overdueFollowups: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate < now).length,
-    highOutstanding: customers.filter((c) => c.outstandingBalance >= threshold).length,
-    recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
-    pendingOrders,
-    highPriorityOrders,
-    deliveredToday,
-    upcomingDeliveries,
-    staffActivity: staffGroups.map((group) => ({
-      name: group.userId ? userMap.get(group.userId) ?? "Unknown" : "System",
-      count: group._count.userId,
-    })),
-    statusDistribution: statusGroups.map((g) => ({ status: g.status, count: g._count.status })),
-    collectionProgress: Array.from(monthMap.entries()).map(([month, collected]) => ({ month, collected })),
-    outstandingSummary: Object.entries(agingMap).map(([label, amount]) => ({ label, amount })),
-  } satisfies DashboardStats;
+  const rows = await prisma.$queryRaw<DashboardCoreRow[]>(Prisma.sql`
+    WITH customers AS (
+      SELECT c.*, latest.status AS "latestFollowUpStatus"
+      FROM "Customer" c
+      LEFT JOIN LATERAL (
+        SELECT f.status FROM "FollowUp" f
+        WHERE f."customerId" = c.id
+        ORDER BY f."followupDate" DESC LIMIT 1
+      ) latest ON TRUE
+      WHERE c."shopId" = ${shopId}
+    ), active AS (
+      SELECT * FROM customers
+      WHERE status <> 'CLEARED' AND "outstandingBalance" > 0
+        AND ("latestFollowUpStatus" IS NULL OR "latestFollowUpStatus" NOT IN ('PAID', 'COMPLETED', 'WRONG_NUMBER'))
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM customers) AS "totalCustomers",
+      COALESCE((SELECT SUM("outstandingBalance") FROM active), 0)::float8 AS "totalOutstanding",
+      (SELECT COUNT(*)::int FROM active WHERE "nextFollowupDate" <= ${todayEnd}) AS "pendingFollowup",
+      (SELECT COUNT(*)::int FROM active WHERE "nextFollowupDate" >= ${todayStart} AND "nextFollowupDate" <= ${todayEnd}) AS "todayFollowups",
+      COALESCE((SELECT SUM("outstandingBalance") FROM active WHERE "nextFollowupDate" >= ${todayStart} AND "nextFollowupDate" <= ${todayEnd}), 0)::float8 AS "todayFollowupAmount",
+      (SELECT COUNT(*)::int FROM active WHERE "nextFollowupDate" < ${new Date()}) AS "overdueFollowups",
+      (SELECT COUNT(*)::int FROM customers WHERE "outstandingBalance" >= ${threshold}) AS "highOutstanding",
+      COALESCE((SELECT SUM(amount) FROM (SELECT amount FROM "PaymentEntry" WHERE "shopId" = ${shopId} ORDER BY "paidAt" ASC LIMIT 200) p), 0)::float8 AS "recoveryAmount",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${todayStart} AND "chequeDate" <= ${todayEnd}) AS "todayCheques",
+      COALESCE((SELECT SUM(amount) FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${todayStart} AND "chequeDate" <= ${todayEnd}), 0)::float8 AS "todayChequeAmount",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT')) AS "pendingCheques"
+  `);
+  const core = rows[0];
+  const stats: DashboardStats = core ? { ...emptyStats, ...core } : emptyStats;
 
   logger.info("dashboard_page_stats_loaded", {
     shopId,
-    customerCount: customers.length,
-    activeCustomerCount: active.length,
-    paymentCount: payments.length,
+    customerCount: stats.totalCustomers,
     totalOutstanding: stats.totalOutstanding,
     todayFollowups: stats.todayFollowups,
     overdueFollowups: stats.overdueFollowups,
@@ -186,11 +135,9 @@ export default async function DashboardPage() {
     return <PlatformDashboard />;
   }
 
-  const shopId = await selectedShopId();
+  const shopId = session ? await selectedShopId(session) : "";
   let dashboardError = false;
   let stats = emptyStats;
-  let highBalanceCustomers: HighBalanceCustomerItem[] = [];
-  let recentActivity: RecentActivityItem[] = [];
   let staffCount = 0;
 
   try {
@@ -200,27 +147,8 @@ export default async function DashboardPage() {
     console.error("Dashboard stats failed", error);
   }
 
-  const threshold = Number(process.env.HIGH_BALANCE_THRESHOLD ?? 50000);
   if (shopId) {
     try {
-      highBalanceCustomers = await prisma.customer.findMany({
-        where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
-        orderBy: { outstandingBalance: "desc" },
-        take: 5,
-        select: { id: true, partyName: true, outstandingBalance: true },
-      });
-      recentActivity = await prisma.activityLog.findMany({
-        where: { shopId },
-        orderBy: { createdAt: "desc" },
-        take: 8,
-        select: {
-          id: true,
-          action: true,
-          createdAt: true,
-          user: { select: { name: true } },
-          customer: { select: { partyName: true, id: true } },
-        },
-      });
       staffCount = await prisma.user.count({ where: { shopId, role: { not: "SUPER_ADMIN" } } });
     } catch (error) {
       dashboardError = true;
@@ -258,53 +186,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-6">
-        <StatCards stats={stats} />
-      </div>
-
-      <DashboardCharts stats={stats} />
-
-      {highBalanceCustomers.length > 0 && (
-        <div className="card mt-6">
-          <h3 className="font-semibold">High Risk Outstanding Customers</h3>
-          <ul className="mt-3 space-y-2">
-            {highBalanceCustomers.map((c) => (
-              <li key={c.id} className="flex justify-between text-sm">
-                <Link href={`/customers/${c.id}`} className="text-brand-600 hover:underline">
-                  {c.partyName}
-                </Link>
-                <span className="font-medium">{formatCurrency(c.outstandingBalance)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="card mt-6">
-        <h3 className="font-semibold">Recent Activity</h3>
-        <ul className="mt-3 space-y-3 text-sm">
-          {recentActivity.length === 0 ? (
-            <li className="text-slate-500">No activity yet</li>
-          ) : (
-            recentActivity.map((item) => (
-              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 last:border-0 dark:border-slate-800">
-                <span>
-                  <span className="font-medium">{item.action.replace(/_/g, " ")}</span>
-                  {item.customer && (
-                    <>
-                      {" for "}
-                      <Link href={`/customers/${item.customer.id}`} className="text-brand-600 hover:underline">
-                        {item.customer.partyName}
-                      </Link>
-                    </>
-                  )}
-                </span>
-                <span className="text-xs text-slate-500">{formatDate(item.createdAt)}</span>
-              </li>
-            ))
-          )}
-        </ul>
-      </div>
+      <DashboardDeferred initialStats={stats} />
 
       <div className="mt-6 flex flex-wrap gap-3">
         <Link

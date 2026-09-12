@@ -1,18 +1,22 @@
 import { formatCurrency } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
 
-export function StatCards({ stats }: { stats: DashboardStats }) {
+export function StatCards({ stats, secondaryLoading = false }: { stats: DashboardStats; secondaryLoading?: boolean }) {
   const cards = [
     { label: "Total Customers", value: stats.totalCustomers.toString() },
     { label: "Total Outstanding", value: formatCurrency(stats.totalOutstanding) },
     { label: "Recovered", value: formatCurrency(stats.recoveryAmount) },
     { label: "Pending Follow-up", value: stats.pendingFollowup.toString() },
     { label: "Today's Follow-ups", value: stats.todayFollowups.toString() },
+    { label: "Today's Follow-up Amount", value: formatCurrency(stats.todayFollowupAmount) },
+    { label: "Today's Cheques", value: stats.todayCheques.toString() },
+    { label: "Today's Cheque Amount", value: formatCurrency(stats.todayChequeAmount) },
+    { label: "Pending Cheques", value: stats.pendingCheques.toString() },
     { label: "Overdue Follow-ups", value: stats.overdueFollowups.toString(), alert: stats.overdueFollowups > 0 },
-    { label: "Pending Orders", value: stats.pendingOrders.toString() },
-    { label: "High Priority Orders", value: stats.highPriorityOrders.toString(), alert: stats.highPriorityOrders > 0 },
-    { label: "Delivered Today", value: stats.deliveredToday.toString() },
-    { label: "Upcoming Deliveries", value: stats.upcomingDeliveries.toString() },
+    { label: "Pending Orders", value: secondaryLoading ? "…" : stats.pendingOrders.toString() },
+    { label: "High Priority Orders", value: secondaryLoading ? "…" : stats.highPriorityOrders.toString(), alert: !secondaryLoading && stats.highPriorityOrders > 0 },
+    { label: "Delivered Today", value: secondaryLoading ? "…" : stats.deliveredToday.toString() },
+    { label: "Upcoming Deliveries", value: secondaryLoading ? "…" : stats.upcomingDeliveries.toString() },
   ];
 
   return (

@@ -29,6 +29,10 @@ export interface DashboardStats {
   totalOutstanding: number;
   pendingFollowup: number;
   todayFollowups: number;
+  todayFollowupAmount: number;
+  todayCheques: number;
+  todayChequeAmount: number;
+  pendingCheques: number;
   overdueFollowups: number;
   highOutstanding: number;
   recoveryAmount: number;

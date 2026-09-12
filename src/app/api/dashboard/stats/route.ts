@@ -12,6 +12,10 @@ const emptyStats: DashboardStats = {
   totalOutstanding: 0,
   pendingFollowup: 0,
   todayFollowups: 0,
+  todayFollowupAmount: 0,
+  todayCheques: 0,
+  todayChequeAmount: 0,
+  pendingCheques: 0,
   overdueFollowups: 0,
   highOutstanding: 0,
   recoveryAmount: 0,
@@ -138,12 +142,45 @@ export async function GET(request: Request) {
     prisma.order.count({ where: { shopId, status: "DELIVERED", deliveredAt: { gte: todayStart, lte: todayEnd } } }),
     prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, preferredDeliveryDate: { gte: new Date(), lte: nextWeek } } }),
   ]);
+  const [todayChequeStats, pendingChequeStats, highBalanceCustomers, recentActivity, staffCount] = await Promise.all([
+    prisma.cheque.aggregate({
+      where: { shopId, chequeDate: { gte: todayStart, lte: todayEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
+      _count: { _all: true },
+      _sum: { amount: true },
+    }),
+    prisma.cheque.aggregate({
+      where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
+      _count: { _all: true },
+    }),
+    prisma.customer.findMany({
+      where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
+      orderBy: { outstandingBalance: "desc" },
+      take: 5,
+      select: { id: true, partyName: true, outstandingBalance: true },
+    }),
+    prisma.activityLog.findMany({
+      where: { shopId },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      select: {
+        id: true,
+        action: true,
+        createdAt: true,
+        customer: { select: { partyName: true, id: true } },
+      },
+    }),
+    prisma.user.count({ where: { shopId, role: { not: "SUPER_ADMIN" } } }),
+  ]);
 
   const stats: DashboardStats = {
     totalCustomers: active.length,
     totalOutstanding,
     pendingFollowup,
     todayFollowups,
+    todayFollowupAmount: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate >= todayStart && c.nextFollowupDate <= todayEnd).reduce((sum, c) => sum + c.outstandingBalance, 0),
+    todayCheques: todayChequeStats._count._all,
+    todayChequeAmount: todayChequeStats._sum.amount ?? 0,
+    pendingCheques: pendingChequeStats._count._all,
     overdueFollowups,
     highOutstanding,
     recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
@@ -181,5 +218,8 @@ export async function GET(request: Request) {
     recoveryAmount: stats.recoveryAmount,
   });
 
+  if (new URL(request.url).searchParams.get("scope") === "secondary") {
+    return NextResponse.json({ stats, highBalanceCustomers, recentActivity, staffCount });
+  }
   return NextResponse.json(stats);
 }
