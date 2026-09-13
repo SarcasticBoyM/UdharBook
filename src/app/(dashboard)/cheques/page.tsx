@@ -481,7 +481,6 @@ export default function ChequeCollectionsPage() {
   const [receiptPreview, setReceiptPreview] = useState("");
   const [receiptUploading, setReceiptUploading] = useState(false);
   const [toast, setToast] = useState("");
-  const touchStart = useRef<Record<string, number>>({});
   const loadSequence = useRef(0);
   const listController = useRef<AbortController | null>(null);
   const detailController = useRef<AbortController | null>(null);
@@ -1490,17 +1489,6 @@ export default function ChequeCollectionsPage() {
                   id={`cheque-${cheque.id}`}
                   key={cheque.id}
                   onClick={() => void loadChequeDetail(cheque)}
-                  onTouchStart={(event) => {
-                    touchStart.current[cheque.id] = event.touches[0].clientX;
-                  }}
-                  onTouchEnd={(event) => {
-                    const start = touchStart.current[cheque.id];
-                    const delta = event.changedTouches[0].clientX - start;
-                    const status = normalizedChequeStatus(cheque.status);
-                    if (delta > 80 && status === "COLLECTED") updateStatus(cheque, "DEPOSITED");
-                    if (delta > 80 && status === "DEPOSITED") updateStatus(cheque, "CLEARED");
-                    if (delta < -80 && status === "DEPOSITED") updateStatus(cheque, "BOUNCED");
-                  }}
                   className={cn(
                     "[content-visibility:auto] [contain-intrinsic-size:auto_260px] cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition hover:border-brand-300 dark:bg-slate-900",
                     cheque.status === "BOUNCED"
