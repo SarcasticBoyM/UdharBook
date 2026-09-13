@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { CheckCircle2, Circle, ExternalLink, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
 import { taskStatuses, taskTypeLabels } from "@/lib/tasks";
 import { canAssignTasks, isShopAdminRole } from "@/lib/operational-roles";
-import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { cn, formatCurrency } from "@/lib/utils";
 import { AppDateTimePicker } from "@/components/AppDateTimePicker";
 import { isoToIstDateTime, istDateTimeToIso } from "@/lib/app-date-time";
+
+const AssignTaskButton = dynamic(() => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton), { ssr: false });
 
 type TaskRow = {
   id: string;

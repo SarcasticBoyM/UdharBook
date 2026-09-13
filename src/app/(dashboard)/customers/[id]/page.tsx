@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statusBadgeClass, formatStatus } from "@/lib/status-colors";
 import { CallActions } from "@/components/CallActions";
-import { FollowUpModal } from "@/components/FollowUpModal";
-import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
+
+const FollowUpModal = dynamic(() => import("@/components/FollowUpModal").then((module) => module.FollowUpModal), { ssr: false });
+const AssignTaskButton = dynamic(() => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton), { ssr: false });
 
 type CustomerDetail = {
   id: string;

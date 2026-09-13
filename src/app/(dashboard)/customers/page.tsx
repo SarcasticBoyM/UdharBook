@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import type { Customer, CustomerStatus } from "@prisma/client";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statusBadgeClass, formatStatus, followupRowClass } from "@/lib/status-colors";
 import { CallActions } from "@/components/CallActions";
-import { FollowUpModal } from "@/components/FollowUpModal";
 import { cn } from "@/lib/utils";
 import { isAccountsRole, isShopAdminRole, isSalesRole } from "@/lib/operational-roles";
+
+const FollowUpModal = dynamic(() => import("@/components/FollowUpModal").then((module) => module.FollowUpModal), { ssr: false });
 
 type CustomerView = "active" | "inactive" | "all" | "pending" | "archived" | "all_with_archived";
 type CustomerWithBatch = Customer & { batchTag?: string | null; isArchived?: boolean; archivedAt?: string | Date | null; archivedById?: string | null };

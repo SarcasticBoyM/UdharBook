@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { assignableFixedRoles, fixedRoleLabels, normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
-import { AssignTaskButton } from "@/components/AssignTaskDialog";
+
+const AssignTaskButton = dynamic(() => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton), { ssr: false });
 
 type Shop = {
   id: string;

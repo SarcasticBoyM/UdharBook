@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { CheckCircle2, Clock, Copy, Loader2, PackageCheck, Plus, RefreshCw, Search, Share2, Truck, XCircle } from "lucide-react";
 import { canUseOrders } from "@/lib/permissions";
 import { isShopAdminRole } from "@/lib/operational-roles";
-import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker } from "@/components/AppDateTimePicker";
 import { currentIstDate, istDateTimeToIso } from "@/lib/app-date-time";
 import { extractOrderQuantity } from "@/lib/order-quantity";
+
+const AssignTaskButton = dynamic(() => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton), { ssr: false });
 
 type OrderStatus = "ORDER_RECEIVED" | "DISPATCHED" | "PENDING" | "PROCESSING" | "DELIVERED" | "CANCELLED" | (string & {});
 
