@@ -40,6 +40,7 @@ const updateSchema = z.object({
   sourceScreen: z.string().max(80).optional(),
   clearedAt: z.string().datetime().optional(),
   clearedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  processingChecked: z.boolean().optional(),
 });
 
 function parseBusinessDate(value: string) {
@@ -243,6 +244,16 @@ export async function PATCH(
     return NextResponse.json({ error: clearingRequest ? "Select a valid cleared date." : "Invalid cheque update." }, { status: 400 });
   }
   const body = parsedBody.data;
+  const processingOnly = body.processingChecked !== undefined
+    && Object.entries(body).every(([key, value]) => key === "processingChecked" || value === undefined);
+  if (processingOnly) {
+    const result = await prisma.cheque.updateMany({
+      where: { id, shopId },
+      data: { processingChecked: body.processingChecked },
+    });
+    if (result.count === 0) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
+    return NextResponse.json({ success: true, processingChecked: body.processingChecked });
+  }
   if (body.status === "BOUNCED" && !canManageChequeAccounting(session.role)) {
     return NextResponse.json({ error: "Only authorized accounting staff can mark a cheque bounced." }, { status: 403 });
   }

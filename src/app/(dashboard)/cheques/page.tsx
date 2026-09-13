@@ -35,9 +35,9 @@ import { canManageChequeAccounting } from "@/lib/permissions";
 type CustomerOption = {
   id: string;
   partyName: string;
-  contactNumber: string;
+  contactNumber?: string;
   batchTag?: string | null;
-  outstandingBalance: number;
+  outstandingBalance?: number;
   lastFollowupDate?: string | null;
   matchScore?: number;
 };
@@ -96,19 +96,20 @@ type ChequeItem = {
   branch: string | null;
   chequeDate: string;
   amount: number;
-  accountHolderName: string;
+  accountHolderName?: string;
   micrCode?: string | null;
   ifscCode?: string | null;
   ocrConfidence?: number | null;
   ocrExtractedData?: Record<string, unknown> | null;
   ocrEditedFields?: Record<string, boolean> | null;
   status: ChequeStatus;
-  collectionDateTime: string;
-  collectionNotes: string | null;
+  processingChecked: boolean;
+  collectionDateTime?: string;
+  collectionNotes?: string | null;
   frontImageUrl?: string | null;
   backImageUrl?: string | null;
-  depositDateTime: string | null;
-  depositBankAccount: string | null;
+  depositDateTime?: string | null;
+  depositBankAccount?: string | null;
   depositSlipUrl?: string | null;
   depositReceiptUrl?: string | null;
   depositReceiptType?: string | null;
@@ -118,10 +119,12 @@ type ChequeItem = {
   clearedAt?: string | null;
   bouncedAt?: string | null;
   updatedAt: string;
+  collectedById: string;
+  depositedAccountId?: string | null;
   customer: CustomerOption;
-  collectedBy: UserOption;
+  collectedBy?: UserOption;
   depositedBy?: UserOption | null;
-  depositedAccount: DepositAccount | null;
+  depositedAccount?: DepositAccount | null;
   activities?: ChequeActivity[];
 };
 
@@ -212,6 +215,12 @@ const quickFilters = [
   { label: "Cleared", value: "cleared" },
   { label: "Bounced", value: "bounced" },
   { label: "Returned", value: "returned" },
+];
+
+const copiedFilters = [
+  { label: "All", value: "all" },
+  { label: "Not Copied", value: "not_copied" },
+  { label: "Copied", value: "copied" },
 ];
 
 const statusTone: Record<ChequeStatus, string> = {
@@ -380,7 +389,7 @@ function isCollectedEditable(status?: ChequeStatus | null) {
 function canEditCheque(role: string, userId: string, cheque: ChequeItem) {
   if (!isCollectedEditable(cheque.status)) return false;
   if (role === "SUPER_ADMIN" || role === "SHOP_ADMIN" || role === "ACCOUNT_STAFF" || role === "SALES_PERSON_CUM_ACCOUNTS") return true;
-  return role === "SALES_PERSON" && cheque.collectedBy.id === userId;
+  return role === "SALES_PERSON" && cheque.collectedById === userId;
 }
 
 function dateOnly(value?: string | null) {
@@ -421,6 +430,7 @@ export default function ChequeCollectionsPage() {
   const searchParams = useSearchParams();
   const highlightedId = searchParams.get("highlight");
   const [quick, setQuick] = useState("all");
+  const [copiedFilter, setCopiedFilter] = useState("all");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
   const [bankFilter, setBankFilter] = useState("");
@@ -481,6 +491,7 @@ export default function ChequeCollectionsPage() {
   const [receiptPreview, setReceiptPreview] = useState("");
   const [receiptUploading, setReceiptUploading] = useState(false);
   const [toast, setToast] = useState("");
+  const [processingUpdating, setProcessingUpdating] = useState<Record<string, boolean>>({});
   const loadSequence = useRef(0);
   const listController = useRef<AbortController | null>(null);
   const detailController = useRef<AbortController | null>(null);
@@ -509,12 +520,13 @@ export default function ChequeCollectionsPage() {
     if (minAmount) search.set("minAmount", minAmount);
     if (maxAmount) search.set("maxAmount", maxAmount);
     if (highlightedId) search.set("highlight", highlightedId);
+    if (copiedFilter !== "all") search.set("copied", copiedFilter);
     search.set("page", String(page));
     search.set("limit", "40");
     return search;
-  }, [accountFilter, batchTag, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, highlightedId, maxAmount, minAmount, page, quick, staffId, to]);
+  }, [accountFilter, batchTag, copiedFilter, debouncedBankFilter, debouncedChequeNumberFilter, debouncedCustomerQuery, from, highlightedId, maxAmount, minAmount, page, quick, staffId, to]);
 
-  const filterSignature = `${quick}|${debouncedCustomerQuery}|${debouncedBankFilter}|${debouncedChequeNumberFilter}|${batchTag}|${staffId}|${accountFilter}|${from}|${to}|${minAmount}|${maxAmount}|${highlightedId}`;
+  const filterSignature = `${quick}|${copiedFilter}|${debouncedCustomerQuery}|${debouncedBankFilter}|${debouncedChequeNumberFilter}|${batchTag}|${staffId}|${accountFilter}|${from}|${to}|${minAmount}|${maxAmount}|${highlightedId}`;
   const previousFilterSignature = useRef(filterSignature);
   useEffect(() => {
     if (previousFilterSignature.current !== filterSignature) {
@@ -699,13 +711,13 @@ export default function ChequeCollectionsPage() {
     setEditingCheque(cheque);
     setForm({
       customerId: cheque.customer.id,
-      customerSearch: `${cheque.customer.partyName} - ${cheque.customer.contactNumber}`,
+      customerSearch: `${cheque.customer.partyName} - ${cheque.customer.contactNumber ?? ""}`,
       chequeNumber: cheque.chequeNumber,
       bankName: cheque.bankName,
       branch: cheque.branch ?? "",
       chequeDate: dateOnly(cheque.chequeDate),
       amount: String(cheque.amount),
-      accountHolderName: cheque.accountHolderName,
+      accountHolderName: cheque.accountHolderName ?? "",
       micrCode: "",
       ifscCode: "",
       collectionDate: dateOnly(cheque.collectionDateTime),
@@ -736,7 +748,7 @@ export default function ChequeCollectionsPage() {
       setDepositAction({ cheque, status });
       setClearedDate(status === "CLEARED" ? currentIstDate() : "");
       setDepositActionError("");
-      setSelectedDepositAccountId(cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
+      setSelectedDepositAccountId(cheque.depositedAccountId ?? cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
       setAccountSearch("");
       setReceiptFile(null);
       setReceiptPreview("");
@@ -954,19 +966,63 @@ export default function ChequeCollectionsPage() {
     window.open(`/api/cheques?${exportParams.toString()}`, "_blank");
   };
 
+  async function updateProcessingChecked(cheque: ChequeItem, processingChecked: boolean) {
+    if (processingUpdating[cheque.id]) return false;
+    const previousValue = cheque.processingChecked;
+    setProcessingUpdating((current) => ({ ...current, [cheque.id]: true }));
+    setData((current) => current ? {
+      ...current,
+      items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked } : item),
+    } : current);
+    try {
+      const response = await fetch(`/api/cheques/${cheque.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ processingChecked }),
+      });
+      if (!response.ok) throw new Error("Could not update copied state.");
+      const cached = detailCache.current.get(cheque.id);
+      if (cached) detailCache.current.set(cheque.id, { ...cached, processingChecked });
+      setSelectedCheque((current) => current?.id === cheque.id ? { ...current, processingChecked } : current);
+      if (copiedFilter !== "all") await loadCheques();
+      return true;
+    } catch {
+      setData((current) => current ? {
+        ...current,
+        items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked: previousValue } : item),
+      } : current);
+      setToast("Could not update Copied status. Please try again.");
+      return false;
+    } finally {
+      setProcessingUpdating((current) => {
+        const next = { ...current };
+        delete next[cheque.id];
+        return next;
+      });
+    }
+  }
+
   async function copyChequeDetails(cheque: ChequeItem) {
-    await navigator.clipboard.writeText([
-      `Cheque Number: ${cheque.chequeNumber}`,
-      `Bank Name: ${cheque.bankName}`,
-      `Branch Name: ${cheque.branch ?? "-"}`,
-      `Cheque Date: ${formatDate(cheque.chequeDate)}`,
-    ].join("\n"));
-    setToast("Cheque details copied");
-    window.setTimeout(() => setToast((current) => current === "Cheque details copied" ? "" : current), 1800);
+    try {
+      await navigator.clipboard.writeText([
+        `Cheque Number: ${cheque.chequeNumber}`,
+        `Bank Name: ${cheque.bankName}`,
+        `Branch Name: ${cheque.branch ?? "-"}`,
+        `Cheque Date: ${formatDate(cheque.chequeDate)}`,
+      ].join("\n"));
+    } catch {
+      setToast("Could not copy cheque details. Please try again.");
+      return;
+    }
+    if (!cheque.processingChecked && !(await updateProcessingChecked(cheque, true))) return;
+    const message = "Cheque details copied successfully.\n✓ Marked as Copied.";
+    setToast(message);
+    window.setTimeout(() => setToast((current) => current === message ? "" : current), 2200);
   }
 
   const resetFilters = () => {
     setQuick("all");
+    setCopiedFilter("all");
     setCustomerQuery("");
     setBankFilter("");
     setChequeNumberFilter("");
@@ -1337,7 +1393,7 @@ export default function ChequeCollectionsPage() {
         </div>
       )}
       {toast && (
-        <div className="fixed bottom-20 left-4 right-4 z-50 rounded-lg bg-slate-950 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-auto sm:right-6 sm:w-72">
+        <div className="fixed bottom-20 left-4 right-4 z-50 whitespace-pre-line rounded-lg bg-slate-950 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-auto sm:right-6 sm:w-72">
           {toast}
         </div>
       )}
@@ -1365,6 +1421,24 @@ export default function ChequeCollectionsPage() {
               ))}
             </div>
 
+            <div className="mt-3 flex gap-2 overflow-x-auto border-t border-slate-100 pt-3 dark:border-slate-800">
+              {copiedFilters.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => setCopiedFilter(filter.value)}
+                  className={cn(
+                    "min-h-10 shrink-0 rounded-full border px-4 text-sm font-medium",
+                    copiedFilter === filter.value
+                      ? "border-emerald-600 bg-emerald-600 text-white"
+                      : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300",
+                  )}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
               <button
                 type="button"
@@ -1374,7 +1448,7 @@ export default function ChequeCollectionsPage() {
                 <SlidersHorizontal className="h-4 w-4" />
                 Advanced Filters
               </button>
-              {((quick && quick !== "all") || customerQuery || bankFilter || chequeNumberFilter || batchTag || staffId || accountFilter || from || to || minAmount || maxAmount) && (
+              {((quick && quick !== "all") || copiedFilter !== "all" || customerQuery || bankFilter || chequeNumberFilter || batchTag || staffId || accountFilter || from || to || minAmount || maxAmount) && (
                 <button type="button" onClick={resetFilters} className="min-h-10 rounded-lg border px-3 text-sm">
                   Reset
                 </button>
@@ -1499,81 +1573,45 @@ export default function ChequeCollectionsPage() {
                     highlightedId === cheque.id && "ring-2 ring-brand-500",
                   )}
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="flex items-start gap-3">
+                    <label
+                      className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Mark cheque ${cheque.chequeNumber} as copied`}
+                        checked={cheque.processingChecked}
+                        disabled={Boolean(processingUpdating[cheque.id])}
+                        onChange={(event) => void updateProcessingChecked(cheque, event.target.checked)}
+                        className="h-5 w-5 accent-emerald-600"
+                      />
+                    </label>
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-base font-bold">{cheque.customer.partyName}</h2>
-                        {cheque.customer.batchTag && (
-                          <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-bold text-sky-700 dark:bg-sky-950 dark:text-sky-200">
-                            {cheque.customer.batchTag}
-                          </span>
-                        )}
-                        <span className={cn("rounded-full px-2 py-1 text-xs font-semibold ring-1", statusTone[cheque.status])}>
-                          {formatStatus(cheque.status)}
-                        </span>
+                        <h2 className="truncate text-base font-bold">{cheque.customer.partyName}</h2>
+                        {cheque.processingChecked && <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" aria-label="Copied" />}
                       </div>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {cheque.customer.contactNumber} | Cheque {cheque.chequeNumber} | {cheque.bankName}
-                      </p>
+                      <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">{cheque.bankName}</p>
+                      <p className="mt-1 text-sm text-slate-500">Cheque No. {cheque.chequeNumber}</p>
                     </div>
-                    <p className="text-right text-xl font-bold">{formatCurrency(cheque.amount)}</p>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-                    <div>
-                      <p className="text-xs text-slate-500">Cheque Date</p>
-                      <p className="font-medium">{formatDate(cheque.chequeDate)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500">Collected</p>
-                      <p className="font-medium">{formatDate(cheque.collectionDateTime)} by {cheque.collectedBy.name}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500">Deposit</p>
-                      <p className="font-medium">{formatDate(cheque.depositDateTime)}</p>
-                      {cheque.depositedAccount && (
-                        <p className="text-xs text-slate-500">
-                          {cheque.depositedAccount.bankName} - {cheque.depositedAccount.accountName} - {cheque.depositedAccount.lastFourDigits}
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500">Balance</p>
-                      <p className="font-medium">{formatCurrency(cheque.customer.outstandingBalance)}</p>
+                    <div className="shrink-0 text-right">
+                      <p className="text-lg font-bold">{formatCurrency(cheque.amount)}</p>
+                      <p className="mt-1 text-sm font-medium">{formatDate(cheque.chequeDate)}</p>
+                      <span className={cn("mt-2 inline-flex rounded-full px-2 py-1 text-xs font-semibold ring-1", statusTone[cheque.status])}>
+                        {formatStatus(cheque.status)}
+                      </span>
                     </div>
                   </div>
-
-                  {cheque.collectionNotes && <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{cheque.collectionNotes}</p>}
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {currentRole === "SHOP_ADMIN" && (
-                      <AssignTaskButton
-                        label={normalizedChequeStatus(cheque.status) === "COLLECTED" ? "Assign Deposit" : "Assign Cheque Task"}
-                        seed={{
-                          customerId: cheque.customer.id,
-                          customerName: cheque.customer.partyName,
-                          taskType: normalizedChequeStatus(cheque.status) === "COLLECTED" ? "CHEQUE_DEPOSIT" : "CHEQUE_COLLECTION",
-                          notes: `Cheque ${cheque.chequeNumber} | ${cheque.bankName}\nAmount: ${formatCurrency(cheque.amount)}`,
-                          priority: cheque.status === "BOUNCED" ? "URGENT" : cheque.amount >= 50000 ? "HIGH" : "MEDIUM",
-                          sourceEntityType: "CHEQUE",
-                          sourceEntityId: cheque.id,
-                          referenceUrl: `/customers/${cheque.customer.id}`,
-                        }}
-                      />
-                    )}
-                    <button type="button" onClick={(e) => { e.stopPropagation(); void copyChequeDetails(cheque); }} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
+                    <button type="button" disabled={Boolean(processingUpdating[cheque.id])} onClick={(e) => { e.stopPropagation(); void copyChequeDetails(cheque); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium disabled:opacity-60 dark:border-slate-700">
                       <Copy className="h-4 w-4" />
                       Copy Details
                     </button>
-                    {canEditCheque(currentRole, currentUserId, cheque) && (
-                      <button type="button" onClick={(e) => { e.stopPropagation(); void loadAndOpenEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
-                        <Pencil className="h-4 w-4" />
-                        Edit Cheque
-                      </button>
-                    )}
                     {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
-                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
-                        Mark Deposited
+                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
+                        Deposit
                       </button>
                     )}
                     {normalizedChequeStatus(cheque.status) === "DEPOSITED" && (
@@ -1598,17 +1636,42 @@ export default function ChequeCollectionsPage() {
                         </button>
                       </>
                     )}
-                    <button type="button" onClick={(e) => { e.stopPropagation(); if (expandedId === cheque.id) { setExpandedId(null); } else { setExpandedId(cheque.id); void loadChequeDetail(cheque); } }} className="min-h-10 rounded-lg border px-3 text-sm">
-                      Timeline
+                    <button type="button" onClick={(e) => { e.stopPropagation(); if (expandedId === cheque.id) { setExpandedId(null); } else { setExpandedId(cheque.id); void loadChequeDetail(cheque); } }} className="min-h-11 rounded-lg border px-3 text-sm">
+                      More
                     </button>
                   </div>
 
                   {expandedId === cheque.id && (
                     <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
                       {detailLoadingId === cheque.id ? (
-                        <p className="text-sm text-slate-500">Loading timeline...</p>
+                        <p className="text-sm text-slate-500">Loading details...</p>
                       ) : (
-                        <Timeline activities={detailCache.current.get(cheque.id)?.activities} />
+                        <div className="space-y-4">
+                          <div className="flex flex-wrap gap-2">
+                            {currentRole === "SHOP_ADMIN" && (
+                              <AssignTaskButton
+                                label={normalizedChequeStatus(cheque.status) === "COLLECTED" ? "Assign Deposit" : "Assign Cheque Task"}
+                                seed={{
+                                  customerId: cheque.customer.id,
+                                  customerName: cheque.customer.partyName,
+                                  taskType: normalizedChequeStatus(cheque.status) === "COLLECTED" ? "CHEQUE_DEPOSIT" : "CHEQUE_COLLECTION",
+                                  notes: `Cheque ${cheque.chequeNumber} | ${cheque.bankName}\nAmount: ${formatCurrency(cheque.amount)}`,
+                                  priority: cheque.status === "BOUNCED" ? "URGENT" : cheque.amount >= 50000 ? "HIGH" : "MEDIUM",
+                                  sourceEntityType: "CHEQUE",
+                                  sourceEntityId: cheque.id,
+                                  referenceUrl: `/customers/${cheque.customer.id}`,
+                                }}
+                              />
+                            )}
+                            {canEditCheque(currentRole, currentUserId, cheque) && (
+                              <button type="button" onClick={(e) => { e.stopPropagation(); void loadAndOpenEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
+                                <Pencil className="h-4 w-4" />
+                                Edit Cheque
+                              </button>
+                            )}
+                          </div>
+                          <Timeline activities={detailCache.current.get(cheque.id)?.activities} />
+                        </div>
                       )}
                     </div>
                   )}
@@ -1946,13 +2009,13 @@ export default function ChequeCollectionsPage() {
                               {customer.batchTag && <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-700">{customer.batchTag}</span>}
                             </span>
                             <span className="mt-1 block text-xs text-slate-500">
-                              <HighlightedText text={customer.contactNumber} query={form.customerSearch} />
+                              <HighlightedText text={customer.contactNumber ?? ""} query={form.customerSearch} />
                               {" | Last follow-up: "}
                               {formatDate(customer.lastFollowupDate)}
                             </span>
                           </span>
                           <span className="shrink-0 text-right text-sm font-bold text-slate-700 dark:text-slate-200">
-                            {formatCurrency(customer.outstandingBalance)}
+                            {formatCurrency(customer.outstandingBalance ?? 0)}
                           </span>
                         </button>
                       ))

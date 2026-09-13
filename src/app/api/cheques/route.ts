@@ -165,16 +165,12 @@ const chequeListSelect = {
   branch: true,
   chequeDate: true,
   amount: true,
-  accountHolderName: true,
   status: true,
-  collectionDateTime: true,
-  collectionNotes: true,
-  depositDateTime: true,
-  depositBankAccount: true,
+  processingChecked: true,
+  collectedById: true,
+  depositedAccountId: true,
   updatedAt: true,
-  customer: { select: { id: true, partyName: true, contactNumber: true, batchTag: true, outstandingBalance: true } },
-  collectedBy: { select: { id: true, name: true, role: true } },
-  depositedAccount: { select: { id: true, accountName: true, bankName: true, lastFourDigits: true, isActive: true } },
+  customer: { select: { id: true, partyName: true } },
 } satisfies Prisma.ChequeSelect;
 
 type GlobalChequeSummary = {
@@ -395,6 +391,7 @@ export async function GET(request: Request) {
   const from = asDate(searchParams.get("from"));
   const to = asDate(searchParams.get("to"), true);
   const quick = searchParams.get("quick") || "all";
+  const copied = searchParams.get("copied") || "all";
   const format = searchParams.get("format");
   const report = searchParams.get("report");
   const includeArchived = searchParams.get("includeArchived") === "true";
@@ -495,6 +492,8 @@ export async function GET(request: Request) {
   if (staffId) conditions.push({ collectedById: staffId });
   if (minAmount !== undefined) conditions.push({ amount: { gte: minAmount } });
   if (maxAmount !== undefined) conditions.push({ amount: { lte: maxAmount } });
+  if (copied === "copied") conditions.push({ processingChecked: true });
+  if (copied === "not_copied") conditions.push({ processingChecked: false });
 
   const filteredWhere: Prisma.ChequeWhereInput = { AND: conditions };
   const rawWhere: Prisma.ChequeWhereInput = { shopId };
@@ -508,7 +507,7 @@ export async function GET(request: Request) {
         : prisma.cheque.findMany({
             where,
             select: chequeListSelect,
-            orderBy: [{ chequeDate: "desc" }, { createdAt: "desc" }],
+            orderBy: [{ status: "asc" }, { processingChecked: "asc" }, { chequeDate: "asc" }, { createdAt: "desc" }],
             skip,
             take: limit,
           }),

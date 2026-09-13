@@ -1178,6 +1178,7 @@ model Cheque {
   depositedAccountId           String?
   depositedAccount             ChequeDepositAccount? @relation(fields: [depositedAccountId], references: [id])
   status                       ChequeStatus          @default(COLLECTED)
+  processingChecked            Boolean               @default(false)
   bounceReason                 String?
   bouncedAt                    DateTime?
   clearedAt                    DateTime?
@@ -1208,6 +1209,7 @@ model Cheque {
   @@index([shopId, balanceReversedAt])
   @@index([shopId, status, amount])
   @@index([shopId, status, collectionDateTime])
+  @@index([shopId, processingChecked, status, chequeDate])
   @@index([shopId, status, depositDateTime])
   @@index([shopId, depositedAccountId, status])
   @@index([shopId, collectedById, collectionDateTime])
