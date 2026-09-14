@@ -158,7 +158,7 @@ function chequeInclude() {
   };
 }
 
-const chequeListSelect = {
+const legacyChequeListSelect = {
   id: true,
   chequeNumber: true,
   bankName: true,
@@ -166,12 +166,31 @@ const chequeListSelect = {
   chequeDate: true,
   amount: true,
   status: true,
-  processingChecked: true,
   collectedById: true,
   depositedAccountId: true,
   updatedAt: true,
   customer: { select: { id: true, partyName: true } },
 } satisfies Prisma.ChequeSelect;
+
+const chequeListSelect = {
+  ...legacyChequeListSelect,
+  processingChecked: true,
+} satisfies Prisma.ChequeSelect;
+
+let processingCheckedCapability: Promise<boolean> | null = null;
+
+function supportsProcessingChecked() {
+  processingCheckedCapability ??= prisma.$queryRaw<{ exists: boolean }[]>(Prisma.sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'Cheque'
+        AND column_name = 'processingChecked'
+    ) AS "exists"
+  `).then((rows) => rows[0]?.exists === true);
+  return processingCheckedCapability;
+}
 
 type GlobalChequeSummary = {
   collectedToday: number;
@@ -379,6 +398,7 @@ export async function GET(request: Request) {
   const debugRequested = searchParams.get("debug") === "runtime";
   try {
   const shopId = await resolveOperationalShopId(request, session);
+  const processingCheckedSupported = await supportsProcessingChecked();
   const rawStatus = searchParams.get("status")?.trim();
   const status = rawStatus && VALID_CHEQUE_STATUSES.includes(rawStatus as ChequeStatus) ? rawStatus as ChequeStatus : null;
   const q = searchParams.get("q")?.trim();
@@ -494,8 +514,9 @@ export async function GET(request: Request) {
   if (staffId) conditions.push({ collectedById: staffId });
   if (minAmount !== undefined) conditions.push({ amount: { gte: minAmount } });
   if (maxAmount !== undefined) conditions.push({ amount: { lte: maxAmount } });
-  if (copied === "copied") conditions.push({ processingChecked: true });
-  if (copied === "not_copied") conditions.push({ processingChecked: false });
+  if (processingCheckedSupported && copied === "copied") conditions.push({ processingChecked: true });
+  if (processingCheckedSupported && copied === "not_copied") conditions.push({ processingChecked: false });
+  if (!processingCheckedSupported && copied === "copied") conditions.push({ id: "__processing_checked_column_unavailable__" });
 
   const filteredWhere: Prisma.ChequeWhereInput = { AND: conditions };
   const rawWhere: Prisma.ChequeWhereInput = { shopId };
@@ -506,13 +527,21 @@ export async function GET(request: Request) {
     await Promise.all([
       format
         ? Promise.resolve([])
-        : prisma.cheque.findMany({
-            where,
-            select: chequeListSelect,
-            orderBy: [{ status: "asc" }, { processingChecked: "asc" }, { chequeDate: "asc" }, { createdAt: "desc" }],
-            skip,
-            take: limit,
-          }),
+        : processingCheckedSupported
+          ? prisma.cheque.findMany({
+              where,
+              select: chequeListSelect,
+              orderBy: [{ status: "asc" }, { processingChecked: "asc" }, { chequeDate: "asc" }, { createdAt: "desc" }],
+              skip,
+              take: limit,
+            })
+          : prisma.cheque.findMany({
+              where,
+              select: legacyChequeListSelect,
+              orderBy: [{ status: "asc" }, { chequeDate: "asc" }, { createdAt: "desc" }],
+              skip,
+              take: limit,
+            }),
       format
         ? prisma.cheque.findMany({
             where,
@@ -531,8 +560,8 @@ export async function GET(request: Request) {
           COUNT(*) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd})::int AS "depositedToday",
           COUNT(*) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd})::int AS "clearedToday",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT'))::int AS "pendingDeposit",
-          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "processingChecked" = true)::int AS "copiedCount",
-          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "processingChecked" = false)::int AS "remainingCount",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND COALESCE((to_jsonb("Cheque") ->> 'processingChecked')::boolean, false) = true)::int AS "copiedCount",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND COALESCE((to_jsonb("Cheque") ->> 'processingChecked')::boolean, false) = false)::int AS "remainingCount",
           COUNT(*) FILTER (WHERE status = 'BOUNCED')::int AS bounced,
           COUNT(*) FILTER (WHERE amount >= ${HIGH_VALUE})::int AS "highValue",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "collectionDateTime" < ${staleDate})::int AS stale,
@@ -574,7 +603,10 @@ export async function GET(request: Request) {
   const filteredPendingAmount = filteredAmount(PENDING_DEPOSIT_STATUSES);
   const filteredClearedAmount = filteredAmount(["CLEARED"]);
   const filteredBouncedAmount = filteredAmount(["BOUNCED"]);
-  const items = listItems;
+  const items = listItems.map((item) => ({
+    ...item,
+    processingChecked: "processingChecked" in item ? item.processingChecked : false,
+  }));
   const rows = exportItems.map(chequeRow);
   const runtimeDebug = debugMode
     ? {
