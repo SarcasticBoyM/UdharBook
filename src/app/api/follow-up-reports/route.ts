@@ -256,8 +256,8 @@ function chequeActivityDate(cheque: {
   bouncedAt: Date | null;
 }) {
   if (cheque.status === "BOUNCED" && cheque.bouncedAt) return cheque.bouncedAt;
+  if ((cheque.status === "DEPOSITED" || cheque.status === "CLEARED") && cheque.depositDateTime) return cheque.depositDateTime;
   if (cheque.status === "CLEARED" && cheque.clearedAt) return cheque.clearedAt;
-  if (cheque.status === "DEPOSITED" && cheque.depositDateTime) return cheque.depositDateTime;
   return cheque.collectionDateTime;
 }
 
@@ -272,8 +272,7 @@ function chequeSummary(cheque: {
   if (cheque.status === "BOUNCED") {
     return `Cheque bounced${cheque.bounceReason ? `: ${cheque.bounceReason}` : ", customer informed"}`;
   }
-  if (cheque.status === "CLEARED") return `Cheque cleared ${formatMoney(cheque.amount)}`;
-  if (cheque.status === "DEPOSITED") {
+  if (cheque.status === "DEPOSITED" || cheque.status === "CLEARED") {
     const bank = cheque.depositedAccount?.bankName ?? cheque.bankName;
     return `Cheque deposited in ${bank}`;
   }
@@ -930,7 +929,7 @@ export async function GET(request: Request) {
     const actor = cheque.collectedBy.name;
     const latestActivityAt = chequeActivityDate(cheque);
     const next = nextActionFor(cheque.customer);
-    const statusLabel = cheque.status === "PENDING_DEPOSIT" ? "Pending Deposit" : humanStatus(cheque.status);
+    const statusLabel = cheque.status === "PENDING_DEPOSIT" ? "Pending Deposit" : cheque.status === "CLEARED" ? "Deposited" : humanStatus(cheque.status);
     const summary = chequeSummary(cheque);
     const bankAccount = cheque.depositedAccount
       ? `${cheque.depositedAccount.bankName} - ${cheque.depositedAccount.accountName} - ${cheque.depositedAccount.lastFourDigits}`
@@ -938,10 +937,8 @@ export async function GET(request: Request) {
     const depositStatus =
       cheque.status === "BOUNCED"
         ? "Bounced"
-        : cheque.status === "CLEARED"
-          ? "Cleared"
-          : cheque.depositDateTime
-            ? `Deposited ${formatShortDate(cheque.depositDateTime)}`
+        : cheque.depositDateTime || cheque.status === "CLEARED"
+            ? `Deposited ${formatShortDate(cheque.depositDateTime ?? cheque.clearedAt ?? cheque.collectionDateTime)}`
             : "Pending deposit";
     const chequeNotes = [
       cleanText(cheque.collectionNotes),
@@ -958,8 +955,8 @@ export async function GET(request: Request) {
       summary,
       detailedNotes: chequeNotes,
       followUpType: "Payment Collection",
-      recoveryAmount: cheque.status === "CLEARED" ? cheque.amount : 0,
-      paymentStatus: cheque.status === "CLEARED" ? "Recovered" : "Pending",
+      recoveryAmount: cheque.status === "DEPOSITED" || cheque.status === "CLEARED" ? cheque.amount : 0,
+      paymentStatus: cheque.status === "DEPOSITED" || cheque.status === "CLEARED" ? "Deposited" : "Pending",
       promiseDate: null,
       nextAction: next.text,
       nextActionAt: next.at,

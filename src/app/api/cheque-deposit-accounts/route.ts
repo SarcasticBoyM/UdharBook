@@ -76,28 +76,16 @@ export async function GET(request: Request) {
   }
 
   const audit = accounts.map((account) => {
-      const statuses: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
-      const total = statuses.reduce(
-        (sum, item) => {
-          const value = bucket.get(`${account.id}:${item}`);
-          return { amount: sum.amount + (value?.amount ?? 0), count: sum.count + (value?.count ?? 0) };
-        },
-        { amount: 0, count: 0 },
-      );
-      const cleared = bucket.get(`${account.id}:CLEARED`);
+      const legacyCleared = bucket.get(`${account.id}:CLEARED`);
       const bounced = bucket.get(`${account.id}:BOUNCED`);
       const deposited = bucket.get(`${account.id}:DEPOSITED`);
       return {
         accountId: account.id,
         label: accountLabel(account),
-        totalDeposited: total.amount,
-        totalDepositedCount: total.count,
-        totalCleared: cleared?.amount ?? 0,
-        totalClearedCount: cleared?.count ?? 0,
+        totalDeposited: (deposited?.amount ?? 0) + (legacyCleared?.amount ?? 0),
+        totalDepositedCount: (deposited?.count ?? 0) + (legacyCleared?.count ?? 0),
         totalBounced: bounced?.amount ?? 0,
         totalBouncedCount: bounced?.count ?? 0,
-        pendingUnderClearing: deposited?.amount ?? 0,
-        pendingUnderClearingCount: deposited?.count ?? 0,
       };
     })
   ;

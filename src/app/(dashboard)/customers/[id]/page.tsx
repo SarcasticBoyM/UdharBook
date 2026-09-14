@@ -267,12 +267,12 @@ export default function CustomerDetailPage() {
 
   const chequeSummary = {
     total: customer.cheques.length,
-    clearedAmount: customer.cheques
-      .filter((cheque) => cheque.status === "CLEARED")
+    depositedAmount: customer.cheques
+      .filter((cheque) => cheque.status === "DEPOSITED" || cheque.status === "CLEARED")
       .reduce((sum, cheque) => sum + cheque.amount, 0),
     bounced: customer.cheques.filter((cheque) => cheque.status === "BOUNCED").length,
     pending: customer.cheques.filter((cheque) =>
-      ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED"].includes(cheque.status)
+      ["COLLECTED", "PENDING_DEPOSIT"].includes(cheque.status)
     ).length,
   };
 
@@ -635,7 +635,7 @@ export default function CustomerDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold">Cheque History</h2>
-            <p className="mt-1 text-sm text-slate-500">Collection, deposit, clearance, and bounce tracking.</p>
+            <p className="mt-1 text-sm text-slate-500">Collection, pending deposit, deposited, and bounce tracking.</p>
           </div>
           <Link href="/cheques" className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
             Open Cheque Collections
@@ -648,8 +648,8 @@ export default function CustomerDetailPage() {
             <p className="mt-1 text-xl font-bold">{chequeSummary.total}</p>
           </div>
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
-            <p className="text-xs">Cleared amount</p>
-            <p className="mt-1 text-xl font-bold">{formatCurrency(chequeSummary.clearedAmount)}</p>
+            <p className="text-xs">Deposited amount</p>
+            <p className="mt-1 text-xl font-bold">{formatCurrency(chequeSummary.depositedAmount)}</p>
           </div>
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
             <p className="text-xs">Pending cheques</p>
@@ -678,7 +678,7 @@ export default function CustomerDetailPage() {
                   </div>
                   <div className="text-right">
                     <p className="font-bold">{formatCurrency(cheque.amount)}</p>
-                    <p className="text-xs text-slate-500">{cheque.status.replace(/_/g, " ")}</p>
+                    <p className="text-xs text-slate-500">{(cheque.status === "CLEARED" ? "DEPOSITED" : cheque.status).replace(/_/g, " ")}</p>
                   </div>
                 </div>
                 <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
@@ -698,8 +698,8 @@ export default function CustomerDetailPage() {
                     {cheque.activities.map((activity) => (
                       <li key={activity.id}>
                         <p className="font-medium">
-                          {activity.type.replace(/_/g, " ")}
-                          {activity.toStatus ? ` - ${activity.toStatus.replace(/_/g, " ")}` : ""}
+                          {(activity.type === "CLEARED" ? "DEPOSITED" : activity.type).replace(/_/g, " ")}
+                          {activity.toStatus ? ` - ${(activity.toStatus === "CLEARED" ? "DEPOSITED" : activity.toStatus).replace(/_/g, " ")}` : ""}
                         </p>
                         <p className="text-xs text-slate-500">
                           {formatDate(activity.createdAt)} by {activity.user.name}

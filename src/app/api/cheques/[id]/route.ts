@@ -11,7 +11,7 @@ import { notifyChequeEvent } from "@/lib/notifications";
 import { isAccountsRole, isSalesRole, isShopAdminRole, normalizeFixedRole } from "@/lib/operational-roles";
 
 const updateSchema = z.object({
-  status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]).optional(),
+  status: z.enum(["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"]).optional(),
   notes: z.string().optional(),
   depositDateTime: z.string().datetime().optional().nullable(),
   depositedAccountId: z.string().optional(),
@@ -38,21 +38,8 @@ const updateSchema = z.object({
   correctionReason: z.string().optional(),
   expectedUpdatedAt: z.string().datetime().optional(),
   sourceScreen: z.string().max(80).optional(),
-  clearedAt: z.string().datetime().optional(),
-  clearedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   processingChecked: z.boolean().optional(),
 });
-
-function parseBusinessDate(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) throw new Error("INVALID_CLEARED_DATE");
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const utc = new Date(Date.UTC(year, month - 1, day));
-  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day) throw new Error("INVALID_CLEARED_DATE");
-  return new Date(Date.UTC(year, month - 1, day) - 330 * 60_000);
-}
 
 const BOUNCE_REASONS = [
   "Insufficient Funds",
@@ -188,7 +175,6 @@ async function balanceApplicationForCheque(tx: Prisma.TransactionClient, cheque:
 
 function activityType(status: ChequeStatus) {
   if (status === "DEPOSITED") return "DEPOSITED";
-  if (status === "CLEARED") return "CLEARED";
   if (status === "BOUNCED") return "BOUNCED";
   if (status === "REPLACED" || status === "RETURNED_TO_PARTY") return "REPLACED";
   if (status === "CANCELLED") return "CANCELLED";
@@ -196,14 +182,14 @@ function activityType(status: ChequeStatus) {
 }
 
 function normalizedStatus(status: ChequeStatus) {
-  return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
+  return status === "CLEARED" ? "DEPOSITED" : status;
 }
 
 function isValidTransition(from: ChequeStatus, to: ChequeStatus) {
   const current = normalizedStatus(from);
   if (to === current) return true;
-  if (current === "COLLECTED") return to === "DEPOSITED" || to === "CANCELLED";
-  if (current === "DEPOSITED") return to === "CLEARED" || to === "BOUNCED";
+  if (current === "COLLECTED" || current === "PENDING_DEPOSIT") return to === "DEPOSITED" || to === "CANCELLED";
+  if (current === "DEPOSITED") return to === "BOUNCED";
   if (current === "BOUNCED") return to === "DEPOSITED" || to === "RETURNED_TO_PARTY";
   return false;
 }
@@ -238,10 +224,12 @@ export async function PATCH(
   const { id } = await params;
   const shopId = requireShopId(request, session);
   const payload = await request.json();
+  if (payload?.status === "CLEARED" || payload?.clearedDate !== undefined || payload?.clearedAt !== undefined) {
+    return NextResponse.json({ error: "Cleared is no longer part of the cheque workflow. Deposited cheques are complete unless they bounce." }, { status: 400 });
+  }
   const parsedBody = updateSchema.safeParse(payload);
   if (!parsedBody.success) {
-    const clearingRequest = payload?.status === "CLEARED" || payload?.clearedDate !== undefined || payload?.clearedAt !== undefined;
-    return NextResponse.json({ error: clearingRequest ? "Select a valid cleared date." : "Invalid cheque update." }, { status: 400 });
+    return NextResponse.json({ error: "Invalid cheque update." }, { status: 400 });
   }
   const body = parsedBody.data;
   const processingOnly = body.processingChecked !== undefined
@@ -581,7 +569,7 @@ export async function PATCH(
       { status: 400 }
     );
   }
-  const requiresDepositAccount = ["DEPOSITED", "CLEARED"].includes(targetStatus);
+  const requiresDepositAccount = targetStatus === "DEPOSITED";
   if (requiresDepositAccount && !body.depositedAccountId && !existing.depositedAccountId) {
     return NextResponse.json({ error: "Deposit account is required" }, { status: 400 });
   }
@@ -595,13 +583,6 @@ export async function PATCH(
   }
 
   const now = new Date();
-  const clearedAt = targetStatus === "CLEARED"
-    ? body.clearedDate
-      ? parseBusinessDate(body.clearedDate)
-      : body.clearedAt
-        ? new Date(body.clearedAt)
-        : now
-    : null;
   const transactionResult = await prisma.$transaction(async (tx) => {
     const current = await tx.cheque.findFirst({
       where: { id, shopId },
@@ -635,8 +616,8 @@ export async function PATCH(
       | { applied: false; reason: "BALANCE_NOT_APPLIED" | "ALREADY_REVERSED" | "NOT_A_BOUNCE" }
       = { applied: false, reason: "NOT_A_BOUNCE" };
 
-    if (targetStatus === "CLEARED" && current.status !== "CLEARED") {
-      const clearingClaim = await tx.cheque.updateMany({
+    if (targetStatus === "DEPOSITED") {
+      const depositClaim = await tx.cheque.updateMany({
         where: {
           id,
           shopId,
@@ -644,11 +625,11 @@ export async function PATCH(
           ...(current.balanceReversedAt ? { balanceReappliedAt: null } : {}),
         },
         data: {
-          status: "CLEARED",
+          status: "DEPOSITED",
           ...(current.balanceReversedAt ? { balanceReappliedAt: now } : {}),
         },
       });
-      if (clearingClaim.count === 0) return replayResult("NO_STATUS_TRANSITION");
+      if (depositClaim.count === 0) return replayResult("NO_STATUS_TRANSITION");
 
       if (!balanceApplication) {
         const nextBalance = Math.max(0, current.customer.outstandingBalance - current.amount);
@@ -657,7 +638,7 @@ export async function PATCH(
           where: { id: current.customerId },
           data: {
             outstandingBalance: nextBalance,
-            status: nextBalance <= 0 ? "CLEARED" : current.customer.status === "CLEARED" ? "PENDING" : current.customer.status,
+            status: customerStatusFor(nextBalance, current.customer.status),
           },
         });
         const paymentEntry = await tx.paymentEntry.create({
@@ -666,8 +647,8 @@ export async function PATCH(
             customerId: current.customerId,
             amount: current.amount,
             method: "CHEQUE",
-            notes: `Cheque cleared: ${current.chequeNumber}`,
-            paidAt: clearedAt ?? now,
+            notes: `Cheque deposited: ${current.chequeNumber}`,
+            paidAt: now,
             createdById: session.id,
           },
         });
@@ -684,8 +665,8 @@ export async function PATCH(
           data: {
             customerId: current.customerId,
             fromStatus: current.customer.status,
-            toStatus: nextBalance <= 0 ? "CLEARED" : current.customer.status,
-            notes: `Cheque cleared: ${current.chequeNumber}. Balance reduced from ${current.customer.outstandingBalance} to ${nextBalance}`,
+            toStatus: customerStatusFor(nextBalance, current.customer.status),
+            notes: `Cheque deposited: ${current.chequeNumber}. Balance reduced from ${current.customer.outstandingBalance} to ${nextBalance}`,
             changedById: session.id,
           },
         });
@@ -699,15 +680,15 @@ export async function PATCH(
           where: { id: appliedCustomer.id },
           data: {
             outstandingBalance: nextBalance,
-            status: nextBalance <= 0 ? "CLEARED" : appliedCustomer.status === "CLEARED" ? "PENDING" : appliedCustomer.status,
+            status: customerStatusFor(nextBalance, appliedCustomer.status),
           },
         });
         await tx.statusHistory.create({
           data: {
             customerId: appliedCustomer.id,
             fromStatus: appliedCustomer.status,
-            toStatus: nextBalance <= 0 ? "CLEARED" : appliedCustomer.status,
-            notes: `Re-deposited cheque cleared: ${current.chequeNumber}. Balance reduced from ${appliedCustomer.outstandingBalance} to ${nextBalance}`,
+            toStatus: customerStatusFor(nextBalance, appliedCustomer.status),
+            notes: `Re-deposited cheque: ${current.chequeNumber}. Balance reduced from ${appliedCustomer.outstandingBalance} to ${nextBalance}`,
             changedById: session.id,
           },
         });
@@ -790,7 +771,7 @@ export async function PATCH(
       }
     }
 
-    if (targetStatus !== "BOUNCED" && targetStatus !== "CLEARED") {
+    if (targetStatus !== "BOUNCED" && targetStatus !== "DEPOSITED") {
       const transitionClaim = await tx.cheque.updateMany({
         where: { id, shopId, status: current.status },
         data: { status: targetStatus },
@@ -829,7 +810,7 @@ export async function PATCH(
       data: {
         status: targetStatus,
         depositDateTime:
-          ["DEPOSITED", "CLEARED"].includes(targetStatus)
+          targetStatus === "DEPOSITED"
             ? body.depositDateTime
               ? new Date(body.depositDateTime)
               : current.depositDateTime ?? now
@@ -855,10 +836,10 @@ export async function PATCH(
             : body.depositReceiptUrl
               ? session.id
               : current.depositReceiptUploadedById,
-        depositedById: ["DEPOSITED", "CLEARED"].includes(targetStatus) ? session.id : current.depositedById,
+        depositedById: targetStatus === "DEPOSITED" ? session.id : current.depositedById,
         bounceReason: targetStatus === "BOUNCED" ? body.bounceReason ?? body.notes : current.bounceReason,
         bouncedAt: targetStatus === "BOUNCED" ? now : current.bouncedAt,
-        clearedAt: targetStatus === "CLEARED" ? clearedAt : current.clearedAt,
+        clearedAt: current.clearedAt,
         cancelledAt: ["CANCELLED", "RETURNED_TO_PARTY"].includes(targetStatus) ? now : current.cancelledAt,
       },
       include: responseInclude,
@@ -875,9 +856,7 @@ export async function PATCH(
         notes:
           targetStatus === "BOUNCED" && balanceReversal.applied
             ? `Cheque bounced. Amount: ${current.amount}. Reason: ${body.bounceReason}. Balance restored: ${balanceReversal.amount}. Balance ${balanceReversal.previousBalance} -> ${balanceReversal.newBalance}.`
-            : targetStatus === "CLEARED"
-              ? `Cheque marked cleared for ${body.clearedDate ?? clearedAt?.toISOString()}.`
-              : body.notes ??
+            : body.notes ??
                 body.bounceReason ??
                 (depositAccount ? `Deposited in ${depositAccount.bankName} - ${depositAccount.accountName} - ${depositAccount.lastFourDigits}` : undefined),
       },
@@ -905,10 +884,6 @@ export async function PATCH(
         ? "PENDING"
         : targetStatus === "RETURNED_TO_PARTY"
           ? "PENDING"
-        : targetStatus === "CLEARED"
-          ? current.amount >= current.customer.outstandingBalance
-            ? "PAID"
-            : "PARTIAL_PAID"
           : "COMPLETED";
     await recordFollowUpActivity(tx, {
       shopId,
@@ -919,11 +894,11 @@ export async function PATCH(
       notes:
         body.notes ??
         body.bounceReason ??
-        (targetStatus === "DEPOSITED" || targetStatus === "CLEARED" ? `Cheque ${targetStatus.toLowerCase()} ${depositSummary}`.trim() : undefined),
+        (targetStatus === "DEPOSITED" ? `Cheque deposited ${depositSummary}`.trim() : undefined),
       nextFollowupDate: targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY" ? now : null,
       scheduledAt: targetStatus === "BOUNCED" || targetStatus === "RETURNED_TO_PARTY" ? now : null,
       recoveryAmount: current.amount,
-      paymentStatus: targetStatus === "CLEARED" ? "PAID_BY_CHEQUE" : targetStatus,
+      paymentStatus: targetStatus,
       chequeId: current.id,
       chequeStatus: targetStatus,
       sourceModule: "CHEQUE_DEPOSIT",
@@ -931,9 +906,7 @@ export async function PATCH(
       summary:
         targetStatus === "DEPOSITED"
           ? `Cheque deposited${depositSummary ? ` in ${depositSummary}` : ""}`
-          : targetStatus === "CLEARED"
-            ? `Cheque cleared Rs ${current.amount}`
-            : targetStatus === "BOUNCED"
+          : targetStatus === "BOUNCED"
               ? "Cheque bounced and customer follow-up required"
               : targetStatus === "RETURNED_TO_PARTY"
                 ? "Cheque returned to party and workflow closed"

@@ -23,6 +23,10 @@ const emptyStats: DashboardStats = {
   todayCheques: 0,
   todayChequeAmount: 0,
   pendingCheques: 0,
+  collectedCheques: 0,
+  pendingDepositCheques: 0,
+  depositedCheques: 0,
+  bouncedCheques: 0,
   overdueFollowups: 0,
   highOutstanding: 0,
   recoveryAmount: 0,
@@ -52,6 +56,10 @@ type DashboardCoreRow = {
   todayCheques: number;
   todayChequeAmount: number;
   pendingCheques: number;
+  collectedCheques: number;
+  pendingDepositCheques: number;
+  depositedCheques: number;
+  bouncedCheques: number;
 };
 
 async function selectedShopId(session: NonNullable<Awaited<ReturnType<typeof getSession>>>) {
@@ -113,7 +121,11 @@ async function getStats(shopId: string): Promise<DashboardStats> {
       COALESCE((SELECT SUM(amount) FROM (SELECT amount FROM "PaymentEntry" WHERE "shopId" = ${shopId} ORDER BY "paidAt" ASC LIMIT 200) p), 0)::float8 AS "recoveryAmount",
       (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${todayStart} AND "chequeDate" <= ${todayEnd}) AS "todayCheques",
       COALESCE((SELECT SUM(amount) FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${todayStart} AND "chequeDate" <= ${todayEnd}), 0)::float8 AS "todayChequeAmount",
-      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT')) AS "pendingCheques"
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('COLLECTED', 'PENDING_DEPOSIT')) AS "pendingCheques",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status = 'COLLECTED') AS "collectedCheques",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status = 'PENDING_DEPOSIT') AS "pendingDepositCheques",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status IN ('DEPOSITED', 'CLEARED')) AS "depositedCheques",
+      (SELECT COUNT(*)::int FROM "Cheque" WHERE "shopId" = ${shopId} AND status = 'BOUNCED') AS "bouncedCheques"
   `);
   const core = rows[0];
   const stats: DashboardStats = core ? { ...emptyStats, ...core } : emptyStats;

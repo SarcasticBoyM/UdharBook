@@ -14,7 +14,7 @@ import { notifyChequeEvent } from "@/lib/notifications";
 
 const HIGH_VALUE = Number(process.env.HIGH_CHEQUE_AMOUNT ?? 50000);
 const INDIA_TIMEZONE_OFFSET_MINUTES = 330;
-const VALID_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "CLEARED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
+const VALID_CHEQUE_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "BOUNCED", "REPLACED", "RETURNED_TO_PARTY", "CANCELLED"];
 const PENDING_DEPOSIT_STATUSES: ChequeStatus[] = ["COLLECTED", "PENDING_DEPOSIT"];
 
 const createSchema = z.object({
@@ -100,7 +100,6 @@ function safeDateOnly(value: unknown) {
 }
 
 function dateFieldForStatus(status?: ChequeStatus | null) {
-  if (status === "CLEARED") return "clearedAt";
   if (status === "DEPOSITED") return "depositDateTime";
   if (status === "BOUNCED") return "bouncedAt";
   if (status === "RETURNED_TO_PARTY" || status === "CANCELLED") return "cancelledAt";
@@ -112,13 +111,12 @@ function dateFieldForQuick(quick: string, status?: ChequeStatus | null) {
   if (quick === "due_today") return "chequeDate";
   if (quick === "deposited") return "depositDateTime";
   if (quick === "bounced") return "bouncedAt";
-  if (quick === "cleared") return "clearedAt";
   if (quick === "returned") return "cancelledAt";
   return "collectionDateTime";
 }
 
 function dateRangeCondition(
-  field: "collectionDateTime" | "depositDateTime" | "clearedAt" | "bouncedAt" | "cancelledAt" | "chequeDate",
+  field: "collectionDateTime" | "depositDateTime" | "bouncedAt" | "cancelledAt" | "chequeDate",
   from?: Date,
   to?: Date,
 ): Prisma.ChequeWhereInput {
@@ -195,7 +193,6 @@ function supportsProcessingChecked() {
 type GlobalChequeSummary = {
   collectedToday: number;
   depositedToday: number;
-  clearedToday: number;
   pendingDeposit: number;
   copiedCount: number;
   remainingCount: number;
@@ -205,11 +202,9 @@ type GlobalChequeSummary = {
   stale: number;
   chequeDateTomorrow: number;
   underClearingAmount: number;
-  clearedAmount: number;
   bouncedAmount: number;
   pendingDepositAmount: number;
   depositedTodayAmount: number;
-  clearedTodayAmount: number;
 };
 
 function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof chequeInclude> }>) {
@@ -227,7 +222,7 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     chequeDate: cheque.chequeDate,
     amount: cheque.amount,
     accountHolderName: safeText(cheque.accountHolderName),
-    status: cheque.status,
+    status: cheque.status === "CLEARED" ? "DEPOSITED" : cheque.status,
     collectionDateTime: cheque.collectionDateTime,
     collectionLatitude: cheque.collectionLatitude,
     collectionLongitude: cheque.collectionLongitude,
@@ -252,7 +247,6 @@ function chequeRow(cheque: Prisma.ChequeGetPayload<{ include: ReturnType<typeof 
     ocrConfidence: cheque.ocrConfidence ?? 0,
     frontImageUrl: cheque.frontImageUrl ?? "",
     bounceReason: cheque.bounceReason ?? "",
-    clearedAt: cheque.clearedAt,
     bouncedAt: cheque.bouncedAt,
     createdAt: cheque.createdAt,
     notes: cheque.collectionNotes || cheque.bounceReason || "",
@@ -275,7 +269,6 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[], sheetName = 
     { header: "Cheque Date", key: "chequeDate", width: 18 },
     { header: "Collected Date", key: "collectionDateTime", width: 24 },
     { header: "Deposit Date", key: "depositDateTime", width: 24 },
-    { header: "Clearance Date", key: "clearedAt", width: 24 },
     { header: "Bounce Date", key: "bouncedAt", width: 24 },
     { header: "Current Status", key: "status", width: 18 },
     { header: "Collected By", key: "collectedBy", width: 18 },
@@ -293,7 +286,6 @@ async function chequesToExcel(rows: ReturnType<typeof chequeRow>[], sheetName = 
       chequeDate: safeIso(row.chequeDate),
       collectionDateTime: safeIso(row.collectionDateTime),
       depositDateTime: safeIso(row.depositDateTime),
-      clearedAt: safeIso(row.clearedAt),
       bouncedAt: safeIso(row.bouncedAt),
       createdAt: safeIso(row.createdAt),
     })
@@ -313,7 +305,6 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       "Cheque Date",
       "Collected Date",
       "Deposit Date",
-      "Clearance Date",
       "Bounce Date",
       "Current Status",
       "Collected By",
@@ -334,7 +325,6 @@ function chequesToCsv(rows: ReturnType<typeof chequeRow>[]) {
       safeIso(row.chequeDate),
       safeIso(row.collectionDateTime),
       safeIso(row.depositDateTime),
-      safeIso(row.clearedAt),
       safeIso(row.bouncedAt),
       row.status,
       row.collectedBy,
@@ -353,7 +343,7 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     safeText(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const generatedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date());
   const reportTitle = input.title ?? "Cheques Report";
-  const statusClass = (status: string) => status === "CLEARED" ? "green" : status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
+  const statusClass = (status: string) => status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY" ? "red" : status === "DEPOSITED" ? "blue" : "yellow";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(reportTitle)}</title><style>
     body{font-family:Arial,sans-serif;color:#0f172a;margin:0;padding:20px;background:#fff}
     header{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:14px}
@@ -380,14 +370,13 @@ function printableHtml(rows: ReturnType<typeof chequeRow>[], input: { shopName: 
     "Cheque Date",
     "Collected Date",
     "Deposit Date",
-    "Clearance Date",
     "Bounce Date",
     "Status",
     "Collected By",
     "Deposit Account",
     "Notes",
     "Created At",
-  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.batchTag)}</td><td>${escape(r.mobileNumber)}</td><td>${safeText(r.amount)}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${safeDateOnly(r.chequeDate)}</td><td>${safeDateOnly(r.collectionDateTime)}</td><td>${safeDateOnly(r.depositDateTime)}</td><td>${safeDateOnly(r.clearedAt)}</td><td>${safeDateOnly(r.bouncedAt)}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : safeText(r.status)}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td><td>${safeDateOnly(r.createdAt)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook ${escape(reportTitle)}.</footer><script>window.print()</script></body></html>`;
+  ].map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr><td>${escape(r.customerName)}</td><td>${escape(r.batchTag)}</td><td>${escape(r.mobileNumber)}</td><td>${safeText(r.amount)}</td><td>${escape(r.chequeNumber)}</td><td>${escape(r.bankName)}</td><td>${safeDateOnly(r.chequeDate)}</td><td>${safeDateOnly(r.collectionDateTime)}</td><td>${safeDateOnly(r.depositDateTime)}</td><td>${safeDateOnly(r.bouncedAt)}</td><td><span class="badge ${statusClass(r.status)}">${r.status === "RETURNED_TO_PARTY" ? "RETURNED" : safeText(r.status)}</span></td><td>${escape(r.collectedBy)}</td><td>${escape(r.depositedAccount)}</td><td>${escape(r.notes)}</td><td>${safeDateOnly(r.createdAt)}</td></tr>`).join("")}</tbody></table><footer>Page numbers are available from the browser print dialog. UdharBook ${escape(reportTitle)}.</footer><script>window.print()</script></body></html>`;
 }
 
 export async function GET(request: Request) {
@@ -494,15 +483,16 @@ export async function GET(request: Request) {
   if (bankName) conditions.push({ bankName: { contains: bankName, mode: "insensitive" } });
 
   const quickStatus: ChequeStatus | undefined =
-    quick === "bounced" ? "BOUNCED" : quick === "deposited" ? "DEPOSITED" : quick === "cleared" ? "CLEARED" : quick === "returned" ? "RETURNED_TO_PARTY" : undefined;
+    quick === "bounced" ? "BOUNCED" : quick === "returned" ? "RETURNED_TO_PARTY" : quick === "collected" ? "COLLECTED" : undefined;
   const dateField = dateFieldForQuick(quick, status || quickStatus);
   if (from || to) {
     conditions.push(dateRangeCondition(dateField, from, to));
   }
 
-  if (status === "PENDING_DEPOSIT") conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
+  if (status === "DEPOSITED") conditions.push({ status: { in: ["DEPOSITED", "CLEARED"] } });
   else if (status) conditions.push({ status });
-  else if (quick === "pending") conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
+  else if (quick === "pending") conditions.push({ status: "PENDING_DEPOSIT" });
+  else if (quick === "deposited") conditions.push({ status: { in: ["DEPOSITED", "CLEARED"] } });
   else if (quick === "due_today") {
     conditions.push({ status: { in: PENDING_DEPOSIT_STATUSES } });
     conditions.push({ chequeDate: { lte: todayEnd } });
@@ -558,7 +548,6 @@ export async function GET(request: Request) {
           COUNT(*)::int AS "totalCollected",
           COUNT(*) FILTER (WHERE "collectionDateTime" >= ${todayStart} AND "collectionDateTime" <= ${todayEnd})::int AS "collectedToday",
           COUNT(*) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd})::int AS "depositedToday",
-          COUNT(*) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd})::int AS "clearedToday",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT'))::int AS "pendingDeposit",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND COALESCE((to_jsonb("Cheque") ->> 'processingChecked')::boolean, false) = true)::int AS "copiedCount",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND COALESCE((to_jsonb("Cheque") ->> 'processingChecked')::boolean, false) = false)::int AS "remainingCount",
@@ -566,12 +555,10 @@ export async function GET(request: Request) {
           COUNT(*) FILTER (WHERE amount >= ${HIGH_VALUE})::int AS "highValue",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "collectionDateTime" < ${staleDate})::int AS stale,
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "chequeDate" >= ${tomorrowStart} AND "chequeDate" <= ${tomorrowEnd})::int AS "chequeDateTomorrow",
-          COALESCE(SUM(amount) FILTER (WHERE status = 'DEPOSITED'), 0)::float8 AS "underClearingAmount",
-          COALESCE(SUM(amount) FILTER (WHERE status = 'CLEARED'), 0)::float8 AS "clearedAmount",
+          COALESCE(SUM(amount) FILTER (WHERE status IN ('DEPOSITED', 'CLEARED')), 0)::float8 AS "underClearingAmount",
           COALESCE(SUM(amount) FILTER (WHERE status = 'BOUNCED'), 0)::float8 AS "bouncedAmount",
           COALESCE(SUM(amount) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT')), 0)::float8 AS "pendingDepositAmount",
-          COALESCE(SUM(amount) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd}), 0)::float8 AS "depositedTodayAmount",
-          COALESCE(SUM(amount) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd}), 0)::float8 AS "clearedTodayAmount"
+          COALESCE(SUM(amount) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd}), 0)::float8 AS "depositedTodayAmount"
         FROM "Cheque"
         WHERE "shopId" = ${shopId}
       `),
@@ -592,19 +579,19 @@ export async function GET(request: Request) {
     });
 
   const global = globalRows[0] ?? {
-    collectedToday: 0, depositedToday: 0, clearedToday: 0, pendingDeposit: 0, copiedCount: 0, remainingCount: 0, bounced: 0,
+    collectedToday: 0, depositedToday: 0, pendingDeposit: 0, copiedCount: 0, remainingCount: 0, bounced: 0,
     highValue: 0, totalCollected: 0, stale: 0, chequeDateTomorrow: 0, underClearingAmount: 0,
-    clearedAmount: 0, bouncedAmount: 0, pendingDepositAmount: 0, depositedTodayAmount: 0, clearedTodayAmount: 0,
+    bouncedAmount: 0, pendingDepositAmount: 0, depositedTodayAmount: 0,
   };
   const filteredByStatus = new Map(filteredGroups.map((group) => [group.status, { count: group._count._all, amount: group._sum.amount ?? 0 }]));
   const filteredAmount = (statuses: ChequeStatus[]) => statuses.reduce((sum, statusValue) => sum + (filteredByStatus.get(statusValue)?.amount ?? 0), 0);
   const filteredTotalAmount = filteredGroups.reduce((sum, group) => sum + (group._sum.amount ?? 0), 0);
-  const filteredDepositedAmount = filteredAmount(["DEPOSITED"]);
+  const filteredDepositedAmount = filteredAmount(["DEPOSITED", "CLEARED"]);
   const filteredPendingAmount = filteredAmount(PENDING_DEPOSIT_STATUSES);
-  const filteredClearedAmount = filteredAmount(["CLEARED"]);
   const filteredBouncedAmount = filteredAmount(["BOUNCED"]);
   const items = listItems.map((item) => ({
     ...item,
+    status: item.status === "CLEARED" ? "DEPOSITED" as const : item.status,
     processingChecked: "processingChecked" in item ? item.processingChecked : false,
   }));
   const rows = exportItems.map(chequeRow);
@@ -766,8 +753,8 @@ export async function GET(request: Request) {
         summary: {
           "Total Cheques": total,
           "Total Amount": filteredTotalAmount,
-          "Pending Clearance": filteredPendingAmount,
-          "Cleared Amount": global.clearedAmount,
+          "Pending Deposit": filteredPendingAmount,
+          "Deposited Amount": filteredDepositedAmount,
           "Bounced Amount": global.bouncedAmount,
         },
       });
@@ -819,21 +806,17 @@ export async function GET(request: Request) {
       collectedToday: global.collectedToday,
       pendingDeposit: global.pendingDeposit,
       depositedToday: global.depositedToday,
-      clearedToday: global.clearedToday,
       bounced: global.bounced,
       highValue: global.highValue,
       totalCollected: global.totalCollected,
       underClearingAmount: global.underClearingAmount,
-      clearedAmount: global.clearedAmount,
       bouncedAmount: global.bouncedAmount,
       pendingDepositAmount: global.pendingDepositAmount,
       depositedTodayAmount: global.depositedTodayAmount,
-      clearedTodayAmount: global.clearedTodayAmount,
       filteredChequeCount: total,
       filteredTotalAmount,
       filteredDepositedAmount,
       filteredPendingAmount,
-      filteredClearedAmount,
       filteredBouncedAmount,
     },
     pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },

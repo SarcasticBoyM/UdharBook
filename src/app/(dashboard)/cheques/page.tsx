@@ -77,12 +77,8 @@ type AccountAudit = {
   label: string;
   totalDeposited: number;
   totalDepositedCount: number;
-  totalCleared: number;
-  totalClearedCount: number;
   totalBounced: number;
   totalBouncedCount: number;
-  pendingUnderClearing: number;
-  pendingUnderClearingCount: number;
 };
 
 type ChequeItem = {
@@ -112,7 +108,6 @@ type ChequeItem = {
   depositReceiptUploadedAt?: string | null;
   depositReceiptUploadedBy?: UserOption | null;
   bounceReason?: string | null;
-  clearedAt?: string | null;
   bouncedAt?: string | null;
   updatedAt: string;
   collectedById: string;
@@ -141,21 +136,17 @@ type ChequeResponse = {
     collectedToday: number;
     pendingDeposit: number;
     depositedToday: number;
-    clearedToday: number;
     bounced: number;
     highValue: number;
     totalCollected: number;
     underClearingAmount: number;
-    clearedAmount: number;
     bouncedAmount: number;
     pendingDepositAmount: number;
     depositedTodayAmount: number;
-    clearedTodayAmount: number;
     filteredChequeCount: number;
     filteredTotalAmount: number;
     filteredDepositedAmount: number;
     filteredPendingAmount: number;
-    filteredClearedAmount: number;
     filteredBouncedAmount: number;
   };
   pagination: { page: number; limit: number; total: number; pages: number };
@@ -207,11 +198,10 @@ type CustomerSearchResponse = {
 };
 
 const quickFilters = [
-  { label: "All Cheques", value: "all" },
-  { label: "Deposit Due Today", value: "due_today" },
+  { label: "All", value: "all" },
+  { label: "Collected", value: "collected" },
   { label: "Pending Deposit", value: "pending" },
   { label: "Deposited", value: "deposited" },
-  { label: "Cleared", value: "cleared" },
   { label: "Bounced", value: "bounced" },
   { label: "Returned", value: "returned" },
 ];
@@ -226,7 +216,7 @@ const statusTone: Record<ChequeStatus, string> = {
   COLLECTED: "bg-blue-50 text-blue-700 ring-blue-200",
   PENDING_DEPOSIT: "bg-amber-50 text-amber-700 ring-amber-200",
   DEPOSITED: "bg-indigo-50 text-indigo-700 ring-indigo-200",
-  CLEARED: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  CLEARED: "bg-indigo-50 text-indigo-700 ring-indigo-200",
   BOUNCED: "bg-red-50 text-red-700 ring-red-200",
   REPLACED: "bg-violet-50 text-violet-700 ring-violet-200",
   RETURNED_TO_PARTY: "bg-rose-50 text-rose-700 ring-rose-200",
@@ -378,7 +368,11 @@ function alertText(alerts: ChequeResponse["alerts"]) {
 }
 
 function normalizedChequeStatus(status?: ChequeStatus | null) {
-  return status === "PENDING_DEPOSIT" ? "COLLECTED" : status;
+  return status === "CLEARED" ? "DEPOSITED" : status;
+}
+
+function isPendingProcessingStatus(status?: ChequeStatus | null) {
+  return status === "COLLECTED" || status === "PENDING_DEPOSIT";
 }
 
 function isCollectedEditable(status?: ChequeStatus | null) {
@@ -455,7 +449,6 @@ export default function ChequeCollectionsPage() {
   const [deleteAccount, setDeleteAccount] = useState<DepositAccount | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
   const [depositAction, setDepositAction] = useState<{ cheque: ChequeItem; status: ChequeStatus } | null>(null);
-  const [clearedDate, setClearedDate] = useState("");
   const [depositActionError, setDepositActionError] = useState("");
   const [bounceAction, setBounceAction] = useState<ChequeItem | null>(null);
   const [bounceReason, setBounceReason] = useState<(typeof bounceReasons)[number]>("Insufficient Funds");
@@ -578,7 +571,6 @@ export default function ChequeCollectionsPage() {
     if (from) search.set("from", from);
     if (to) search.set("to", to);
     if (staffId) search.set("staffId", staffId);
-    if (quick === "cleared") search.set("status", "CLEARED");
     if (quick === "bounced") search.set("status", "BOUNCED");
     if (quick === "deposited") search.set("status", "DEPOSITED");
     const res = await fetch(`/api/cheque-deposit-accounts?${search.toString()}`);
@@ -717,9 +709,8 @@ export default function ChequeCollectionsPage() {
     status: ChequeStatus,
     extraBody: Record<string, string> = {},
   ) => {
-    if (["DEPOSITED", "CLEARED"].includes(status)) {
+    if (status === "DEPOSITED") {
       setDepositAction({ cheque, status });
-      setClearedDate(status === "CLEARED" ? currentIstDate() : "");
       setDepositActionError("");
       setSelectedDepositAccountId(cheque.depositedAccountId ?? cheque.depositedAccount?.id ?? depositAccounts[0]?.id ?? "");
       setAccountSearch("");
@@ -777,10 +768,6 @@ export default function ChequeCollectionsPage() {
 
   const confirmDepositAction = async () => {
     if (!depositAction || !selectedDepositAccountId || receiptUploading) return;
-    if (depositAction.status === "CLEARED" && !clearedDate) {
-      setDepositActionError("Select a valid cleared date.");
-      return;
-    }
     const account = depositAccounts.find((item) => item.id === selectedDepositAccountId);
     setReceiptUploading(true);
     let receiptPayload: {
@@ -819,8 +806,7 @@ export default function ChequeCollectionsPage() {
       status: depositAction.status,
       depositedAccountId: selectedDepositAccountId,
       depositBankAccount: account ? `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}` : undefined,
-      ...(depositAction.status === "DEPOSITED" ? { depositDateTime: new Date().toISOString() } : {}),
-      ...(depositAction.status === "CLEARED" ? { clearedDate } : {}),
+      depositDateTime: new Date().toISOString(),
       ...receiptPayload,
     };
 
@@ -830,20 +816,15 @@ export default function ChequeCollectionsPage() {
       body: JSON.stringify(body),
     });
     if (res.ok) {
-      const completedStatus = depositAction.status;
       setDepositAction(null);
       setSelectedDepositAccountId("");
       setReceiptFile(null);
       setReceiptPreview("");
       loadCheques();
       loadDepositAccounts();
-      if (completedStatus === "CLEARED") {
-        setToast("Cheque marked cleared.");
-        window.setTimeout(() => setToast((current) => current === "Cheque marked cleared." ? "" : current), 1800);
-      }
     } else {
       const error = await res.json().catch(() => ({}));
-      setDepositActionError(error.error ?? (depositAction.status === "CLEARED" ? "Could not mark cheque cleared. Please try again." : "Could not update deposit account."));
+      setDepositActionError(error.error ?? "Could not update deposit account.");
     }
     setReceiptUploading(false);
   };
@@ -946,7 +927,7 @@ export default function ChequeCollectionsPage() {
     setData((current) => current ? {
       ...current,
       items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked } : item),
-      summary: normalizedChequeStatus(cheque.status) === "COLLECTED" && previousValue !== processingChecked
+      summary: isPendingProcessingStatus(cheque.status) && previousValue !== processingChecked
         ? {
             ...current.summary,
             copiedCount: current.summary.copiedCount + (processingChecked ? 1 : -1),
@@ -969,7 +950,7 @@ export default function ChequeCollectionsPage() {
       setData((current) => current ? {
         ...current,
         items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked: previousValue } : item),
-        summary: normalizedChequeStatus(cheque.status) === "COLLECTED" && previousValue !== processingChecked
+        summary: isPendingProcessingStatus(cheque.status) && previousValue !== processingChecked
           ? {
               ...current.summary,
               copiedCount: current.summary.copiedCount + (processingChecked ? -1 : 1),
@@ -1288,16 +1269,8 @@ export default function ChequeCollectionsPage() {
                   <p className="font-semibold">{formatCurrency(audit.totalDeposited)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500">Cleared</p>
-                  <p className="font-semibold text-emerald-700">{formatCurrency(audit.totalCleared)}</p>
-                </div>
-                <div>
                   <p className="text-xs text-slate-500">Bounced</p>
                   <p className="font-semibold text-red-700">{formatCurrency(audit.totalBounced)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-500">Under clearing</p>
-                  <p className="font-semibold text-indigo-700">{formatCurrency(audit.pendingUnderClearing)}</p>
                 </div>
               </div>
             </div>
@@ -1577,7 +1550,7 @@ export default function ChequeCollectionsPage() {
                       <p className="font-bold">{formatCurrency(cheque.amount)}</p>
                       <p className="text-xs font-medium text-slate-500">{formatDate(cheque.chequeDate)}</p>
                       <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1", statusTone[cheque.status])}>
-                        {formatStatus(cheque.status)}
+                        {formatStatus(normalizedChequeStatus(cheque.status))}
                       </span>
                     </div>
                   </div>
@@ -1587,22 +1560,15 @@ export default function ChequeCollectionsPage() {
                       <Copy className="h-4 w-4" />
                       Copy Details
                     </button>
-                    {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
+                    {isPendingProcessingStatus(cheque.status) && (
                       <button type="button" onClick={() => updateStatus(cheque, "DEPOSITED")} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
                         Deposit
                       </button>
                     )}
-                    {normalizedChequeStatus(cheque.status) === "DEPOSITED" && (
-                      <>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "CLEARED"); }} className="min-h-10 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white">
-                          Cleared
-                        </button>
-                        {canManageChequeAccounting(currentRole) && (
-                          <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
-                            Bounced
-                          </button>
-                        )}
-                      </>
+                    {normalizedChequeStatus(cheque.status) === "DEPOSITED" && canManageChequeAccounting(currentRole) && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
+                        Bounced
+                      </button>
                     )}
                     {normalizedChequeStatus(cheque.status) === "BOUNCED" && (
                       <>
@@ -1645,6 +1611,20 @@ export default function ChequeCollectionsPage() {
                               <button type="button" onClick={(e) => { e.stopPropagation(); void loadAndOpenEditChequeForm(cheque); }} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium dark:border-slate-700">
                                 <Pencil className="h-4 w-4" />
                                 Edit Cheque
+                              </button>
+                            )}
+                            {isPendingProcessingStatus(cheque.status) && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (window.confirm("Delete this cheque from the active workflow? Its history will be preserved.")) {
+                                    void performStatusUpdate(cheque, "CANCELLED", { notes: "Cheque removed from active workflow" });
+                                  }
+                                }}
+                                className="min-h-10 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700"
+                              >
+                                Delete
                               </button>
                             )}
                           </div>
@@ -1742,7 +1722,7 @@ export default function ChequeCollectionsPage() {
               <div>
                 <h2 className="text-xl font-bold">{editingCheque ? "Edit Cheque" : "Collect New Cheque"}</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {editingCheque ? `Current status: ${formatStatus(editingCheque.status)}` : "Scan the cheque, verify editable details, then save."}
+                  {editingCheque ? `Current status: ${formatStatus(normalizedChequeStatus(editingCheque.status))}` : "Scan the cheque, verify editable details, then save."}
                 </p>
               </div>
               <button type="button" onClick={() => { setFormOpen(false); setEditingCheque(null); setFormError(""); }} className="rounded-lg border p-2">
@@ -1991,18 +1971,15 @@ export default function ChequeCollectionsPage() {
           <div className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-xl dark:bg-slate-900 sm:mx-auto sm:max-w-lg sm:rounded-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold">{depositAction.status === "CLEARED" ? "Mark Cheque Cleared" : "Deposit Into Account"}</h2>
+                <h2 className="text-xl font-bold">Deposit Into Account</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {depositAction.status === "CLEARED" ? "Select the cleared date for this cheque." : `${depositAction.cheque.customer.partyName} | ${formatCurrency(depositAction.cheque.amount)}`}
+                  {depositAction.cheque.customer.partyName} | {formatCurrency(depositAction.cheque.amount)}
                 </p>
               </div>
               <button type="button" disabled={receiptUploading} onClick={() => setDepositAction(null)} className="rounded-lg border p-2 disabled:opacity-50">
                 <XCircle className="h-5 w-5" />
               </button>
             </div>
-            {depositAction.status === "CLEARED" && (
-              <AppDatePicker className="mt-4" label="Cleared Date" value={clearedDate} onChange={(value) => { setClearedDate(value); setDepositActionError(""); }} required disabled={receiptUploading} max={currentIstDate()} />
-            )}
             {depositActionError && <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{depositActionError}</p>}
             <input
               value={accountSearch}
@@ -2120,12 +2097,10 @@ export default function ChequeCollectionsPage() {
               <button
                 type="button"
                 onClick={confirmDepositAction}
-                disabled={!selectedDepositAccountId || receiptUploading || (depositAction.status === "CLEARED" && !clearedDate)}
+                disabled={!selectedDepositAccountId || receiptUploading}
                 className="min-h-12 flex-1 rounded-lg bg-slate-950 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-950"
               >
-                {receiptUploading
-                  ? depositAction.status === "CLEARED" ? "Marking Cleared..." : "Saving..."
-                  : depositAction.status === "CLEARED" ? "Mark Cleared" : `Confirm ${formatStatus(depositAction.status)}`}
+                {receiptUploading ? "Saving..." : "Confirm Deposit"}
               </button>
             </div>
           </div>
@@ -2242,8 +2217,8 @@ function Timeline({ activities = [] }: { activities?: ChequeActivity[] }) {
           <div className="flex flex-wrap items-center gap-2">
             <History className="h-4 w-4 text-slate-400" />
             <p className="font-medium">
-              {formatStatus(activity.type)}
-              {activity.toStatus ? `: ${formatStatus(activity.toStatus)}` : ""}
+              {formatStatus(activity.type === "CLEARED" ? "DEPOSITED" : activity.type)}
+              {activity.toStatus ? `: ${formatStatus(normalizedChequeStatus(activity.toStatus))}` : ""}
             </p>
           </div>
           <p className="mt-1 text-xs text-slate-500">

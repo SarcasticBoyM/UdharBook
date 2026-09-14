@@ -32,7 +32,6 @@ type ChequeItem = {
   depositSlipUrl: string | null;
   depositReceiptUrl: string | null;
   bounceReason: string | null;
-  clearedAt: string | null;
   bouncedAt: string | null;
   customer: { partyName: string; contactNumber: string; batchTag?: string | null };
   collectedBy: UserOption;
@@ -46,7 +45,7 @@ type ChequeResponse = {
     filteredChequeCount: number;
     filteredTotalAmount: number;
     filteredPendingAmount: number;
-    clearedAmount: number;
+    filteredDepositedAmount: number;
     bouncedAmount: number;
   };
   pagination: { page: number; limit: number; total: number; pages: number };
@@ -105,7 +104,6 @@ const statuses: { value: ChequeStatus | ""; label: string }[] = [
   { value: "COLLECTED", label: "Collected" },
   { value: "PENDING_DEPOSIT", label: "Pending Deposit" },
   { value: "DEPOSITED", label: "Deposited" },
-  { value: "CLEARED", label: "Cleared" },
   { value: "BOUNCED", label: "Bounced" },
   { value: "CANCELLED", label: "Cancelled" },
   { value: "RETURNED_TO_PARTY", label: "Returned" },
@@ -113,13 +111,13 @@ const statuses: { value: ChequeStatus | ""; label: string }[] = [
 ];
 
 function statusLabel(status: string) {
+  if (status === "CLEARED") return "Deposited";
   if (status === "RETURNED_TO_PARTY") return "Returned";
   if (status === "PENDING_DEPOSIT") return "Pending Deposit";
   return status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function statusTone(status: ChequeStatus) {
-  if (status === "CLEARED") return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-100";
   if (status === "BOUNCED" || status === "CANCELLED" || status === "REPLACED" || status === "RETURNED_TO_PARTY") return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100";
   if (status === "DEPOSITED") return "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-100";
   return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-100";
@@ -400,7 +398,7 @@ export default function ReportsPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="text-lg font-bold">Cheques Report</h2>
-            <p className="text-sm text-slate-500">Complete cheque-wise collection, deposit, clearance, bounce, and account tracking.</p>
+            <p className="text-sm text-slate-500">Complete cheque-wise collection, deposit, bounce, and account tracking.</p>
           </div>
           <Link href="/cheques" className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700">
             Open Cheque Collections
@@ -410,8 +408,8 @@ export default function ReportsPage() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SummaryCard label="Total Cheques" value={data?.summary.filteredChequeCount ?? 0} icon={Landmark} />
           <SummaryCard label="Total Amount" value={formatCurrency(data?.summary.filteredTotalAmount ?? 0)} icon={WalletCards} />
-          <SummaryCard label="Pending Clearance" value={formatCurrency(data?.summary.filteredPendingAmount ?? 0)} icon={Printer} tone="yellow" />
-          <SummaryCard label="Cleared Amount" value={formatCurrency(data?.summary.clearedAmount ?? 0)} icon={WalletCards} tone="green" />
+          <SummaryCard label="Pending Deposit" value={formatCurrency(data?.summary.filteredPendingAmount ?? 0)} icon={Printer} tone="yellow" />
+          <SummaryCard label="Deposited Amount" value={formatCurrency(data?.summary.filteredDepositedAmount ?? 0)} icon={WalletCards} tone="green" />
           <SummaryCard label="Bounced Amount" value={formatCurrency(data?.summary.bouncedAmount ?? 0)} icon={ShieldAlert} tone="red" />
         </div>
 
@@ -461,18 +459,18 @@ export default function ReportsPage() {
           <table className="hidden min-w-[1240px] text-left text-sm lg:table">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950">
               <tr>
-                {["Party Name", "Batch / Firm", "Mobile Number", "Amount", "Cheque Number", "Bank Name", "Cheque Date", "Collected Date", "Deposit Date", "Clearance Date", "Bounce Date", "Current Status", "Collected By", "Deposit Account", "Notes"].map((header) => (
+                {["Party Name", "Batch / Firm", "Mobile Number", "Amount", "Cheque Number", "Bank Name", "Cheque Date", "Collected Date", "Deposit Date", "Bounce Date", "Current Status", "Collected By", "Deposit Account", "Notes"].map((header) => (
                   <th key={header} className="px-3 py-2">{header}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Loading cheque report...</td></tr>
               ) : !chequeReportApplied ? (
-                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">Apply filters to load cheque report rows.</td></tr>
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">Apply filters to load cheque report rows.</td></tr>
               ) : chequeError ? (
-                <tr><td colSpan={15} className="px-3 py-8 text-center text-red-600">{chequeError}</td></tr>
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-red-600">{chequeError}</td></tr>
               ) : data?.items.length ? (
                 data.items.map((cheque) => (
                   <tr key={cheque.id} className="border-t border-slate-200 dark:border-slate-800">
@@ -485,7 +483,6 @@ export default function ReportsPage() {
                     <td className="px-3 py-2">{formatDate(cheque.chequeDate)}</td>
                     <td className="px-3 py-2">{formatDate(cheque.collectionDateTime)}</td>
                     <td className="px-3 py-2">{formatDate(cheque.depositDateTime)}</td>
-                    <td className="px-3 py-2">{formatDate(cheque.clearedAt)}</td>
                     <td className="px-3 py-2">{formatDate(cheque.bouncedAt)}</td>
                     <td className="px-3 py-2"><StatusBadge status={cheque.status} /></td>
                     <td className="px-3 py-2">{cheque.collectedBy.name}</td>
@@ -494,7 +491,7 @@ export default function ReportsPage() {
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={15} className="px-3 py-8 text-center text-slate-500">No cheques match this report.</td></tr>
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-500">No cheques match this report.</td></tr>
               )}
             </tbody>
           </table>
@@ -771,7 +768,6 @@ function ChequeDetails({ cheque }: { cheque: ChequeItem }) {
       <div className="grid grid-cols-2 gap-2 text-xs">
         <Info label="Collected" value={formatDate(cheque.collectionDateTime)} />
         <Info label="Deposit" value={formatDate(cheque.depositDateTime)} />
-        <Info label="Cleared" value={formatDate(cheque.clearedAt)} />
         <Info label="Bounced" value={formatDate(cheque.bouncedAt)} />
       </div>
       <div className="grid gap-2">

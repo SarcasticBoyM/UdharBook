@@ -16,6 +16,10 @@ const emptyStats: DashboardStats = {
   todayCheques: 0,
   todayChequeAmount: 0,
   pendingCheques: 0,
+  collectedCheques: 0,
+  pendingDepositCheques: 0,
+  depositedCheques: 0,
+  bouncedCheques: 0,
   overdueFollowups: 0,
   highOutstanding: 0,
   recoveryAmount: 0,
@@ -142,16 +146,13 @@ export async function GET(request: Request) {
     prisma.order.count({ where: { shopId, status: "DELIVERED", deliveredAt: { gte: todayStart, lte: todayEnd } } }),
     prisma.order.count({ where: { shopId, status: { in: ["PENDING", "PROCESSING"] }, preferredDeliveryDate: { gte: new Date(), lte: nextWeek } } }),
   ]);
-  const [todayChequeStats, pendingChequeStats, highBalanceCustomers, recentActivity, staffCount] = await Promise.all([
+  const [todayChequeStats, chequeStatusGroups, highBalanceCustomers, recentActivity, staffCount] = await Promise.all([
     prisma.cheque.aggregate({
       where: { shopId, chequeDate: { gte: todayStart, lte: todayEnd }, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
       _count: { _all: true },
       _sum: { amount: true },
     }),
-    prisma.cheque.aggregate({
-      where: { shopId, status: { in: ["COLLECTED", "PENDING_DEPOSIT"] } },
-      _count: { _all: true },
-    }),
+    prisma.cheque.groupBy({ where: { shopId }, by: ["status"], _count: { _all: true } }),
     prisma.customer.findMany({
       where: { shopId, outstandingBalance: { gte: threshold }, NOT: { status: "CLEARED" } },
       orderBy: { outstandingBalance: "desc" },
@@ -172,6 +173,7 @@ export async function GET(request: Request) {
     prisma.user.count({ where: { shopId, role: { not: "SUPER_ADMIN" } } }),
   ]);
 
+  const chequeCounts = new Map(chequeStatusGroups.map((group) => [group.status, group._count._all]));
   const stats: DashboardStats = {
     totalCustomers: active.length,
     totalOutstanding,
@@ -180,7 +182,11 @@ export async function GET(request: Request) {
     todayFollowupAmount: active.filter((c) => c.nextFollowupDate && c.nextFollowupDate >= todayStart && c.nextFollowupDate <= todayEnd).reduce((sum, c) => sum + c.outstandingBalance, 0),
     todayCheques: todayChequeStats._count._all,
     todayChequeAmount: todayChequeStats._sum.amount ?? 0,
-    pendingCheques: pendingChequeStats._count._all,
+    pendingCheques: (chequeCounts.get("COLLECTED") ?? 0) + (chequeCounts.get("PENDING_DEPOSIT") ?? 0),
+    collectedCheques: chequeCounts.get("COLLECTED") ?? 0,
+    pendingDepositCheques: chequeCounts.get("PENDING_DEPOSIT") ?? 0,
+    depositedCheques: (chequeCounts.get("DEPOSITED") ?? 0) + (chequeCounts.get("CLEARED") ?? 0),
+    bouncedCheques: chequeCounts.get("BOUNCED") ?? 0,
     overdueFollowups,
     highOutstanding,
     recoveryAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),

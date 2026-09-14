@@ -106,7 +106,6 @@ type ChequeReportRow = {
   status: string;
   collectionDateTime: string;
   depositDateTime: string | null;
-  clearedAt: string | null;
   bouncedAt: string | null;
   frontImageUrl?: string | null;
   depositReceiptUrl?: string | null;
@@ -131,8 +130,7 @@ type ChequeReportResponse = {
   users: { id: string; name: string; role: string }[];
   summary: {
     totalCollected: number;
-    underClearingAmount: number;
-    clearedAmount: number;
+    filteredDepositedAmount: number;
     bouncedAmount: number;
     pendingDepositAmount: number;
   };
@@ -195,8 +193,7 @@ const emptyChequeData: ChequeReportResponse = {
   users: [],
   summary: {
     totalCollected: 0,
-    underClearingAmount: 0,
-    clearedAmount: 0,
+    filteredDepositedAmount: 0,
     bouncedAmount: 0,
     pendingDepositAmount: 0,
   },
@@ -529,7 +526,7 @@ export default function FollowUpReportsPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="font-semibold">Cheque Summary</h2>
-            <p className="text-sm text-slate-500">All cheque collection, deposit, clearance, bounce, and under-clearing records.</p>
+            <p className="text-sm text-slate-500">All cheque collection, pending deposit, deposited, bounced, and returned records.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <ExportButton label="Excel" icon={FileSpreadsheet} onClick={() => exportChequeReport("xlsx")} />
@@ -540,10 +537,10 @@ export default function FollowUpReportsPage() {
 
         <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
           <Metric label="Total cheques" value={chequeReportData.summary.totalCollected} icon={Landmark} />
-          <Metric label="Total deposited" value={formatCurrency(chequeReportData.summary.underClearingAmount + chequeReportData.summary.clearedAmount + chequeReportData.summary.bouncedAmount)} icon={IndianRupee} />
-          <Metric label="Total cleared" value={formatCurrency(chequeReportData.summary.clearedAmount)} icon={IndianRupee} tone="green" />
+          <Metric label="Total processed" value={formatCurrency(chequeReportData.summary.filteredDepositedAmount + chequeReportData.summary.bouncedAmount)} icon={IndianRupee} />
+          <Metric label="Total deposited" value={formatCurrency(chequeReportData.summary.filteredDepositedAmount)} icon={IndianRupee} tone="green" />
           <Metric label="Total bounced" value={formatCurrency(chequeReportData.summary.bouncedAmount)} icon={ShieldAlert} tone="red" />
-          <Metric label="Under clearing" value={formatCurrency(chequeReportData.summary.underClearingAmount)} icon={BarChart3} tone="yellow" />
+          <Metric label="Pending deposit" value={formatCurrency(chequeReportData.summary.pendingDepositAmount)} icon={BarChart3} tone="yellow" />
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -561,7 +558,7 @@ export default function FollowUpReportsPage() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-950"
             >
               <option value="">All statuses</option>
-              {["COLLECTED", "DEPOSITED", "CLEARED", "BOUNCED"].map((status) => (
+              {["COLLECTED", "PENDING_DEPOSIT", "DEPOSITED", "BOUNCED", "RETURNED_TO_PARTY"].map((status) => (
                 <option key={status} value={status}>
                   {statusLabel(status)}
                 </option>
@@ -604,7 +601,6 @@ export default function FollowUpReportsPage() {
                   <span>Amount: <strong className="text-slate-700 dark:text-slate-200">{formatCurrency(cheque.amount)}</strong></span>
                   <span>Collected: {formatDateTime(cheque.collectionDateTime)}</span>
                   <span>Deposited: {formatDateTime(cheque.depositDateTime)}</span>
-                  <span>Cleared: {formatDateTime(cheque.clearedAt)}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {cheque.frontImageUrl && <a href={cheque.frontImageUrl} target="_blank" className="min-h-10 rounded-lg border px-3 py-2 text-xs font-semibold text-brand-600">Cheque Image</a>}
@@ -638,7 +634,6 @@ export default function FollowUpReportsPage() {
                 <Th>GPS</Th>
                 <Th>Collected Date</Th>
                 <Th>Deposited Date</Th>
-                <Th>Cleared Date</Th>
                 <Th>Bounced Date</Th>
               </tr>
             </thead>
@@ -684,13 +679,12 @@ export default function FollowUpReportsPage() {
                     </Td>
                     <Td>{formatDateTime(cheque.collectionDateTime)}</Td>
                     <Td>{formatDateTime(cheque.depositDateTime)}</Td>
-                    <Td>{formatDateTime(cheque.clearedAt)}</Td>
                     <Td>{formatDateTime(cheque.bouncedAt)}</Td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={14} className="p-8 text-center text-slate-500">
+                  <td colSpan={13} className="p-8 text-center text-slate-500">
                     No cheque rows match the selected filters.
                   </td>
                 </tr>

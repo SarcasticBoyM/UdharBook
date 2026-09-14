@@ -33,6 +33,10 @@ export interface DashboardStats {
   todayCheques: number;
   todayChequeAmount: number;
   pendingCheques: number;
+  collectedCheques: number;
+  pendingDepositCheques: number;
+  depositedCheques: number;
+  bouncedCheques: number;
   overdueFollowups: number;
   highOutstanding: number;
   recoveryAmount: number;
