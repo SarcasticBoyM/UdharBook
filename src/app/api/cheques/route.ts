@@ -178,6 +178,8 @@ type GlobalChequeSummary = {
   depositedToday: number;
   clearedToday: number;
   pendingDeposit: number;
+  copiedCount: number;
+  remainingCount: number;
   bounced: number;
   highValue: number;
   totalCollected: number;
@@ -529,6 +531,8 @@ export async function GET(request: Request) {
           COUNT(*) FILTER (WHERE "depositDateTime" >= ${todayStart} AND "depositDateTime" <= ${todayEnd})::int AS "depositedToday",
           COUNT(*) FILTER (WHERE "clearedAt" >= ${todayStart} AND "clearedAt" <= ${todayEnd})::int AS "clearedToday",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT'))::int AS "pendingDeposit",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "processingChecked" = true)::int AS "copiedCount",
+          COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "processingChecked" = false)::int AS "remainingCount",
           COUNT(*) FILTER (WHERE status = 'BOUNCED')::int AS bounced,
           COUNT(*) FILTER (WHERE amount >= ${HIGH_VALUE})::int AS "highValue",
           COUNT(*) FILTER (WHERE status IN ('COLLECTED', 'PENDING_DEPOSIT') AND "collectionDateTime" < ${staleDate})::int AS stale,
@@ -559,7 +563,7 @@ export async function GET(request: Request) {
     });
 
   const global = globalRows[0] ?? {
-    collectedToday: 0, depositedToday: 0, clearedToday: 0, pendingDeposit: 0, bounced: 0,
+    collectedToday: 0, depositedToday: 0, clearedToday: 0, pendingDeposit: 0, copiedCount: 0, remainingCount: 0, bounced: 0,
     highValue: 0, totalCollected: 0, stale: 0, chequeDateTomorrow: 0, underClearingAmount: 0,
     clearedAmount: 0, bouncedAmount: 0, pendingDepositAmount: 0, depositedTodayAmount: 0, clearedTodayAmount: 0,
   };
@@ -777,6 +781,9 @@ export async function GET(request: Request) {
       chequeDateTomorrow: global.chequeDateTomorrow,
     },
     summary: {
+      pendingCount: global.pendingDeposit,
+      copiedCount: global.copiedCount,
+      remainingCount: global.remainingCount,
       collectedToday: global.collectedToday,
       pendingDeposit: global.pendingDeposit,
       depositedToday: global.depositedToday,

@@ -139,6 +139,9 @@ type ChequeResponse = {
     chequeDateTomorrow: number;
   };
   summary: {
+    pendingCount: number;
+    copiedCount: number;
+    remainingCount: number;
     collectedToday: number;
     pendingDeposit: number;
     depositedToday: number;
@@ -695,6 +698,9 @@ export default function ChequeCollectionsPage() {
   const summary = data?.summary;
   const alerts = data?.alerts;
   const totalValue = data?.summary.filteredTotalAmount ?? 0;
+  const processingPercent = summary?.pendingCount
+    ? Math.round((summary.copiedCount / summary.pendingCount) * 100)
+    : 0;
 
   const openNewChequeForm = () => {
     setEditingCheque(null);
@@ -973,6 +979,13 @@ export default function ChequeCollectionsPage() {
     setData((current) => current ? {
       ...current,
       items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked } : item),
+      summary: normalizedChequeStatus(cheque.status) === "COLLECTED" && previousValue !== processingChecked
+        ? {
+            ...current.summary,
+            copiedCount: current.summary.copiedCount + (processingChecked ? 1 : -1),
+            remainingCount: current.summary.remainingCount + (processingChecked ? -1 : 1),
+          }
+        : current.summary,
     } : current);
     try {
       const response = await fetch(`/api/cheques/${cheque.id}`, {
@@ -990,6 +1003,13 @@ export default function ChequeCollectionsPage() {
       setData((current) => current ? {
         ...current,
         items: current.items.map((item) => item.id === cheque.id ? { ...item, processingChecked: previousValue } : item),
+        summary: normalizedChequeStatus(cheque.status) === "COLLECTED" && previousValue !== processingChecked
+          ? {
+              ...current.summary,
+              copiedCount: current.summary.copiedCount + (processingChecked ? -1 : 1),
+              remainingCount: current.summary.remainingCount + (processingChecked ? 1 : -1),
+            }
+          : current.summary,
       } : current);
       setToast("Could not update Copied status. Please try again.");
       return false;
@@ -1289,7 +1309,43 @@ export default function ChequeCollectionsPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900" aria-label="Cheque processing progress">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+            <p className="text-xs font-medium text-slate-500">Pending Cheques</p>
+            <p className="mt-1 text-xl font-bold">{summary?.pendingCount ?? 0}</p>
+          </div>
+          <div className="rounded-lg bg-emerald-50 p-3 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+            <p className="text-xs font-medium">Copied</p>
+            <p className="mt-1 text-xl font-bold">{summary?.copiedCount ?? 0} <span aria-hidden="true">✓</span></p>
+          </div>
+          <div className="rounded-lg bg-amber-50 p-3 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+            <p className="text-xs font-medium">Remaining</p>
+            <p className="mt-1 text-xl font-bold">{summary?.remainingCount ?? 0} <span aria-hidden="true">⏳</span></p>
+          </div>
+        </div>
+        {(summary?.pendingCount ?? 0) > 0 && (
+          <div className="mt-3">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <p className="font-semibold">Today&apos;s Processing</p>
+              <p className="text-slate-500">{summary?.copiedCount ?? 0} of {summary?.pendingCount ?? 0} cheques copied</p>
+            </div>
+            <div
+              className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+              role="progressbar"
+              aria-label="Cheque processing completion"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={processingPercent}
+            >
+              <div className="h-full rounded-full bg-emerald-600" style={{ width: `${processingPercent}%` }} />
+            </div>
+            <p className="mt-1 text-right text-xs font-semibold text-emerald-700 dark:text-emerald-300">{processingPercent}%</p>
+          </div>
+        )}
+      </section>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         <StatCard label="Filtered cheques" value={summary?.filteredChequeCount ?? data?.pagination.total ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
         <StatCard label="Filtered amount" value={formatCurrency(summary?.filteredTotalAmount ?? 0)} icon={IndianRupee} tone="border-slate-200 bg-white text-slate-800" />
         <StatCard label="Deposited amount" value={formatCurrency(summary?.filteredDepositedAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
