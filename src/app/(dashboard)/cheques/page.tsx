@@ -5,15 +5,11 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
-  Banknote,
-  CalendarClock,
   Camera,
   CheckCircle2,
   Copy,
   History,
   ImagePlus,
-  IndianRupee,
-  Landmark,
   Loader2,
   Paperclip,
   Pencil,
@@ -407,28 +403,6 @@ function timeOnly(value?: string | null) {
   return date.toTimeString().slice(0, 5);
 }
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  icon: typeof Landmark;
-  tone: string;
-}) {
-  return (
-    <div className={cn("rounded-lg border p-4 shadow-sm", tone)}>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium">{label}</p>
-        <Icon className="h-4 w-4" />
-      </div>
-      <p className="mt-3 text-2xl font-bold">{value}</p>
-    </div>
-  );
-}
-
 export default function ChequeCollectionsPage() {
   const searchParams = useSearchParams();
   const highlightedId = searchParams.get("highlight");
@@ -464,7 +438,6 @@ export default function ChequeCollectionsPage() {
   const [suggestedCustomerQuery, setSuggestedCustomerQuery] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerOption | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [selectedCheque, setSelectedCheque] = useState<ChequeItem | null>(null);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
@@ -552,7 +525,6 @@ export default function ChequeCollectionsPage() {
         const payload = (await res.json()) as ChequeResponse;
         if (sequence !== loadSequence.current) return;
         setData(payload);
-        setSelectedCheque((current) => current && payload.items.some((item) => item.id === current.id) ? current : null);
         setExpandedId((current) => {
           if (highlightedId && payload.items.some((item) => item.id === highlightedId)) return highlightedId;
           return current && payload.items.some((item) => item.id === current) ? current : null;
@@ -573,7 +545,6 @@ export default function ChequeCollectionsPage() {
   const loadChequeDetail = useCallback(async (cheque: ChequeItem) => {
     const cached = detailCache.current.get(cheque.id);
     if (cached?.updatedAt === cheque.updatedAt) {
-      setSelectedCheque(cached);
       return cached;
     }
     detailController.current?.abort();
@@ -585,7 +556,6 @@ export default function ChequeCollectionsPage() {
       if (!response.ok) throw new Error("Could not load cheque details.");
       const payload = (await response.json()) as { cheque: ChequeItem };
       detailCache.current.set(cheque.id, payload.cheque);
-      setSelectedCheque(payload.cheque);
       return payload.cheque;
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) setToast("Could not load cheque details.");
@@ -597,12 +567,10 @@ export default function ChequeCollectionsPage() {
 
   useEffect(() => {
     if (!highlightedId || !data?.items.some((item) => item.id === highlightedId)) return;
-    const highlighted = data.items.find((item) => item.id === highlightedId);
-    if (highlighted) void loadChequeDetail(highlighted);
     window.setTimeout(() => {
       document.getElementById(`cheque-${highlightedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 50);
-  }, [data?.items, highlightedId, loadChequeDetail]);
+  }, [data?.items, highlightedId]);
 
   const loadDepositAccounts = useCallback(async () => {
     const search = new URLSearchParams();
@@ -697,7 +665,6 @@ export default function ChequeCollectionsPage() {
 
   const summary = data?.summary;
   const alerts = data?.alerts;
-  const totalValue = data?.summary.filteredTotalAmount ?? 0;
   const processingPercent = summary?.pendingCount
     ? Math.round((summary.copiedCount / summary.pendingCount) * 100)
     : 0;
@@ -996,7 +963,6 @@ export default function ChequeCollectionsPage() {
       if (!response.ok) throw new Error("Could not update copied state.");
       const cached = detailCache.current.get(cheque.id);
       if (cached) detailCache.current.set(cheque.id, { ...cached, processingChecked });
-      setSelectedCheque((current) => current?.id === cheque.id ? { ...current, processingChecked } : current);
       if (copiedFilter !== "all") await loadCheques();
       return true;
     } catch {
@@ -1035,7 +1001,7 @@ export default function ChequeCollectionsPage() {
       return;
     }
     if (!cheque.processingChecked && !(await updateProcessingChecked(cheque, true))) return;
-    const message = "Cheque details copied successfully.\n✓ Marked as Copied.";
+    const message = "✓ Cheque details copied\n✓ Marked as Copied";
     setToast(message);
     window.setTimeout(() => setToast((current) => current === message ? "" : current), 2200);
   }
@@ -1267,71 +1233,38 @@ export default function ChequeCollectionsPage() {
     (!sensitiveEditChanged || Boolean(correctionReason.trim()));
 
   return (
-    <div className="pb-24">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="mx-auto max-w-5xl pb-24">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Cheque recovery desk</p>
-          <h1 className="mt-1 text-3xl font-bold">Cheque Collections</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-600 dark:text-slate-400">
-            Track each cheque from field collection to deposit, clearance, bounce recovery, and reports.
-          </p>
+          <h1 className="text-2xl font-bold">Cheque Tracker</h1>
+          <p className="mt-0.5 text-sm text-slate-500">Copy, deposit and process cheques.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {currentRole === "SHOP_ADMIN" && (
-            <AssignTaskButton seed={{ taskType: "CHEQUE_DEPOSIT", title: "Cheque Deposit" }} />
-          )}
-          <button
-            type="button"
-            onClick={enableAlerts}
-            className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-medium dark:border-slate-700"
-          >
-            <AlertTriangle className="h-4 w-4" />
-            Alerts
-          </button>
+        <div className="flex shrink-0 gap-2">
           <button
             type="button"
             onClick={openNewChequeForm}
-            className="flex min-h-11 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white dark:bg-white dark:text-slate-950"
+            className="flex min-h-10 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white dark:bg-white dark:text-slate-950"
           >
             <Plus className="h-4 w-4" />
-            Add Cheque
+            Add
           </button>
-          {currentRole === "SHOP_ADMIN" && (
-            <button
-              type="button"
-              onClick={() => setAccountPanelOpen((open) => !open)}
-              className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold dark:border-slate-700"
-            >
-              <Settings className="h-4 w-4" />
-              Manage Deposit Accounts
-            </button>
-          )}
         </div>
       </div>
 
-      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900" aria-label="Cheque processing progress">
-        <div className="grid grid-cols-3 gap-2">
-          <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-            <p className="text-xs font-medium text-slate-500">Pending Cheques</p>
-            <p className="mt-1 text-xl font-bold">{summary?.pendingCount ?? 0}</p>
-          </div>
-          <div className="rounded-lg bg-emerald-50 p-3 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-            <p className="text-xs font-medium">Copied</p>
-            <p className="mt-1 text-xl font-bold">{summary?.copiedCount ?? 0} <span aria-hidden="true">✓</span></p>
-          </div>
-          <div className="rounded-lg bg-amber-50 p-3 text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            <p className="text-xs font-medium">Remaining</p>
-            <p className="mt-1 text-xl font-bold">{summary?.remainingCount ?? 0} <span aria-hidden="true">⏳</span></p>
-          </div>
+      <section className="mt-4 rounded-xl border border-slate-200 bg-slate-950 p-3 text-white dark:border-slate-700" aria-label="Cheque processing progress">
+        <div className="grid grid-cols-3 divide-x divide-white/20 text-center">
+          <div><p className="text-[11px] text-slate-300">Pending</p><p className="text-xl font-bold">{summary?.pendingCount ?? 0}</p></div>
+          <div><p className="text-[11px] text-slate-300">Copied</p><p className="text-xl font-bold text-emerald-300">{summary?.copiedCount ?? 0}</p></div>
+          <div><p className="text-[11px] text-slate-300">Remaining</p><p className="text-xl font-bold text-amber-300">{summary?.remainingCount ?? 0}</p></div>
         </div>
         {(summary?.pendingCount ?? 0) > 0 && (
-          <div className="mt-3">
-            <div className="flex items-center justify-between gap-3 text-xs">
-              <p className="font-semibold">Today&apos;s Processing</p>
-              <p className="text-slate-500">{summary?.copiedCount ?? 0} of {summary?.pendingCount ?? 0} cheques copied</p>
+          <div className="mt-2 border-t border-white/15 pt-2">
+            <div className="flex items-center justify-between gap-3 text-[11px] text-slate-300">
+              <p>{summary?.copiedCount ?? 0} of {summary?.pendingCount ?? 0} copied</p>
+              <p className="font-semibold text-white">{processingPercent}%</p>
             </div>
             <div
-              className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+              className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/20"
               role="progressbar"
               aria-label="Cheque processing completion"
               aria-valuemin={0}
@@ -1340,22 +1273,11 @@ export default function ChequeCollectionsPage() {
             >
               <div className="h-full rounded-full bg-emerald-600" style={{ width: `${processingPercent}%` }} />
             </div>
-            <p className="mt-1 text-right text-xs font-semibold text-emerald-700 dark:text-emerald-300">{processingPercent}%</p>
           </div>
         )}
       </section>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-        <StatCard label="Filtered cheques" value={summary?.filteredChequeCount ?? data?.pagination.total ?? 0} icon={Banknote} tone="border-blue-200 bg-blue-50 text-blue-800" />
-        <StatCard label="Filtered amount" value={formatCurrency(summary?.filteredTotalAmount ?? 0)} icon={IndianRupee} tone="border-slate-200 bg-white text-slate-800" />
-        <StatCard label="Deposited amount" value={formatCurrency(summary?.filteredDepositedAmount ?? 0)} icon={CalendarClock} tone="border-indigo-200 bg-indigo-50 text-indigo-800" />
-        <StatCard label="Pending amount" value={formatCurrency(summary?.filteredPendingAmount ?? 0)} icon={Landmark} tone="border-amber-200 bg-amber-50 text-amber-800" />
-        <StatCard label="Cleared amount" value={formatCurrency(summary?.filteredClearedAmount ?? 0)} icon={CheckCircle2} tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
-        <StatCard label="Bounced amount" value={formatCurrency(summary?.filteredBouncedAmount ?? 0)} icon={AlertTriangle} tone="border-red-200 bg-red-50 text-red-800" />
-        <StatCard label="Today deposits" value={formatCurrency(summary?.depositedTodayAmount ?? 0)} icon={Banknote} tone="border-slate-200 bg-white text-slate-800" />
-      </div>
-
-      {accountAudit.length > 0 && (
+      {accountPanelOpen && accountAudit.length > 0 && (
         <div className="mt-4 grid gap-3 lg:grid-cols-3">
           {accountAudit.map((audit) => (
             <div key={audit.accountId} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
@@ -1443,18 +1365,13 @@ export default function ChequeCollectionsPage() {
         </div>
       )}
 
-      {alerts && (alerts.stale > 0 || alerts.chequeDateTomorrow > 0 || alerts.bounced > 0) && (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>Attention:</strong> {alertText(alerts)}
-        </div>
-      )}
       {toast && (
         <div className="fixed bottom-20 left-4 right-4 z-50 whitespace-pre-line rounded-lg bg-slate-950 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-auto sm:right-6 sm:w-72">
           {toast}
         </div>
       )}
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-4">
         <main className="min-w-0">
           <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
             <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1582,25 +1499,36 @@ export default function ChequeCollectionsPage() {
                   <AppDatePicker className="relative z-10" label="From Date" value={from} onChange={setFrom} />
                   <AppDatePicker className="relative z-20" label="To Date" value={to} onChange={setTo} />
                 </div>
+                <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+                  <button type="button" onClick={enableAlerts} className="flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm">
+                    <AlertTriangle className="h-4 w-4" /> Alerts
+                  </button>
+                  {currentRole === "SHOP_ADMIN" && (
+                    <>
+                      <AssignTaskButton seed={{ taskType: "CHEQUE_DEPOSIT", title: "Cheque Deposit" }} />
+                      <button type="button" onClick={() => setAccountPanelOpen((open) => !open)} className="flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm">
+                        <Settings className="h-4 w-4" /> Deposit Accounts
+                      </button>
+                    </>
+                  )}
+                  <span className="hidden flex-1 sm:block" />
+                  <button type="button" onClick={() => exportReport("xlsx")} className="min-h-10 rounded-lg border px-3 text-sm">Excel</button>
+                  <button type="button" onClick={() => exportReport("csv")} className="min-h-10 rounded-lg border px-3 text-sm">CSV</button>
+                  <button type="button" onClick={() => exportReport("pdf")} className="min-h-10 rounded-lg border px-3 text-sm">PDF</button>
+                </div>
+                {alerts && (alerts.stale > 0 || alerts.chequeDateTomorrow > 0 || alerts.bounced > 0) && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <strong>Attention:</strong> {alertText(alerts)}
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="mt-2 flex items-center justify-between gap-3 px-1">
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              Showing {data?.items.length ?? 0} cheques, total value {formatCurrency(totalValue)}
+              Showing {data?.items.length ?? 0} cheques
             </p>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => exportReport("xlsx")} className="rounded-lg border px-3 py-2 text-sm">
-                Excel
-              </button>
-              <button type="button" onClick={() => exportReport("csv")} className="rounded-lg border px-3 py-2 text-sm">
-                CSV
-              </button>
-              <button type="button" onClick={() => exportReport("pdf")} className="rounded-lg border px-3 py-2 text-sm">
-                PDF
-              </button>
-            </div>
           </div>
 
           {loading ? (
@@ -1613,25 +1541,19 @@ export default function ChequeCollectionsPage() {
               No cheques match this view.
             </div>
           ) : (
-            <div className="mt-4 space-y-3">
+            <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               {data?.items.map((cheque) => (
                 <article
                   id={`cheque-${cheque.id}`}
                   key={cheque.id}
-                  onClick={() => void loadChequeDetail(cheque)}
                   className={cn(
-                    "[content-visibility:auto] [contain-intrinsic-size:auto_260px] cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition hover:border-brand-300 dark:bg-slate-900",
-                    cheque.status === "BOUNCED"
-                      ? "border-red-200"
-                      : cheque.status === "CLEARED"
-                        ? "border-emerald-200"
-                        : "border-slate-200 dark:border-slate-700",
-                    highlightedId === cheque.id && "ring-2 ring-brand-500",
+                    "[content-visibility:auto] [contain-intrinsic-size:auto_150px] border-b border-slate-100 p-3 last:border-b-0 dark:border-slate-800",
+                    highlightedId === cheque.id && "bg-brand-50/60 ring-2 ring-inset ring-brand-500 dark:bg-brand-950/20",
                   )}
                 >
                   <div className="flex items-start gap-3">
                     <label
-                      className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700"
+                      className="flex min-h-10 min-w-10 shrink-0 cursor-pointer items-center justify-center rounded-md border border-slate-200 dark:border-slate-700"
                       onClick={(event) => event.stopPropagation()}
                     >
                       <input
@@ -1648,25 +1570,25 @@ export default function ChequeCollectionsPage() {
                         <h2 className="truncate text-base font-bold">{cheque.customer.partyName}</h2>
                         {cheque.processingChecked && <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" aria-label="Copied" />}
                       </div>
-                      <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">{cheque.bankName}</p>
-                      <p className="mt-1 text-sm text-slate-500">Cheque No. {cheque.chequeNumber}</p>
+                      <p className="mt-0.5 truncate text-sm text-slate-600 dark:text-slate-300">{cheque.bankName}</p>
+                      <p className="text-xs text-slate-500">Cheque #{cheque.chequeNumber}</p>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="text-lg font-bold">{formatCurrency(cheque.amount)}</p>
-                      <p className="mt-1 text-sm font-medium">{formatDate(cheque.chequeDate)}</p>
-                      <span className={cn("mt-2 inline-flex rounded-full px-2 py-1 text-xs font-semibold ring-1", statusTone[cheque.status])}>
+                      <p className="font-bold">{formatCurrency(cheque.amount)}</p>
+                      <p className="text-xs font-medium text-slate-500">{formatDate(cheque.chequeDate)}</p>
+                      <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1", statusTone[cheque.status])}>
                         {formatStatus(cheque.status)}
                       </span>
                     </div>
                   </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" disabled={Boolean(processingUpdating[cheque.id])} onClick={(e) => { e.stopPropagation(); void copyChequeDetails(cheque); }} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium disabled:opacity-60 dark:border-slate-700">
+                  <div className="mt-2 flex flex-wrap gap-2 pl-[3.25rem]">
+                    <button type="button" disabled={Boolean(processingUpdating[cheque.id])} onClick={() => void copyChequeDetails(cheque)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium disabled:opacity-60 dark:border-slate-700">
                       <Copy className="h-4 w-4" />
                       Copy Details
                     </button>
                     {normalizedChequeStatus(cheque.status) === "COLLECTED" && (
-                      <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "DEPOSITED"); }} className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
+                      <button type="button" onClick={() => updateStatus(cheque, "DEPOSITED")} className="min-h-10 rounded-lg bg-indigo-600 px-3 text-sm font-medium text-white">
                         Deposit
                       </button>
                     )}
@@ -1692,7 +1614,7 @@ export default function ChequeCollectionsPage() {
                         </button>
                       </>
                     )}
-                    <button type="button" onClick={(e) => { e.stopPropagation(); if (expandedId === cheque.id) { setExpandedId(null); } else { setExpandedId(cheque.id); void loadChequeDetail(cheque); } }} className="min-h-11 rounded-lg border px-3 text-sm">
+                    <button type="button" aria-expanded={expandedId === cheque.id} onClick={() => { if (expandedId === cheque.id) { setExpandedId(null); } else { setExpandedId(cheque.id); void loadChequeDetail(cheque); } }} className="min-h-10 rounded-lg border px-3 text-sm">
                       More
                     </button>
                   </div>
@@ -1726,6 +1648,23 @@ export default function ChequeCollectionsPage() {
                               </button>
                             )}
                           </div>
+                          <dl className="grid gap-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-950 sm:grid-cols-2">
+                            <div><dt className="text-slate-500">Collector</dt><dd className="font-medium">{detailCache.current.get(cheque.id)?.collectedBy?.name ?? "-"}</dd></div>
+                            <div><dt className="text-slate-500">Depositor</dt><dd className="font-medium">{detailCache.current.get(cheque.id)?.depositedBy?.name ?? "-"}</dd></div>
+                            <div><dt className="text-slate-500">Deposit date</dt><dd className="font-medium">{formatDate(detailCache.current.get(cheque.id)?.depositDateTime)}</dd></div>
+                            <div><dt className="text-slate-500">Customer balance</dt><dd className="font-medium">{formatCurrency(detailCache.current.get(cheque.id)?.customer.outstandingBalance ?? 0)}</dd></div>
+                            <div className="sm:col-span-2"><dt className="text-slate-500">Deposit account</dt><dd className="font-medium">{detailCache.current.get(cheque.id)?.depositedAccount ? `${detailCache.current.get(cheque.id)?.depositedAccount?.bankName} - ${detailCache.current.get(cheque.id)?.depositedAccount?.accountName} - ${detailCache.current.get(cheque.id)?.depositedAccount?.lastFourDigits}` : detailCache.current.get(cheque.id)?.depositBankAccount || "-"}</dd></div>
+                            <div className="sm:col-span-2"><dt className="text-slate-500">Notes</dt><dd className="font-medium">{detailCache.current.get(cheque.id)?.collectionNotes || "-"}</dd></div>
+                            <div><dt className="text-slate-500">OCR confidence</dt><dd className="font-medium">{detailCache.current.get(cheque.id)?.ocrConfidence != null ? `${Math.round((detailCache.current.get(cheque.id)?.ocrConfidence ?? 0) * 100)}%` : "-"}</dd></div>
+                          </dl>
+                          <div className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                            <p className="font-semibold">Deposit Receipt</p>
+                            {detailCache.current.get(cheque.id)?.depositReceiptUrl ? (
+                              <a href={`/api/cheques/${cheque.id}/receipt`} target="_blank" rel="noreferrer" className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold">
+                                <Paperclip className="h-4 w-4" /> View / Download
+                              </a>
+                            ) : <p className="mt-1 text-xs text-slate-500">No receipt uploaded</p>}
+                          </div>
                           <Timeline activities={detailCache.current.get(cheque.id)?.activities} />
                         </div>
                       )}
@@ -1748,84 +1687,6 @@ export default function ChequeCollectionsPage() {
           )}
         </main>
 
-        <aside className="hidden lg:block">
-          <div className="sticky top-6 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-            {detailLoadingId && !selectedCheque ? (
-              <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading cheque details</div>
-            ) : selectedCheque ? (
-              <>
-                <p className="text-xs font-semibold uppercase text-slate-500">Selected cheque</p>
-                <h2 className="mt-2 text-lg font-bold">{selectedCheque.customer.partyName}</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {selectedCheque.chequeNumber} | {selectedCheque.bankName}
-                </p>
-                {canEditCheque(currentRole, currentUserId, selectedCheque) && (
-                  <button type="button" onClick={() => openEditChequeForm(selectedCheque)} className="mt-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 text-sm font-semibold dark:border-slate-700">
-                    <Pencil className="h-4 w-4" />
-                    Edit Cheque
-                  </button>
-                )}
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Amount</dt>
-                    <dd className="font-bold">{formatCurrency(selectedCheque.amount)}</dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Status</dt>
-                    <dd>{formatStatus(selectedCheque.status)}</dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Account holder</dt>
-                    <dd className="text-right">{selectedCheque.accountHolderName}</dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Deposit account</dt>
-                    <dd className="text-right">
-                      {selectedCheque.depositedAccount
-                        ? `${selectedCheque.depositedAccount.bankName} - ${selectedCheque.depositedAccount.accountName} - ${selectedCheque.depositedAccount.lastFourDigits}`
-                        : selectedCheque.depositBankAccount || "-"}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Deposit staff</dt>
-                    <dd className="text-right">{selectedCheque.depositedBy?.name ?? "-"}</dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Deposit timestamp</dt>
-                    <dd className="text-right">{formatDate(selectedCheque.depositDateTime)}</dd>
-                  </div>
-                </dl>
-                <div className="mt-5 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
-                  <p className="font-semibold">Deposit Receipt</p>
-                  {selectedCheque.depositReceiptUrl ? (
-                    <div className="mt-2 space-y-2">
-                      <p className="text-xs text-slate-500">
-                        Uploaded by {selectedCheque.depositReceiptUploadedBy?.name ?? "-"} on{" "}
-                        {formatDate(selectedCheque.depositReceiptUploadedAt)}
-                      </p>
-                      <a
-                        href={`/api/cheques/${selectedCheque.id}/receipt`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"
-                      >
-                        <Paperclip className="h-4 w-4" />
-                        View / Download
-                      </a>
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-500">No receipt uploaded</p>
-                  )}
-                </div>
-                <div className="mt-5">
-                  <Timeline activities={selectedCheque.activities} />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-slate-500">Select a cheque to see full activity timeline and deposit details.</p>
-            )}
-          </div>
-        </aside>
       </div>
 
       {bounceAction && (
