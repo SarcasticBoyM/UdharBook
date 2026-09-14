@@ -1104,12 +1104,18 @@ export default function FieldStaffPage() {
           customerId={selectedCustomer.id}
           customerName={selectedCustomer.partyName}
           outstandingBalance={selectedCustomer.outstandingBalance}
-          defaultMode={paymentMode === "Cheque Collected" ? "CHEQUE" : "PARTIAL"}
+          defaultMode={paymentMode === "Cheque Collected" ? "CHEQUE" : visitOutcomes.includes("Paid Fully") ? "FULL" : "PARTIAL"}
           defaultAmount={Number(recoveryAmount) || undefined}
           source="DAILY_VISIT"
           onClose={() => setPaymentCollectorOpen(false)}
           onSuccess={async (payment) => {
             setPaymentMode(payment.method === "CASH" ? "Cash" : payment.method === "CHEQUE" ? "Cheque Collected" : "NEFT / RTGS");
+            setVisitOutcomes((current) => {
+              const withoutPaymentResult = current.filter((item) => !["Payment Collected", "Paid Fully", "Partial Payment"].includes(item));
+              const paymentResult = payment.method === "CHEQUE" ? "Payment Collected" : payment.mode === "FULL" ? "Paid Fully" : "Partial Payment";
+              return withoutPaymentResult.includes(paymentResult) ? withoutPaymentResult : [...withoutPaymentResult, paymentResult];
+            });
+            setResult(payment.method === "CHEQUE" ? "Payment Collected" : payment.mode === "FULL" ? "Paid Fully" : "Partial Payment");
             setRecoveryAmount(String(payment.amount));
             setPaymentReference(payment.referenceNumber);
             setPaymentBankName(payment.bankName);
