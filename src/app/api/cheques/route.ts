@@ -167,6 +167,8 @@ const legacyChequeListSelect = {
   collectedById: true,
   depositedAccountId: true,
   updatedAt: true,
+  depositReceiptType: true,
+  depositReceiptUrl: true,
   customer: { select: { id: true, partyName: true } },
 } satisfies Prisma.ChequeSelect;
 
@@ -589,10 +591,11 @@ export async function GET(request: Request) {
   const filteredDepositedAmount = filteredAmount(["DEPOSITED", "CLEARED"]);
   const filteredPendingAmount = filteredAmount(PENDING_DEPOSIT_STATUSES);
   const filteredBouncedAmount = filteredAmount(["BOUNCED"]);
-  const items = listItems.map((item) => ({
+  const items = listItems.map(({ depositReceiptUrl, ...item }) => ({
     ...item,
     status: item.status === "CLEARED" ? "DEPOSITED" as const : item.status,
     processingChecked: "processingChecked" in item ? item.processingChecked : false,
+    receiptAvailable: Boolean(depositReceiptUrl),
   }));
   const rows = exportItems.map(chequeRow);
   const runtimeDebug = debugMode

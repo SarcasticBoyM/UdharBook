@@ -25,7 +25,7 @@ export async function POST(
 
   const { id } = await params;
   const shopId = requireShopId(request, session);
-  const cheque = await prisma.cheque.findFirst({ where: { id, shopId }, select: { id: true } });
+  const cheque = await prisma.cheque.findFirst({ where: { id, shopId }, select: { id: true, status: true } });
   if (!cheque) return NextResponse.json({ error: "Cheque not found" }, { status: 404 });
 
   const formData = await request.formData();
@@ -37,11 +37,34 @@ export async function POST(
   const bytes = Buffer.from(await file.arrayBuffer());
   const path = receiptPath(shopId, id, file.name || `receipt.${file.type === "application/pdf" ? "pdf" : "jpg"}`);
   await uploadDepositReceipt({ path, file: bytes, contentType: file.type });
+  const uploadedAt = new Date();
+  await prisma.$transaction([
+    prisma.cheque.update({
+      where: { id },
+      data: {
+        depositReceiptUrl: path,
+        depositReceiptType: file.type,
+        depositReceiptUploadedAt: uploadedAt,
+        depositReceiptUploadedById: session.id,
+      },
+    }),
+    prisma.chequeActivity.create({
+      data: {
+        shopId,
+        chequeId: id,
+        userId: session.id,
+        type: "NOTE",
+        fromStatus: cheque.status,
+        toStatus: cheque.status,
+        notes: "Deposit receipt uploaded",
+      },
+    }),
+  ]);
 
   return NextResponse.json({
     url: path,
     type: file.type,
-    uploadedAt: new Date().toISOString(),
+    uploadedAt: uploadedAt.toISOString(),
     uploadedBy: session.id,
   });
 }

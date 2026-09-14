@@ -26,7 +26,7 @@ import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { AssignTaskButton } from "@/components/AssignTaskDialog";
 import { AppDatePicker, AppTimePicker } from "@/components/AppDateTimePicker";
 import { combineDateTimeValue, currentIstDate, istDateTimeToIso } from "@/lib/app-date-time";
-import { canManageChequeAccounting } from "@/lib/permissions";
+import { canManageChequeAccounting, canUseCheques } from "@/lib/permissions";
 
 type CustomerOption = {
   id: string;
@@ -107,6 +107,7 @@ type ChequeItem = {
   depositReceiptType?: string | null;
   depositReceiptUploadedAt?: string | null;
   depositReceiptUploadedBy?: UserOption | null;
+  receiptAvailable?: boolean;
   bounceReason?: string | null;
   bouncedAt?: string | null;
   updatedAt: string;
@@ -459,6 +460,9 @@ export default function ChequeCollectionsPage() {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState("");
   const [receiptUploading, setReceiptUploading] = useState(false);
+  const [rowReceiptUploadingId, setRowReceiptUploadingId] = useState<string | null>(null);
+  const [receiptPreviewAction, setReceiptPreviewAction] = useState<ChequeItem | null>(null);
+  const [receiptZoomed, setReceiptZoomed] = useState(false);
   const [toast, setToast] = useState("");
   const [processingUpdating, setProcessingUpdating] = useState<Record<string, boolean>>({});
   const loadSequence = useRef(0);
@@ -770,11 +774,6 @@ export default function ChequeCollectionsPage() {
     if (!depositAction || !selectedDepositAccountId || receiptUploading) return;
     const account = depositAccounts.find((item) => item.id === selectedDepositAccountId);
     setReceiptUploading(true);
-    let receiptPayload: {
-      depositReceiptUrl?: string;
-      depositReceiptType?: string;
-      depositReceiptUploadedAt?: string;
-    } = {};
     try {
       if (receiptFile) {
         const uploadData = new FormData();
@@ -789,12 +788,7 @@ export default function ChequeCollectionsPage() {
           setReceiptUploading(false);
           return;
         }
-        const uploaded = await uploadRes.json();
-        receiptPayload = {
-          depositReceiptUrl: uploaded.url,
-          depositReceiptType: uploaded.type,
-          depositReceiptUploadedAt: uploaded.uploadedAt,
-        };
+        await uploadRes.json();
       }
     } catch {
       window.alert("Could not upload deposit receipt");
@@ -807,7 +801,6 @@ export default function ChequeCollectionsPage() {
       depositedAccountId: selectedDepositAccountId,
       depositBankAccount: account ? `${account.bankName} - ${account.accountName} - ${account.lastFourDigits}` : undefined,
       depositDateTime: new Date().toISOString(),
-      ...receiptPayload,
     };
 
     const res = await fetch(`/api/cheques/${depositAction.cheque.id}`, {
@@ -1169,6 +1162,45 @@ export default function ChequeCollectionsPage() {
       setScanResult(result);
     } finally {
       setScanning(false);
+    }
+  };
+
+  const uploadReceiptForDepositedCheque = async (cheque: ChequeItem, file: File) => {
+    if (rowReceiptUploadingId) return;
+    if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
+      setToast("Only JPG, PNG, WEBP, or PDF receipts are allowed.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setToast("Receipt must be under 8 MB.");
+      return;
+    }
+    setRowReceiptUploadingId(cheque.id);
+    try {
+      const uploadData = new FormData();
+      uploadData.append("file", file.type === "application/pdf" ? file : await prepareReceiptFile(file));
+      const response = await fetch(`/api/cheques/${cheque.id}/receipt`, { method: "POST", body: uploadData });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? "Could not upload deposit receipt.");
+      setData((current) => current ? {
+        ...current,
+        items: current.items.map((item) => item.id === cheque.id
+          ? { ...item, receiptAvailable: true, depositReceiptType: payload.type }
+          : item),
+      } : current);
+      const cached = detailCache.current.get(cheque.id);
+      if (cached) detailCache.current.set(cheque.id, {
+        ...cached,
+        receiptAvailable: true,
+        depositReceiptUrl: payload.url,
+        depositReceiptType: payload.type,
+        depositReceiptUploadedAt: payload.uploadedAt,
+      });
+      setToast("Deposit receipt uploaded.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not upload deposit receipt.");
+    } finally {
+      setRowReceiptUploadingId(null);
     }
   };
 
@@ -1565,6 +1597,40 @@ export default function ChequeCollectionsPage() {
                         Deposit
                       </button>
                     )}
+                    {normalizedChequeStatus(cheque.status) === "DEPOSITED" && cheque.receiptAvailable && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (cheque.depositReceiptType?.startsWith("image/")) {
+                            setReceiptZoomed(false);
+                            setReceiptPreviewAction(cheque);
+                          } else {
+                            window.open(`/api/cheques/${cheque.id}/receipt`, "_blank", "noopener,noreferrer");
+                          }
+                        }}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-indigo-300 px-3 text-sm font-medium text-indigo-700 dark:text-indigo-300"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                        View Receipt
+                      </button>
+                    )}
+                    {normalizedChequeStatus(cheque.status) === "DEPOSITED" && !cheque.receiptAvailable && canUseCheques(currentRole) && (
+                      <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-indigo-300 px-3 text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                        {rowReceiptUploadingId === cheque.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                        {rowReceiptUploadingId === cheque.id ? "Uploading..." : "Upload Receipt"}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
+                          disabled={Boolean(rowReceiptUploadingId)}
+                          className="hidden"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void uploadReceiptForDepositedCheque(cheque, file);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
+                    )}
                     {normalizedChequeStatus(cheque.status) === "DEPOSITED" && canManageChequeAccounting(currentRole) && (
                       <button type="button" onClick={(e) => { e.stopPropagation(); updateStatus(cheque, "BOUNCED"); }} className="min-h-10 rounded-lg bg-red-600 px-3 text-sm font-medium text-white">
                         Bounced
@@ -1668,6 +1734,37 @@ export default function ChequeCollectionsPage() {
         </main>
 
       </div>
+
+      {receiptPreviewAction && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 p-3 sm:p-6" onClick={() => setReceiptPreviewAction(null)}>
+          <div className="flex max-h-[94dvh] w-full max-w-4xl flex-col rounded-2xl bg-white p-3 shadow-2xl dark:bg-slate-900" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 pb-3">
+              <div className="min-w-0">
+                <h2 className="truncate font-bold">Deposit Receipt</h2>
+                <p className="truncate text-xs text-slate-500">{receiptPreviewAction.customer.partyName} · Cheque #{receiptPreviewAction.chequeNumber}</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setReceiptZoomed((current) => !current)} className="min-h-10 rounded-lg border px-3 text-sm font-semibold">
+                  {receiptZoomed ? "Fit" : "Zoom"}
+                </button>
+                <button type="button" onClick={() => setReceiptPreviewAction(null)} aria-label="Close receipt preview" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border">
+                  <XCircle className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto rounded-xl bg-slate-100 p-2 dark:bg-slate-950">
+              <Image
+                src={`/api/cheques/${receiptPreviewAction.id}/receipt`}
+                alt={`Deposit receipt for cheque ${receiptPreviewAction.chequeNumber}`}
+                width={1600}
+                height={1200}
+                unoptimized
+                className={cn("mx-auto h-auto transition-[width]", receiptZoomed ? "w-[1600px] max-w-none" : "max-h-[78dvh] w-auto max-w-full object-contain")}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {bounceAction && (
         <div className="fixed inset-0 z-[100] flex items-end bg-slate-950/55 sm:items-center sm:justify-center sm:p-4" onClick={() => !bounceSaving && setBounceAction(null)}>
