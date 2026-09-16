@@ -1035,7 +1035,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid cheque details" }, { status: 400 });
     }
     if (typeof error === "object" && error && "code" in error && error.code === "P2002") {
-      return NextResponse.json({ error: "Cheque number already exists for this bank" }, { status: 409 });
+      return NextResponse.json({ error: "Could not create cheque because a related record already exists." }, { status: 409 });
     }
     return NextResponse.json({ error: "Could not create cheque" }, { status: 500 });
   }

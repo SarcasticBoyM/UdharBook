@@ -1196,7 +1196,7 @@ model Cheque {
   updatedAt                    DateTime              @updatedAt
   activities                   ChequeActivity[]
 
-  @@unique([shopId, chequeNumber, bankName])
+  @@index([shopId, chequeNumber, bankName])
   @@index([shopId, status])
   @@index([shopId, chequeDate])
   @@index([shopId, collectionDateTime])

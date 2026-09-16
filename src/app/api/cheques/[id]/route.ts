@@ -298,37 +298,6 @@ export async function PATCH(
       }, { status: 403 });
     }
 
-    const duplicate = (body.chequeNumber || body.bankName)
-      ? await prisma.cheque.findFirst({
-          where: {
-            id: { not: id },
-            shopId,
-            chequeNumber: body.chequeNumber ?? existing.chequeNumber,
-            bankName: body.bankName ?? existing.bankName,
-          },
-          select: {
-            chequeNumber: true,
-            bankName: true,
-            amount: true,
-            chequeDate: true,
-            customer: { select: { partyName: true } },
-          },
-        })
-      : null;
-    if (duplicate) {
-      return NextResponse.json({
-        code: "DUPLICATE_CHEQUE",
-        error: "A cheque with this number and bank already exists.",
-        duplicate: {
-          chequeNumber: duplicate.chequeNumber,
-          customer: duplicate.customer.partyName,
-          amount: duplicate.amount,
-          chequeDate: duplicate.chequeDate,
-          bankName: duplicate.bankName,
-        },
-      }, { status: 409 });
-    }
-
     const newCustomer = body.customerId && body.customerId !== existing.customerId
       ? await prisma.customer.findFirst({ where: { id: body.customerId, shopId, isArchived: false } })
       : null;
