@@ -11,7 +11,6 @@ import {
   Landmark,
   FileBarChart,
   Map,
-  MapPinned,
   QrCode,
   LayoutDashboard,
   ListTodo,
@@ -23,7 +22,6 @@ import {
   WalletCards,
   Store,
   ShieldCheck,
-  Truck,
   UserRoundCheck,
   Upload,
   X,
@@ -59,11 +57,6 @@ const links: SidebarLink[] = [
   { href: "/orders", label: "Order Desk", icon: ClipboardList, section: "Operations" },
   { href: "/cheques", label: "Cheque Tracker", icon: Landmark, section: "Operations" },
   { href: "/field-staff", label: "Sales Person", icon: UserRoundCheck, section: "Team" },
-  { href: "/live-tracking", label: "Track Your Team", icon: MapPinned, adminOnly: true, section: "Team" },
-  { href: "/driver-tracking", label: "Driver Tracking", icon: Truck, adminOnly: true, section: "Team" },
-  { href: "/driver-trip", label: "My Trip", icon: Truck, section: "Driver" },
-  { href: "/school-transport", label: "School Transport", icon: MapPinned, section: "Premium" },
-  { href: "/school-transport/driver", label: "My School Trip", icon: Truck, section: "School" },
   taskLink,
   { href: "/daily-visits", label: "Daily Visits", icon: Map, section: "Team" },
   { href: "/follow-ups", label: "Follow-up Reports", icon: CalendarClock, adminOnly: true, section: "Reports" },
@@ -89,13 +82,7 @@ export function Sidebar({ userName, role }: { userName: string; role: string }) 
   const normalizedRole = String(normalizeFixedRole(role));
   const isAdmin = normalizedRole === "SHOP_ADMIN";
   const isSuperAdmin = normalizedRole === "SUPER_ADMIN";
-  const isDriver = normalizedRole === "DRIVER";
-  const isSchoolDriver = normalizedRole === "SCHOOL_DRIVER";
   const navLinks = isSuperAdmin ? platformLinks : links.filter((link) => {
-    if (isDriver) return link.href === "/driver-trip";
-    if (isSchoolDriver) return link.href === "/school-transport/driver";
-    if (link.href === "/driver-trip") return false;
-    if (link.href === "/school-transport/driver") return false;
     if (link.superOnly) return isSuperAdmin;
     if (link.adminOnly && isAdmin) return true;
     return canAccessModule(normalizedRole, link.href);

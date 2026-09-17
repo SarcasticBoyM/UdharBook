@@ -10,7 +10,7 @@ import { logActivity } from "@/lib/activity";
 import { logger } from "@/lib/logger";
 import { normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
 
-const fixedRoleValues = ["SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS", "DRIVER", "SCHOOL_ADMIN", "SCHOOL_DRIVER"] as const;
+const fixedRoleValues = ["SHOP_ADMIN", "SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"] as const;
 const fixedRoleSchema = z.preprocess(
   (value) => normalizeFixedRole(String(value ?? "")),
   z.enum(fixedRoleValues),
@@ -40,10 +40,6 @@ async function ensureFixedUserRoleEnumValues() {
     await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SALES_PERSON'`);
     await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'ACCOUNT_STAFF'`);
     await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SALES_PERSON_CUM_ACCOUNTS'`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'DRIVER'`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "OperationalRole" ADD VALUE IF NOT EXISTS 'DRIVER'`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SCHOOL_ADMIN'`);
-    await prisma.$executeRawUnsafe(`ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'SCHOOL_DRIVER'`);
   } catch (error) {
     logger.warn("staff_role_enum_prepare_failed_non_blocking", {
       error: error instanceof Error ? error.message : String(error),
@@ -66,6 +62,7 @@ type StaffListRow = {
 };
 
 const fixedRoleSet = new Set<string>(fixedRoleValues);
+const retiredTrackingRoleSet = new Set(["DRIVER", "SCHOOL_ADMIN", "SCHOOL_DRIVER"]);
 
 function safeStaffRole(role: string | null | undefined, userId?: string) {
   const normalized = role ? normalizeFixedRole(role) : "UNKNOWN";
@@ -74,6 +71,10 @@ function safeStaffRole(role: string | null | undefined, userId?: string) {
       logger.warn("staff_role_legacy_value_normalized", { userId, originalRole: role, normalizedRole: normalized });
     }
     return normalized as FixedShopRole;
+  }
+  if (retiredTrackingRoleSet.has(String(normalized))) {
+    logger.warn("staff_role_retired_tracking_role", { userId, originalRole: role, normalizedRole: normalized });
+    return String(normalized);
   }
   logger.warn("staff_role_unknown_value_denied", { userId, originalRole: role, normalizedRole: "UNKNOWN" });
   return "UNKNOWN";

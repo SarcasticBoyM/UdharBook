@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { KeyRound, Pencil, Search, ShieldCheck, UserPlus } from "lucide-react";
-import { assignableFixedRoles, fixedRoleLabels, normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
+import { assignableFixedRoles, fixedRoleLabels, isRetiredTrackingRole, normalizeFixedRole, roleLabel, type FixedShopRole } from "@/lib/operational-roles";
 
 const AssignTaskButton = dynamic(() => import("@/components/AssignTaskDialog").then((module) => module.AssignTaskButton), { ssr: false });
 
@@ -268,7 +268,7 @@ export default function StaffManagementPage() {
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{roleLabel(userRole)}</span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                {!user.disabledAt && !["SHOP_ADMIN", "DRIVER", "SCHOOL_ADMIN", "SCHOOL_DRIVER"].includes(String(userRole)) && (
+                {!user.disabledAt && String(userRole) !== "SHOP_ADMIN" && !isRetiredTrackingRole(userRole) && (
                   <AssignTaskButton
                     seed={{
                       assignedToId: user.id,

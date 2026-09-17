@@ -28,11 +28,6 @@ enum OperationalRole {
   DRIVER
 }
 
-enum DriverTripStatus {
-  ACTIVE
-  ENDED
-}
-
 enum CustomerStatus {
   ACTIVE
   PENDING
@@ -200,14 +195,6 @@ model Shop {
   notificationRetries      NotificationRetry[]
   pushSubscriptions        PushSubscription[]
   tasks                    Task[]
-  driverTrackingLinks      DriverTrackingLink[]
-  driverTrips              DriverTrip[]
-  driverLocationPoints     DriverLocationPoint[]
-  schoolVehicles           SchoolVehicle[]
-  schoolRoutes             SchoolTransportRoute[]
-  schoolTrackingLinks      SchoolTrackingLink[]
-  schoolTrips              SchoolTrip[]
-  schoolTripPoints         SchoolTripPoint[]
 
   @@index([subscriptionStatus])
   @@index([createdAt])
@@ -359,13 +346,7 @@ model User {
   pushSubscriptions        PushSubscription[]
   assignedTasks            Task[]                @relation("TaskAssignedTo")
   createdTasks             Task[]                @relation("TaskAssignedBy")
-  driverTrackingLink       DriverTrackingLink?   @relation("DriverTrackingLinkDriver")
-  driverTrips              DriverTrip[]          @relation("DriverTripDriver")
-  driverLocationPoints     DriverLocationPoint[] @relation("DriverLocationPointDriver")
   customerLocationsUpdated Customer[]            @relation("CustomerLocationUpdatedBy")
-  assignedSchoolVehicles   SchoolVehicle[]       @relation("SchoolVehicleDriver")
-  schoolTrips              SchoolTrip[]          @relation("SchoolTripDriver")
-  schoolTripPoints         SchoolTripPoint[]     @relation("SchoolTripPointDriver")
 
   @@index([shopId])
   @@index([role])
@@ -493,197 +474,6 @@ model PushDelivery {
 
   @@unique([notificationId, subscriptionId])
   @@index([status, updatedAt])
-}
-
-model SchoolVehicle {
-  id            String               @id @default(cuid())
-  shopId        String
-  shop          Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  name          String
-  vehicleNumber String?
-  driverId      String?
-  driver        User?                @relation("SchoolVehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
-  isActive      Boolean              @default(true)
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-  trackingLinks SchoolTrackingLink[]
-  trips         SchoolTrip[]
-  tripPoints    SchoolTripPoint[]
-
-  @@index([shopId])
-  @@index([shopId, isActive])
-  @@index([driverId])
-}
-
-model SchoolTransportRoute {
-  id             String               @id @default(cuid())
-  shopId         String
-  shop           Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  name           String
-  description    String?
-  startPointName String?
-  endPointName   String?
-  isActive       Boolean              @default(true)
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  trackingLinks  SchoolTrackingLink[]
-  trips          SchoolTrip[]
-
-  @@index([shopId])
-  @@index([shopId, isActive])
-}
-
-model SchoolTrackingLink {
-  id            String                @id @default(cuid())
-  shopId        String
-  shop          Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  vehicleId     String
-  vehicle       SchoolVehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  routeId       String?
-  route         SchoolTransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
-  token         String                @unique
-  isEnabled     Boolean               @default(true)
-  expiresAt     DateTime?
-  regeneratedAt DateTime?
-  disabledAt    DateTime?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-
-  @@index([shopId])
-  @@index([vehicleId])
-  @@index([routeId])
-}
-
-model SchoolTrip {
-  id             String                @id @default(cuid())
-  shopId         String
-  shop           Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  vehicleId      String
-  vehicle        SchoolVehicle         @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  routeId        String?
-  route          SchoolTransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
-  driverId       String
-  driver         User                  @relation("SchoolTripDriver", fields: [driverId], references: [id], onDelete: Restrict)
-  status         String                @default("RUNNING")
-  tripLabel      String?
-  startedAt      DateTime              @default(now())
-  endedAt        DateTime?
-  lastLatitude   Float?
-  lastLongitude  Float?
-  lastAccuracyM  Float?
-  lastSpeedKmph  Float?
-  lastHeading    Float?
-  lastBatteryPct Int?
-  lastLocationAt DateTime?
-  pointCount     Int                   @default(0)
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
-  points         SchoolTripPoint[]
-
-  @@index([shopId, status])
-  @@index([vehicleId, status])
-  @@index([driverId, status])
-  @@index([startedAt])
-}
-
-model SchoolTripPoint {
-  id         String        @id @default(cuid())
-  shopId     String
-  shop       Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  tripId     String
-  trip       SchoolTrip    @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  vehicleId  String
-  vehicle    SchoolVehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  driverId   String
-  driver     User          @relation("SchoolTripPointDriver", fields: [driverId], references: [id], onDelete: Restrict)
-  latitude   Float
-  longitude  Float
-  accuracyM  Float?
-  speedKmph  Float?
-  heading    Float?
-  batteryPct Int?
-  recordedAt DateTime
-  receivedAt DateTime      @default(now())
-  createdAt  DateTime      @default(now())
-
-  @@index([tripId, recordedAt])
-  @@index([shopId, receivedAt])
-  @@index([vehicleId, receivedAt])
-}
-
-model DriverTrackingLink {
-  id        String   @id @default(cuid())
-  shopId    String
-  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  driverId  String   @unique
-  driver    User     @relation("DriverTrackingLinkDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  token     String   @unique
-  isEnabled Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([shopId, driverId])
-  @@index([shopId, isEnabled])
-}
-
-model DriverTrip {
-  id                    String                @id @default(cuid())
-  shopId                String
-  shop                  Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  driverId              String
-  driver                User                  @relation("DriverTripDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  status                DriverTripStatus      @default(ACTIVE)
-  startedAt             DateTime              @default(now())
-  endedAt               DateTime?
-  startLat              Float?
-  startLng              Float?
-  endLat                Float?
-  endLng                Float?
-  lastLat               Float?
-  lastLng               Float?
-  lastAccuracy          Float?
-  lastSpeed             Float?
-  lastHeading           Float?
-  lastLocationAt        DateTime?
-  totalDistanceMeters   Float                 @default(0)
-  movingDurationSeconds Int                   @default(0)
-  idleDurationSeconds   Int                   @default(0)
-  pointCount            Int                   @default(0)
-  maxSpeedKmph          Float?
-  avgSpeedKmph          Float?
-  lastMovementAt        DateTime?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-  points                DriverLocationPoint[]
-
-  @@index([shopId, driverId])
-  @@index([shopId, driverId, status])
-  @@index([shopId, status, updatedAt])
-}
-
-model DriverLocationPoint {
-  id                         String      @id @default(cuid())
-  shopId                     String
-  shop                       Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  driverId                   String
-  driver                     User        @relation("DriverLocationPointDriver", fields: [driverId], references: [id], onDelete: Cascade)
-  tripId                     String?
-  trip                       DriverTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  lat                        Float
-  lng                        Float
-  accuracy                   Float?
-  speed                      Float?
-  heading                    Float?
-  distanceFromPreviousMeters Float?
-  calculatedSpeedKmph        Float?
-  isDistanceIgnored          Boolean     @default(false)
-  ignoreReason               String?
-  capturedAt                 DateTime
-  createdAt                  DateTime    @default(now())
-
-  @@index([shopId, driverId])
-  @@index([shopId, driverId, capturedAt])
-  @@index([tripId, capturedAt])
 }
 
 model UserRoleAssignment {
