@@ -13,7 +13,6 @@ import {
   Clock3,
   Copy,
   History,
-  IndianRupee,
   Loader2,
   MessageCircle,
   Phone,
@@ -171,7 +170,7 @@ type TodayResponse = {
     staffPerformance: { staffId: string; name: string; actions: number }[];
   };
   sections: { urgent: number; today: number; recent: number; done: number };
-  pagination: { skip: number; take: number; hasMore: boolean };
+  pagination: { skip: number; take: number; nextSkip: number; hasMore: boolean };
   performance?: { lightweightMode: boolean; threshold: number; totalActiveCustomers: number };
 };
 
@@ -206,31 +205,11 @@ const PAGE_SIZE = 30;
 const HIGH_AMOUNT = 50000;
 const COMPLETE_STATUSES: QueueStatus[] = ["PAID", "COMPLETED", "WRONG_NUMBER"];
 
-const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: "amount_desc", label: "Highest Pending Amount" },
-  { value: "amount_asc", label: "Lowest Pending Amount" },
-  { value: "overdue_desc", label: "Most Overdue" },
-  { value: "oldest_followup", label: "Oldest Follow-up" },
-  { value: "newest_followup", label: "Newest Follow-up" },
-  { value: "last_contacted", label: "Last Contacted" },
-  { value: "never_contacted", label: "Never Contacted" },
-  { value: "priority_desc", label: "Priority High to Low" },
-  { value: "priority_asc", label: "Priority Low to High" },
-  { value: "az", label: "Alphabetical A-Z" },
-  { value: "za", label: "Alphabetical Z-A" },
-];
-
 const FILTERS: { value: FilterKey; label: string }[] = [
   { value: "all", label: "All" },
+  { value: "pending", label: "Pending" },
   { value: "overdue", label: "Overdue" },
-  { value: "today", label: "Due Today" },
-  { value: "high_amount", label: "High Amount" },
-  { value: "no_followup", label: "No Follow-up Yet" },
-  { value: "done", label: "Follow-up Done Today" },
-  { value: "pending", label: "Pending Only" },
-  { value: "promise", label: "Promise to Pay" },
-  { value: "not_answering", label: "Not Answering" },
-  { value: "urgent", label: "Urgent Recovery" },
+  { value: "done", label: "Completed" },
 ];
 
 const SCHEDULED_FILTERS: { value: ScheduledFilterKey; label: string }[] = [
@@ -423,12 +402,6 @@ function derivedPriority(customer: QueueCustomer): FollowUpPriority {
   return "LOW";
 }
 
-function cardTone(customer: QueueCustomer, done = false) {
-  if (done || customer.status === "CLEARED" || customer.optimisticStatus === "PAID") return "green";
-  if (derivedPriority(customer) === "URGENT" || daysOverdue(customer) > 0) return "red";
-  return "yellow";
-}
-
 function statusLabel(status: string | null | undefined) {
   return status ? status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()) : "-";
 }
@@ -475,26 +448,22 @@ export default function TodayFollowUpsPage() {
     autoCreated: 0,
     staffPerformance: [],
   });
-  const [sections, setSections] = useState<TodayResponse["sections"]>({ urgent: 0, today: 0, recent: 0, done: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [batchTag, setBatchTag] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [sort, setSort] = useState<SortKey>("priority_desc");
+  const sort: SortKey = "priority_desc";
   const [filter, setFilter] = useState<FilterKey>("all");
   const [scheduledFilter, setScheduledFilter] = useState<ScheduledFilterKey>("all");
   const [scheduledAssigneeId, setScheduledAssigneeId] = useState("");
   const [scheduledCollapsed, setScheduledCollapsed] = useState(false);
-  const [lightweightMode, setLightweightMode] = useState(false);
-  const [totalActiveCustomers, setTotalActiveCustomers] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  const [nextSkip, setNextSkip] = useState(PAGE_SIZE);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [currentRole, setCurrentRole] = useState("");
   const [staffOptions, setStaffOptions] = useState<StaffOption[]>([]);
   const [linkedFollowUpId, setLinkedFollowUpId] = useState<string | null>(null);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLElement | null>(null);
   const loadAbortRef = useRef<AbortController | null>(null);
   const sheetHistoryActiveRef = useRef(false);
@@ -624,17 +593,18 @@ export default function TodayFollowUpsPage() {
   }, [mobileSheet, selectedId]);
 
   useEffect(() => {
-    if (!isShopAdminRole(currentRole)) {
+    if (!selectedId || !isShopAdminRole(currentRole)) {
       setStaffOptions([]);
       return;
     }
+    if (staffOptions.length > 0) return;
     fetch("/api/users")
       .then((response) => response.ok ? response.json() : null)
       .then((data) => setStaffOptions((data?.users ?? []).filter((user: StaffOption) =>
         ["SALES_PERSON", "ACCOUNT_STAFF", "SALES_PERSON_CUM_ACCOUNTS"].includes(user.role),
       )))
       .catch(() => setStaffOptions([]));
-  }, [currentRole]);
+  }, [currentRole, selectedId, staffOptions.length]);
 
   useEffect(() => {
     if (!linkedFollowUpId || scheduled.length === 0) return;
@@ -656,13 +626,9 @@ export default function TodayFollowUpsPage() {
     if (reset || data.done.length > 0) setDone(data.done);
     if (reset || data.pagination.skip === 0) {
       setSummary(data.summary);
-      setSections(data.sections);
     }
     setHasMore(data.pagination.hasMore);
-    if (data.performance) {
-      setLightweightMode(Boolean(data.performance.lightweightMode));
-      setTotalActiveCustomers(data.performance.totalActiveCustomers);
-    }
+    setNextSkip(data.pagination.nextSkip);
   }, []);
 
   const loadPage = useCallback(
@@ -680,7 +646,6 @@ export default function TodayFollowUpsPage() {
           filter,
           search: debouncedQuery,
         });
-        if (batchTag.trim()) params.set("batchTag", batchTag.trim());
         const res = await fetch(`/api/today-follow-ups?${params.toString()}`, {
           cache: "no-store",
           signal: controller.signal,
@@ -700,22 +665,13 @@ export default function TodayFollowUpsPage() {
         }
       }
     },
-    [batchTag, debouncedQuery, filter, mergeQueue, sort]
+    [debouncedQuery, filter, mergeQueue, sort]
   );
 
   useEffect(() => {
     void loadPage(0, true);
     return () => loadAbortRef.current?.abort();
   }, [loadPage]);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("udharbook_today_followups_sort") as SortKey | null;
-    if (saved && SORT_OPTIONS.some((option) => option.value === saved)) setSort(saved);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("udharbook_today_followups_sort", sort);
-  }, [sort]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -726,16 +682,6 @@ export default function TodayFollowUpsPage() {
     setPending([]);
   }, [debouncedQuery, filter, sort]);
 
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting && hasMore && !loadingMore) loadPage(pending.length, false);
-    });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMore, loadPage, loadingMore, pending.length]);
-
   const selected = useMemo(
     () =>
       scheduled.find((customer) => customer.id === selectedId) ??
@@ -743,15 +689,6 @@ export default function TodayFollowUpsPage() {
       done.find((customer) => customer.id === selectedId) ??
       null,
     [done, pending, scheduled, selectedId]
-  );
-
-  const pendingSections = useMemo(
-    () => ({
-      urgent: pending.filter((customer) => customer.section === "urgent"),
-      today: pending.filter((customer) => customer.section === "today" || !customer.section),
-      recent: pending.filter((customer) => customer.section === "recent"),
-    }),
-    [pending]
   );
 
   const visibleScheduled = useMemo(
@@ -1003,43 +940,23 @@ export default function TodayFollowUpsPage() {
         </div>
       </div>
 
-      <section className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-9">
-        <Metric label="Pending customers" value={summary.totalPendingCustomers} icon={Clock3} />
-        <Metric label="Pending amount" value={formatCurrency(summary.totalPendingAmount)} icon={IndianRupee} />
-        <Metric label="Scheduled" value={summary.scheduled} icon={CalendarClock} tone={summary.scheduledOverdue > 0 ? "red" : "yellow"} />
+      <section className="mt-4 grid grid-cols-3 gap-2 sm:max-w-2xl">
+        <Metric label="Today" value={summary.totalPendingCustomers} icon={Clock3} />
         <Metric label="Overdue" value={summary.overdue} icon={ShieldAlert} tone="red" />
-        <Metric label="Completed today" value={summary.completed} icon={CheckCircle2} tone="green" />
-        <Metric label="Recovery today" value={formatCurrency(summary.recoveryToday)} icon={IndianRupee} tone="green" />
-        <Metric label="Actioned today" value={summary.actionedToday} icon={History} tone="green" />
-        <Metric label="Calls done" value={summary.callsCompleted} icon={Phone} />
-        <Metric label="Auto queued" value={summary.autoCreated} icon={Bell} tone="yellow" />
+        <Metric label="Completed" value={summary.completed} icon={CheckCircle2} tone="green" />
       </section>
-      {lightweightMode && (
-        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
-          Lightweight mode active for {totalActiveCustomers} active customers. Showing compact cards for faster loading and smoother scrolling.
-        </div>
-      )}
 
-      <div className="sticky top-0 z-20 -mx-4 mt-4 space-y-3 border-y border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:py-0">
+      <div className="sticky top-0 z-20 -mx-4 mt-4 space-y-2 border-y border-slate-200 bg-slate-50/95 px-4 py-2 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0">
         <label className="flex min-h-12 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
           <Search className="h-4 w-4 text-slate-400" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search party, mobile, notes, or amount"
+            placeholder="Search customer..."
             className="w-full bg-transparent text-sm outline-none"
           />
         </label>
-        <input
-          value={batchTag}
-          onChange={(event) => {
-            setBatchTag(event.target.value);
-            setPending([]);
-          }}
-          placeholder="Filter by firm / batch"
-          className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900 sm:max-w-xs"
-        />
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex gap-2 overflow-x-auto pb-1">
             {FILTERS.map((item) => (
               <button
@@ -1060,23 +977,6 @@ export default function TodayFollowUpsPage() {
               </button>
             ))}
           </div>
-          <label className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900">
-            Sort
-            <select
-              value={sort}
-              onChange={(event) => {
-                setSort(event.target.value as SortKey);
-                setPending([]);
-              }}
-              className="bg-transparent font-semibold outline-none"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </div>
 
@@ -1102,14 +1002,14 @@ export default function TodayFollowUpsPage() {
           />
 
           {loading ? (
-            <div className="flex min-h-56 items-center justify-center rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-              <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-20 animate-pulse border-b border-slate-100 bg-slate-50/70 last:border-0 dark:border-slate-800 dark:bg-slate-800/40" />)}
             </div>
           ) : pending.length === 0 && filter !== "done" ? (
             <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500 dark:border-slate-700 dark:bg-slate-900">
               {debouncedQuery ? "No matching outstanding customers found for this search." : "No pending customers match this view."}
             </div>
-          ) : lightweightMode ? (
+          ) : filter !== "done" ? (
             <>
               <CompactQueueSection
                 customers={pending}
@@ -1119,52 +1019,16 @@ export default function TodayFollowUpsPage() {
                 onQuickSave={quickSave}
                 selectedPanel={selectedPanel}
               />
-              <div ref={sentinelRef} className="h-4" />
-              {loadingMore && (
-                <div className="flex justify-center py-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
-                </div>
+              {hasMore && (
+                <button type="button" disabled={loadingMore} onClick={() => void loadPage(nextSkip, false)} className="mx-auto flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 text-sm font-bold disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900">
+                  {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {loadingMore ? "Loading..." : "Load more"}
+                </button>
               )}
             </>
-          ) : (
-            <>
-              <QueueSection
-                title="Urgent Recovery"
-                count={sections.urgent}
-                customers={pendingSections.urgent}
-                selectedId={selectedId}
-                onSelect={openCustomer}
-                onQuickSave={quickSave}
-                selectedPanel={selectedPanel}
-              />
-              <QueueSection
-                title="Today's Follow-ups"
-                count={sections.today}
-                customers={pendingSections.today}
-                selectedId={selectedId}
-                onSelect={openCustomer}
-                onQuickSave={quickSave}
-                selectedPanel={selectedPanel}
-              />
-              <QueueSection
-                title="Recently Contacted"
-                count={sections.recent}
-                customers={pendingSections.recent}
-                selectedId={selectedId}
-                onSelect={openCustomer}
-                onQuickSave={quickSave}
-                selectedPanel={selectedPanel}
-              />
-              <div ref={sentinelRef} className="h-4" />
-              {loadingMore && (
-                <div className="flex justify-center py-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-brand-600" />
-                </div>
-              )}
-            </>
-          )}
+          ) : null}
 
-          <section className="border-t border-slate-200 pt-5 dark:border-slate-800">
+          {filter === "done" && <section className="border-t border-slate-200 pt-5 dark:border-slate-800">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-bold">Follow-up Done Today</h2>
               <span className="text-sm text-slate-500">{done.length} actioned</span>
@@ -1187,21 +1051,7 @@ export default function TodayFollowUpsPage() {
                 })
               )}
             </div>
-          </section>
-
-          {summary.staffPerformance.length > 0 && (
-            <section className="border-t border-slate-200 pt-5 dark:border-slate-800">
-              <h2 className="mb-3 text-lg font-bold">Staff Performance</h2>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {summary.staffPerformance.map((staff) => (
-                  <div key={staff.staffId} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
-                    <p className="font-semibold">{staff.name}</p>
-                    <p className="text-sm text-slate-500">{staff.actions} action{staff.actions === 1 ? "" : "s"} today</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          </section>}
         </main>
       </div>
       {showGoToTop && (
@@ -1700,7 +1550,6 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
   customer,
   active,
   onOpen,
-  onQuickSave,
 }: {
   customer: QueueCustomer;
   active: boolean;
@@ -1711,13 +1560,15 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
   const priority = customer.smartPriority ?? derivedPriority(customer);
   const nextAt = customer.nextFollowupDate ?? latest?.nextFollowupDate ?? null;
   const status = statusLabel(customer.optimisticStatus ?? latest?.status ?? customer.status);
+  const reminderMessage = paymentReminderMessage(customer.partyName, customer.outstandingBalance, nextAt);
+  const reminderWhatsAppUrl = whatsappHref(customer.contactNumber, reminderMessage);
   return (
     <article
       data-customer-id={customer.id}
       tabIndex={-1}
       onClick={onOpen}
       className={cn(
-        "grid min-h-16 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2 transition [contain-intrinsic-size:72px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_130px_130px_136px] sm:items-center",
+        "grid min-h-16 cursor-pointer grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2 transition [contain-intrinsic-size:76px] [content-visibility:auto] hover:bg-slate-50 dark:hover:bg-slate-800/60 sm:grid-cols-[minmax(220px,1fr)_130px_160px_250px] sm:items-center",
         active && "bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-950/30"
       )}
     >
@@ -1736,210 +1587,48 @@ const CompactCustomerCard = memo(function CompactCustomerCard({
       <div className="col-span-2 min-w-0 sm:col-span-1">
         <p className="truncate text-xs font-bold text-slate-700 dark:text-slate-200">{followUpTimingLabel(nextAt, latest?.status === "PAYMENT_PROMISED")}</p>
         <p className="mt-1 truncate text-[11px] text-slate-500">{formatDateTime(nextAt ?? latest?.followupDate)}</p>
+        {(latest?.notes || customer.notes) && <p className="mt-1 truncate text-[11px] text-slate-500">{latest?.notes || customer.notes}</p>}
       </div>
-      <div className="col-span-2 grid grid-cols-2 gap-2 sm:col-span-1">
+      <div className="col-span-2 grid grid-cols-3 gap-1.5 sm:col-span-1">
+        {reminderWhatsAppUrl ? (
+          <a
+            href={reminderWhatsAppUrl}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-emerald-300 px-2 text-xs font-bold text-emerald-700 dark:border-emerald-800 dark:text-emerald-300"
+          >
+            <MessageCircle className="h-4 w-4" />
+            WhatsApp
+          </a>
+        ) : (
+          <span className="inline-flex min-h-10 cursor-not-allowed items-center justify-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-bold text-slate-400 dark:border-slate-800">
+            <MessageCircle className="h-4 w-4" />
+            WhatsApp
+          </span>
+        )}
+        <a
+          href={telHref(customer.contactNumber)}
+          onClick={(event) => event.stopPropagation()}
+          className="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-slate-300 px-2 text-xs font-bold dark:border-slate-700"
+        >
+          <Phone className="h-4 w-4" />
+          Call
+        </a>
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
             onOpen();
           }}
-          className="min-h-9 rounded-lg bg-brand-600 px-3 text-xs font-bold text-white"
+          className="min-h-10 rounded-lg bg-brand-600 px-2 text-xs font-bold text-white"
         >
-          Open
-        </button>
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onQuickSave(customer, "COMPLETED", "Marked completed from compact queue.");
-          }}
-          className="min-h-9 rounded-lg border border-slate-300 px-3 text-xs font-bold dark:border-slate-700"
-        >
-          Done
+          Follow Up
         </button>
       </div>
     </article>
   );
 });
-
-function QueueSection({
-  title,
-  count,
-  customers,
-  selectedId,
-  onSelect,
-  onQuickSave,
-  selectedPanel,
-}: {
-  title: string;
-  count: number;
-  customers: QueueCustomer[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
-  selectedPanel?: React.ReactNode;
-}) {
-  return (
-    <section>
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-bold">{title}</h2>
-        <span className="text-sm text-slate-500">{count} total</span>
-      </div>
-      {customers.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900">
-          No customers in this section.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {customers.map((customer) => {
-            const card = (
-              <CustomerCard
-                customer={customer}
-                active={selectedId === customer.id}
-                onOpen={() => onSelect(customer.id)}
-                onQuickSave={onQuickSave}
-              />
-            );
-            return selectedId === customer.id && selectedPanel ? (
-              <SelectedPartyRow key={customer.id} panel={selectedPanel}>
-                {card}
-              </SelectedPartyRow>
-            ) : (
-              <div key={customer.id}>{card}</div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function CustomerCard({
-  customer,
-  active,
-  onOpen,
-  onQuickSave,
-}: {
-  customer: QueueCustomer;
-  active: boolean;
-  onOpen: () => void;
-  onQuickSave: (customer: QueueCustomer, status: QueueStatus, notes: string) => Promise<void>;
-}) {
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const latest = latestFollowUp(customer);
-  const priority = customer.smartPriority ?? derivedPriority(customer);
-  const priorityName = customer.smartPriorityLabel ?? (priority === "URGENT" ? "Critical" : statusLabel(priority));
-  const tone = cardTone(customer);
-
-  const handleTouchEnd = (event: React.TouchEvent) => {
-    const start = touchStart.current;
-    if (!start) return;
-    const touch = event.changedTouches[0];
-    if (!touch) return;
-    const dx = touch.clientX - start.x;
-    const dy = Math.abs(touch.clientY - start.y);
-    if (dy > 45 || Math.abs(dx) < 80) return;
-    if (dx > 0) onQuickSave(customer, "COMPLETED", "Marked done from mobile swipe.");
-    else onOpen();
-  };
-
-  return (
-    <article
-      data-customer-id={customer.id}
-      tabIndex={-1}
-      onClick={onOpen}
-      onTouchStart={(event) => {
-        const touch = event.touches[0];
-        if (touch) touchStart.current = { x: touch.clientX, y: touch.clientY };
-      }}
-      onTouchEnd={handleTouchEnd}
-      className={cn(
-        "cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition [content-visibility:auto] [contain-intrinsic-size:112px] dark:bg-slate-900",
-        active && "ring-2 ring-brand-500",
-        tone === "red" && "border-red-200 dark:border-red-900",
-        tone === "yellow" && "border-amber-200 dark:border-amber-900",
-        tone === "green" && "border-emerald-200 dark:border-emerald-900"
-      )}
-    >
-      <div className="grid min-w-0 gap-2 lg:grid-cols-[minmax(260px,1fr)_minmax(300px,1.1fr)_170px] lg:items-center">
-        <div className="flex min-w-0 items-start gap-2">
-        <span
-          className={cn(
-            "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
-            tone === "red" && "bg-red-500",
-            tone === "yellow" && "bg-amber-400",
-            tone === "green" && "bg-emerald-500"
-          )}
-        />
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <h3 className="truncate text-base font-bold">{customer.partyName}</h3>
-              <BatchBadge tag={customer.batchTag} />
-            </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
-              <span>{displayPhone(customer.contactNumber)}</span>
-              <span className="truncate">Ledger: {customer.batchTag ?? customer.partyName}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="min-w-0">
-          <div className="grid gap-1 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2">
-            <Info label="Last follow-up" value={formatDateTime(customer.lastFollowupDate ?? latest?.followupDate)} />
-            <Info label="Timing" value={followUpTimingLabel(customer.nextFollowupDate ?? latest?.nextFollowupDate, latest?.status === "PAYMENT_PROMISED")} />
-          </div>
-          <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs dark:bg-slate-800/70">
-            <p className="line-clamp-1">
-              <span className="font-semibold">Last notes: </span>
-              {latest?.notes || customer.notes || "No follow-up notes yet."}
-            </p>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-              <span>Status: {statusLabel(customer.optimisticStatus ?? latest?.status)}</span>
-              <span>Next: {formatDateTime(customer.nextFollowupDate ?? latest?.nextFollowupDate)}</span>
-              <span className="truncate">Promise: {latest?.customerResponse || "-"}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-          <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-right dark:bg-slate-800/70 lg:text-left">
-            <div>
-              <p className="text-sm font-extrabold">{formatCurrency(customer.outstandingBalance)}</p>
-              <span className={cn("mt-0.5 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold", priorityClass(priority))}>
-                {priorityName}
-              </span>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpen();
-              }}
-              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-brand-600 px-3 text-xs font-semibold text-white"
-            >
-              Open Follow-up
-            </button>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onQuickSave(customer, "COMPLETED", "Marked completed from queue.");
-              }}
-              className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-semibold dark:border-slate-700"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Quick Complete
-            </button>
-          </div>
-        </div>
-      </div>
-      <p className="mt-1 text-center text-[11px] text-slate-400 sm:hidden">Swipe right to quick complete, left to open details.</p>
-    </article>
-  );
-}
 
 function QuickButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -1978,22 +1667,6 @@ function DoneCard({ customer, onOpen }: { customer: QueueCustomer; onOpen: () =>
       <p className="mt-1 line-clamp-1 text-xs">{action?.notes || action?.customerResponse || "Completed today."}</p>
     </button>
   );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-slate-200 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900">
-      <p className="text-[10px] uppercase text-slate-400">{label}</p>
-      <p className="mt-0.5 truncate text-xs font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function priorityClass(priority: FollowUpPriority) {
-  if (priority === "URGENT") return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100";
-  if (priority === "HIGH") return "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-100";
-  if (priority === "MEDIUM") return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-100";
-  return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200";
 }
 
 function ActionPanel({

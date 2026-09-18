@@ -332,10 +332,7 @@ function databaseSearch(search: string): Prisma.CustomerWhereInput {
       { partyName: { contains: search, mode: "insensitive" } },
       { contactNumber: { contains: search.replace(/\D/g, "") || search } },
       { batchTag: { contains: search, mode: "insensitive" } },
-      { notes: { contains: search, mode: "insensitive" } },
       ...(Number.isFinite(amount) ? [{ outstandingBalance: amount }] : []),
-      { followUps: { some: { notes: { contains: search, mode: "insensitive" } } } },
-      { followUps: { some: { customerResponse: { contains: search, mode: "insensitive" } } } },
     ],
   };
 }
@@ -376,7 +373,6 @@ export async function GET(request: Request) {
   const search = (searchParams.get("search") ?? "").trim().toLowerCase();
   const searchMode = search.length > 0;
   const batchTag = (searchParams.get("batchTag") ?? "").trim();
-  const requestedMode = searchParams.get("mode");
   const shopId = requireShopId(request, session);
   const canSeeAllScheduled = canAssignTasks(session.role);
   const todayStart = startOfToday();
@@ -389,12 +385,14 @@ export async function GET(request: Request) {
     outstandingBalance: { gt: 0 },
     ...(!searchMode ? { NOT: { status: "CLEARED" as const } } : {}),
   };
-  const totalActiveCustomers = await prisma.customer.count({ where: activeBaseWhere });
-  const lightweightMode = requestedMode === "compact" || (requestedMode !== "full" && totalActiveCustomers > LIGHTWEIGHT_THRESHOLD);
-  const take = Math.min(requestedTake, lightweightMode ? LIGHTWEIGHT_PAGE_LIMIT : 100);
+  const lightweightMode = true;
+  const take = Math.min(requestedTake, LIGHTWEIGHT_PAGE_LIMIT);
   const includeSideQueues = skip === 0 && !searchMode;
+  const includeCompletedRows = skip === 0 && filter === "done";
   const autoCreated = 0;
-  const customerSelect = queueCustomerSelect(lightweightMode ? 3 : 12);
+  const customerSelect = queueCustomerSelect(1);
+  const scheduledCustomerSelect = queueCustomerSelect(5);
+  const completedCustomerSelect = queueCustomerSelect(3);
 
   const realActionTodayWhere: Prisma.FollowUpWhereInput = {
     status: { not: "PENDING" },
@@ -412,18 +410,18 @@ export async function GET(request: Request) {
       databaseSearch(search),
     ],
   };
-  const pageWindow = lightweightMode ? take : skip + Math.min(take * 3, 300);
+  const pageWindow = take;
 
-  const [customers, pendingStats, doneCustomers, todayRecovery, staffActivity] = await Promise.all([
+  const [customers, pendingStats, doneCustomers, completedCustomerGroups, overdueCustomerCount] = await Promise.all([
     prisma.customer.findMany({
       where: pendingWhere,
       select: customerSelect,
       orderBy: databaseOrder(sort),
-      skip: lightweightMode ? skip : 0,
+      skip,
       take: pageWindow,
     }),
     prisma.customer.aggregate({ where: pendingWhere, _count: { _all: true }, _sum: { outstandingBalance: true } }),
-    includeSideQueues ? prisma.customer.findMany({
+    includeCompletedRows ? prisma.customer.findMany({
       where: {
         shopId,
         isArchived: false,
@@ -433,23 +431,28 @@ export async function GET(request: Request) {
           some: realActionTodayWhere,
         },
       },
-      select: customerSelect,
+      select: completedCustomerSelect,
       orderBy: { lastFollowupDate: "desc" },
-      take: lightweightMode ? 50 : 200,
+      take: 50,
     }) : Promise.resolve([]),
-    includeSideQueues ? prisma.paymentEntry.aggregate({
-      where: { shopId, paidAt: { gte: todayStart, lte: todayEnd } },
-      _sum: { amount: true },
-    }) : Promise.resolve({ _sum: { amount: null } }),
     includeSideQueues ? prisma.followUp.groupBy({
-      by: ["createdById"],
-      where: { shopId, ...realActionTodayWhere },
-      orderBy: { createdById: "asc" },
-      _count: { _all: true },
+      by: ["customerId"],
+      where: {
+        shopId,
+        ...realActionTodayWhere,
+        customer: { isArchived: false },
+      },
     }) : Promise.resolve([]),
+    prisma.customer.count({
+      where: {
+        ...activeBaseWhere,
+        nextFollowupDate: { lt: new Date() },
+      },
+    }),
   ]);
   const pendingTotal = pendingStats._count._all;
   const pendingAmount = pendingStats._sum.outstandingBalance ?? 0;
+  const totalActiveCustomers = pendingTotal;
 
   const scheduledRows = includeSideQueues ? await prisma.followUp.findMany({
     where: {
@@ -489,7 +492,7 @@ export async function GET(request: Request) {
           assignedTo: { select: { name: true } },
         },
       },
-      customer: { select: customerSelect },
+      customer: { select: scheduledCustomerSelect },
     },
     orderBy: [{ actionLoggedAt: "desc" }, { followupDate: "desc" }, { createdAt: "desc" }],
     take: lightweightMode ? 100 : 300,
@@ -567,7 +570,10 @@ export async function GET(request: Request) {
       .map((customer) => customer.id),
   );
 
-  const doneIds = new Set(doneCustomers.map((customer) => customer.id));
+  const doneIds = new Set([
+    ...completedCustomerGroups.map((item) => item.customerId),
+    ...doneCustomers.map((customer) => customer.id),
+  ]);
   const enriched = customers.map((customer) => {
     const smart = smartPriority(customer);
     const recentlyContacted =
@@ -599,9 +605,7 @@ export async function GET(request: Request) {
   const pending = lightweightMode ? sorted.slice(0, take) : sorted.slice(skip, skip + take);
   const activeQueueAmount = [...scheduled, ...pendingPool].reduce((sum, customer) => sum + customer.outstandingBalance, 0);
   const pendingQueueCount = lightweightMode ? pendingTotal : pendingPool.length;
-  const activeOverdueCount =
-    scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length +
-    pendingPool.filter((customer) => isPastDue(customer.nextFollowupDate)).length;
+  const activeOverdueCount = overdueCustomerCount;
 
   const done = doneCustomers.map((customer) => {
     const smart = smartPriority(customer);
@@ -626,14 +630,6 @@ export async function GET(request: Request) {
     };
   });
 
-  const userIds = staffActivity.map((item) => item.createdById);
-  const users = userIds.length > 0
-    ? await prisma.user.findMany({
-        where: { shopId, id: { in: userIds } },
-        select: { id: true, name: true },
-      })
-    : [];
-  const userMap = new Map(users.map((user) => [user.id, user.name]));
   const callsCompleted = done.reduce((count, customer) => {
     const action = customer.todayAction;
     return action?.status === "CONTACTED" || action?.status === "PAYMENT_PROMISED" ? count + 1 : count;
@@ -645,23 +641,19 @@ export async function GET(request: Request) {
     done: done.map(compactCustomer),
     summary: {
       totalCustomers: totalActiveCustomers,
-      totalPendingCustomers: scheduled.length + pendingQueueCount,
+      totalPendingCustomers: pendingQueueCount,
       totalPendingAmount: lightweightMode ? pendingAmount : activeQueueAmount || pendingAmount,
       totalToday: scheduled.length + pendingQueueCount + done.length,
       pending: scheduled.length + pendingQueueCount,
-      completed: done.length,
-      actionedToday: done.length,
+      completed: completedCustomerGroups.length,
+      actionedToday: completedCustomerGroups.length,
       callsCompleted,
-      recoveryToday: todayRecovery._sum.amount ?? 0,
+      recoveryToday: 0,
       overdue: activeOverdueCount,
       scheduled: scheduled.length,
       scheduledOverdue: scheduled.filter((customer) => customer.scheduledFollowUp.overdue).length,
       autoCreated,
-      staffPerformance: staffActivity.map((item) => ({
-        staffId: item.createdById,
-        name: userMap.get(item.createdById) ?? "Staff",
-        actions: typeof item._count === "object" ? item._count._all ?? 0 : 0,
-      })),
+      staffPerformance: [],
     },
     sections: {
       urgent: filteredPool.filter((customer) => customer.section === "urgent").length,
@@ -672,8 +664,9 @@ export async function GET(request: Request) {
     pagination: {
       skip,
       take,
+      nextSkip: skip + customers.length,
       total: pendingTotal,
-      hasMore: skip + pending.length < pendingTotal,
+      hasMore: skip + customers.length < pendingTotal,
     },
     performance: {
       lightweightMode,
